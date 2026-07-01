@@ -15,6 +15,20 @@ const AdminAPI = (() => {
     });
   }
 
+  // supabase-js's FunctionsHttpError.message is a generic "non-2xx status
+  // code" string — the real reason lives in the response body, which the
+  // client doesn't parse automatically. Extract it so errors are readable.
+  async function unwrapFunctionError(error) {
+    let detail = error.message;
+    if (error.context && typeof error.context.json === 'function') {
+      try {
+        const body = await error.context.json();
+        detail = body.error || body.message || detail;
+      } catch { /* body wasn't JSON — fall back to the generic message */ }
+    }
+    return new Error(detail);
+  }
+
   return {
     // ── Organizations ──────────────────────────────────────────
     async listOrganizations() {
@@ -183,19 +197,19 @@ const AdminAPI = (() => {
           assignments: assignments || [],
         },
       });
-      if (error) {
-        // supabase-js's FunctionsHttpError.message is a generic
-        // "non-2xx status code" string — the real reason is in the
-        // response body, which the client doesn't parse automatically.
-        let detail = error.message;
-        if (error.context && typeof error.context.json === 'function') {
-          try {
-            const body = await error.context.json();
-            detail = body.error || body.message || detail;
-          } catch { /* body wasn't JSON — fall back to the generic message */ }
-        }
-        throw new Error(detail);
-      }
+      if (error) throw await unwrapFunctionError(error);
+      if (data?.error) throw new Error(data.error);
+      return data;
+    },
+
+    // Resets another user's password via Edge Function (requires service
+    // role key). Returns a one-time temp password for the admin to relay.
+    async resetUserPassword(targetUserId) {
+      const db = getSupabase();
+      const { data, error } = await db.functions.invoke('reset-password', {
+        body: { target_user_id: targetUserId },
+      });
+      if (error) throw await unwrapFunctionError(error);
       if (data?.error) throw new Error(data.error);
       return data;
     },

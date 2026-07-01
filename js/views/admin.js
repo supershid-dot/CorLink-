@@ -279,13 +279,18 @@ const AdminView = {
             <div class="structure-node">
               <div class="structure-node-header">
                 <i class="ti ti-building"></i> <strong>${cmd.name}</strong>
+                <button class="btn btn-secondary btn-xs" data-edit-command="${cmd.id}" data-name="${cmd.name}"><i class="ti ti-pencil"></i></button>
                 <button class="btn btn-secondary btn-xs" data-new-dept="${cmd.id}">+ Department</button>
               </div>
               <ul class="structure-children">
                 ${(departmentsByCommand[cmd.id] || []).map(d => `
                   <li>${d.name}
+                    <button class="btn btn-secondary btn-xs" data-edit-department="${d.id}" data-name="${d.name}"><i class="ti ti-pencil"></i></button>
                     <span class="structure-sections">
-                      ${sections.filter(s => s.department_id === d.id).map(s => `<span class="badge badge-outline">${s.code}</span>`).join('')}
+                      ${sections.filter(s => s.department_id === d.id).map(s => `
+                        <span class="badge badge-outline">${s.code}</span>
+                        <button class="btn btn-secondary btn-xs" data-edit-section="${s.id}" data-name="${s.name}" data-code="${s.code}"><i class="ti ti-pencil"></i></button>
+                      `).join('')}
                       <button class="btn btn-secondary btn-xs" data-new-section-dept="${d.id}" data-org="${org.id}">+ Section</button>
                     </span>
                   </li>
@@ -300,6 +305,27 @@ const AdminView = {
         this._openTextModal('New Command', 'Command name', async (name) => {
           await AdminAPI.createCommand(org.id, name);
           await this._renderTab();
+        });
+      });
+      content.querySelectorAll('[data-edit-command]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          this._openTextModal('Rename Command', 'Command name', async (name) => {
+            await AdminAPI.updateCommand(btn.dataset.editCommand, { name });
+            await this._renderTab();
+          }, btn.dataset.name);
+        });
+      });
+      content.querySelectorAll('[data-edit-department]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          this._openTextModal('Rename Department', 'Department name', async (name) => {
+            await AdminAPI.updateDepartment(btn.dataset.editDepartment, { name });
+            await this._renderTab();
+          }, btn.dataset.name);
+        });
+      });
+      content.querySelectorAll('[data-edit-section]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          this._openEditSectionModal({ id: btn.dataset.editSection, name: btn.dataset.name, code: btn.dataset.code });
         });
       });
       content.querySelectorAll('[data-new-dept]').forEach(btn => {
@@ -329,11 +355,14 @@ const AdminView = {
             <div class="structure-node">
               <div class="structure-node-header">
                 <i class="ti ti-building"></i> <strong>${div.name}</strong>
+                <button class="btn btn-secondary btn-xs" data-edit-division="${div.id}" data-name="${div.name}"><i class="ti ti-pencil"></i></button>
                 <button class="btn btn-secondary btn-xs" data-new-section-div="${div.id}" data-org="${org.id}">+ Section</button>
               </div>
               <ul class="structure-children">
                 ${sections.filter(s => s.division_id === div.id).map(s => `
-                  <li>${s.name} <span class="badge badge-outline">${s.code}</span></li>
+                  <li>${s.name} <span class="badge badge-outline">${s.code}</span>
+                    <button class="btn btn-secondary btn-xs" data-edit-section="${s.id}" data-name="${s.name}" data-code="${s.code}"><i class="ti ti-pencil"></i></button>
+                  </li>
                 `).join('') || '<li class="structure-empty">No sections yet</li>'}
               </ul>
             </div>
@@ -347,12 +376,63 @@ const AdminView = {
           await this._renderTab();
         });
       });
+      content.querySelectorAll('[data-edit-division]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          this._openTextModal('Rename Division', 'Division name', async (name) => {
+            await AdminAPI.updateDivision(btn.dataset.editDivision, { name });
+            await this._renderTab();
+          }, btn.dataset.name);
+        });
+      });
+      content.querySelectorAll('[data-edit-section]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          this._openEditSectionModal({ id: btn.dataset.editSection, name: btn.dataset.name, code: btn.dataset.code });
+        });
+      });
       content.querySelectorAll('[data-new-section-div]').forEach(btn => {
         btn.addEventListener('click', () => {
           this._openSectionModal({ orgId: btn.dataset.org, divisionId: btn.dataset.newSectionDiv });
         });
       });
     }
+  },
+
+  _openEditSectionModal(section) {
+    this._openModal(`
+      <h3>Edit Section</h3>
+      <form id="edit-section-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Name</label>
+          <input class="field-input-plain" name="name" required value="${section.name}" />
+        </div>
+        <div class="field-group">
+          <label class="field-label">Code</label>
+          <input class="field-input-plain" name="code" required maxlength="10" value="${section.code}" />
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    `);
+
+    const form = document.getElementById('edit-section-form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const errEl = form.querySelector('.modal-error');
+      try {
+        await AdminAPI.updateSection(section.id, {
+          name: fd.get('name'), code: fd.get('code').toUpperCase(),
+        });
+        this._closeModal();
+        await this._renderTab();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
   },
 
   _openSectionModal({ orgId, departmentId, divisionId }) {
@@ -525,12 +605,13 @@ const AdminView = {
     });
   },
 
-  _showTempPassword(result) {
+  _showTempPassword(result, { title = 'User Created', message = null } = {}) {
+    const summary = message || `Account created for service number <strong>${result.service_number}</strong>.`;
     this._openModal(`
-      <h3>User Created</h3>
+      <h3>${title}</h3>
       <div class="alert alert-success">
         <i class="ti ti-circle-check"></i>
-        Account created for service number <strong>${result.service_number}</strong>.
+        ${summary}
       </div>
       <div class="field-group">
         <label class="field-label">Temporary Password</label>
@@ -549,11 +630,25 @@ const AdminView = {
     this._openModal(`
       <h3>Manage — ${user.full_name}</h3>
 
+      <form id="edit-profile-form" class="modal-form">
+        <label class="field-label">Profile</label>
+        <div class="field-group">
+          <input class="field-input-plain" name="fullName" required value="${user.full_name}" placeholder="Full name" />
+        </div>
+        <div class="field-group">
+          <input class="field-input-plain" type="email" name="email" required value="${user.email}" placeholder="Email" />
+        </div>
+        <button type="submit" class="btn btn-secondary btn-sm">Save Profile</button>
+      </form>
+
       <div class="field-group">
         <label class="field-label">Account Status</label>
-        <button class="btn ${user.is_active ? 'btn-secondary' : 'btn-primary'} btn-sm" id="toggle-user-active">
-          ${user.is_active ? 'Deactivate Account' : 'Activate Account'}
-        </button>
+        <div class="assignment-add-row">
+          <button class="btn ${user.is_active ? 'btn-secondary' : 'btn-primary'} btn-sm" id="toggle-user-active">
+            ${user.is_active ? 'Deactivate Account' : 'Activate Account'}
+          </button>
+          <button class="btn btn-secondary btn-sm" id="reset-password-btn">Reset Password</button>
+        </div>
       </div>
 
       <div class="field-group">
@@ -592,10 +687,38 @@ const AdminView = {
       </div>
     `);
 
+    document.getElementById('edit-profile-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const errEl = document.querySelector('.modal-error');
+      try {
+        await AdminAPI.updateUser(user.id, { full_name: fd.get('fullName'), email: fd.get('email') });
+        this._closeModal();
+        await this._renderTab();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+
     document.getElementById('toggle-user-active').addEventListener('click', async () => {
       await AdminAPI.updateUser(user.id, { is_active: !user.is_active });
       this._closeModal();
       await this._renderTab();
+    });
+
+    document.getElementById('reset-password-btn').addEventListener('click', async () => {
+      const errEl = document.querySelector('.modal-error');
+      try {
+        const result = await AdminAPI.resetUserPassword(user.id);
+        this._showTempPassword(result, {
+          title: 'Password Reset',
+          message: `Password reset for service number <strong>${result.service_number}</strong>.`,
+        });
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
     });
 
     document.querySelectorAll('[data-remove-assignment]').forEach(btn => {
@@ -644,12 +767,12 @@ const AdminView = {
     document.getElementById('modal-root').innerHTML = '';
   },
 
-  _openTextModal(title, placeholder, onSubmit) {
+  _openTextModal(title, placeholder, onSubmit, defaultValue = '') {
     this._openModal(`
       <h3>${title}</h3>
       <form id="text-modal-form" class="modal-form">
         <div class="field-group">
-          <input class="field-input-plain" name="value" required placeholder="${placeholder}" />
+          <input class="field-input-plain" name="value" required placeholder="${placeholder}" value="${defaultValue}" />
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">

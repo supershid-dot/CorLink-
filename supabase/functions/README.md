@@ -38,3 +38,15 @@ admin UI displays the temp password once — it is NOT stored anywhere
 in plaintext. The new user's password is already expired
 (`password_expires_at` set to now), forcing them through the
 change-password flow on first login.
+
+## reset-password
+
+Lets an admin reset another user's password (e.g. they're locked out
+or forgot it). Needs the service role key (`auth.admin.updateUserById`),
+so it can't run client-side — same deploy steps and admin-check
+pattern as `create-user` above (name it `reset-password`).
+
+Sets `password_expires_at` to now so the user is forced through the
+change-password flow on next login, and returns `{ service_number, temp_password }`
+for the admin to hand over securely — same one-time-display pattern
+as user creation.
