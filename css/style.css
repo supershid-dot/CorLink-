@@ -67,6 +67,11 @@ body {
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
 }
+/* Safety net: no single element (a wide table, a select auto-sized to its
+   longest option, etc.) should be able to push the whole page into
+   horizontal scroll — that clips the sticky topbar/content off-screen on
+   mobile instead of just wrapping/scrolling the one element that's wide. */
+html, body { overflow-x: hidden; max-width: 100%; }
 a { color: var(--color-primary); text-decoration: none; }
 a:hover { text-decoration: underline; }
 img, svg { display: block; }
@@ -476,9 +481,54 @@ p  { line-height: 1.6; }
 @media (max-width: 640px) {
   .login-card { padding: 28px 20px; }
   .main-content { padding: 20px 16px; }
-  .topbar { padding: 0 16px; }
+  .topbar { padding: 0 16px; gap: 10px; }
+  .topbar-appname { display: none; }
   .user-name-short { display: none; }
   .stat-grid { grid-template-columns: 1fr 1fr; }
+  .panel { padding: 16px; }
+  .modal-box { padding: 18px; }
+
+  .org-selector-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+  .org-selector-row .field-select { width: 100%; }
+
+  /* Data tables become stacked cards: header row is hidden (its labels
+     move to each cell via data-label), each <tr> becomes a bordered
+     card, and each <td> becomes a labeled block instead of a column —
+     nothing has to fit side-by-side in a narrow viewport anymore. */
+  .data-table thead { display: none; }
+  .data-table, .data-table tbody, .data-table tr, .data-table td {
+    display: block;
+    width: 100%;
+  }
+  .data-table tr {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 10px 12px;
+    margin-bottom: 12px;
+  }
+  .data-table td {
+    padding: 6px 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+  .data-table tr:last-child { margin-bottom: 0; }
+  .data-table td:last-child { border-bottom: none; }
+  .data-table td::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    color: var(--color-text-muted);
+    margin-bottom: 3px;
+  }
+
+  .structure-children { margin-left: 12px; }
+  .structure-sections { margin-left: 0; width: 100%; }
 }
 
 /* ── Divehi / Faruma font support ────────────────────────────── */
@@ -516,7 +566,11 @@ p  { line-height: 1.6; }
   gap: 4px;
   border-bottom: 1px solid var(--color-border);
   margin-bottom: 20px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
+.tabs::-webkit-scrollbar { display: none; }
 .tab-btn {
   padding: 10px 16px;
   font-size: 0.9375rem;
@@ -524,6 +578,8 @@ p  { line-height: 1.6; }
   color: var(--color-text-muted);
   border-bottom: 2px solid transparent;
   transition: color var(--transition), border-color var(--transition);
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .tab-btn:hover { color: var(--color-text); }
 .tab-btn--active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
@@ -540,10 +596,13 @@ p  { line-height: 1.6; }
   align-items: center;
   gap: 10px;
   margin-bottom: 16px;
+  max-width: 100%;
 }
-.org-selector-row .field-label { margin: 0; }
+.org-selector-row .field-label { margin: 0; flex-shrink: 0; }
+.org-selector-row .field-select { flex: 1; min-width: 0; }
 
 .field-select {
+  max-width: 100%;
   padding: 8px 32px 8px 12px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -552,6 +611,7 @@ p  { line-height: 1.6; }
   color: var(--color-text);
   background: var(--color-surface);
   outline: none;
+  text-overflow: ellipsis;
 }
 .field-select:focus { border-color: var(--color-border-focus); }
 
@@ -645,6 +705,27 @@ p  { line-height: 1.6; }
 .badge-primary { background: var(--color-primary-light); color: var(--color-primary-dark); border-color: transparent; }
 .badge-outline { background: transparent; }
 
+/* A pill radius (border-radius: 9999px) only looks right on a single line
+   of text — the browser has to shrink each corner's radius to fit the
+   box, and on a multi-line badge that warps the whole shape into a lens/
+   oval. Badges whose text can wrap (e.g. "Supervisor — Legal Section")
+   use this instead: normal rounded-rect corners, and stacked one per
+   line rather than wrapping mid-badge. */
+.badge-list {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.badge-wrap {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  white-space: normal;
+  text-align: left;
+  border-radius: var(--radius-sm);
+}
+
 /* ── Structure Tree (Commands/Departments/Divisions/Sections) ──── */
 .structure-node {
   padding: 14px 0;
@@ -653,6 +734,7 @@ p  { line-height: 1.6; }
 .structure-node:last-child { border-bottom: none; }
 .structure-node-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   font-size: 0.9375rem;
@@ -667,6 +749,7 @@ p  { line-height: 1.6; }
 }
 .structure-children li {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   font-size: 0.875rem;
@@ -674,6 +757,7 @@ p  { line-height: 1.6; }
 }
 .structure-sections {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   margin-left: auto;
@@ -710,6 +794,7 @@ p  { line-height: 1.6; }
 }
 .modal-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 4px;
@@ -717,10 +802,11 @@ p  { line-height: 1.6; }
 
 .assignment-add-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
 }
-.assignment-add-row .field-select { flex: 1; }
+.assignment-add-row .field-select { flex: 1; min-width: 140px; }
 
 .assignment-list {
   list-style: none;
@@ -730,6 +816,7 @@ p  { line-height: 1.6; }
 }
 .assignment-list li {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
