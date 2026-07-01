@@ -8,6 +8,8 @@ async function init() {
   Router.register('admin',           AdminView);
   Router.register('requests',        RequestsView);
   Router.register('request-detail',  RequestDetailView);
+  Router.register('prisoner-letters',        PrisonerLettersView);
+  Router.register('prisoner-letter-detail',  PrisonerLetterDetailView);
 
   // Try to resume an existing session — always fall through to Router.start()
   try {
