@@ -467,6 +467,13 @@ p  { line-height: 1.6; }
 .page-header { margin-bottom: 24px; }
 .page-title { color: var(--color-text); }
 .page-subtitle { color: var(--color-text-muted); margin-top: 4px; }
+.page-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
 
 /* ── Phase Notice ────────────────────────────────────────────── */
 .phase-notice {
@@ -496,9 +503,12 @@ p  { line-height: 1.6; }
   display: flex;
   flex-direction: column;
   gap: 8px;
+  transition: border-color var(--transition), box-shadow var(--transition);
 }
+.stat-card:hover { border-color: var(--color-primary); box-shadow: var(--shadow-sm); }
 
 .stat-card--disabled { opacity: .55; }
+.stat-card--disabled:hover { border-color: var(--color-border); box-shadow: none; }
 
 .stat-icon { font-size: 1.5rem; color: var(--color-primary); }
 .stat-label { font-size: 0.875rem; color: var(--color-text-muted); font-weight: 500; }
@@ -731,6 +741,8 @@ p  { line-height: 1.6; }
 .badge-success { background: var(--color-success-bg); color: var(--color-success); border-color: transparent; }
 .badge-muted   { background: var(--color-bg); color: var(--color-text-light); border-color: transparent; }
 .badge-primary { background: var(--color-primary-light); color: var(--color-primary-dark); border-color: transparent; }
+.badge-warning { background: var(--color-warning-bg); color: var(--color-warning); border-color: transparent; }
+.badge-error   { background: var(--color-error-bg); color: var(--color-error); border-color: transparent; }
 .badge-outline { background: transparent; }
 
 /* A pill radius (border-radius: 9999px) only looks right on a single line
@@ -924,3 +936,97 @@ p  { line-height: 1.6; }
   border-color: rgba(0,0,0,.12);
   border-top-color: var(--color-primary);
 }
+
+/* ── Requests: Detail Header & Meta ─────────────────────────────── */
+.detail-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.detail-header-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.detail-header-title .page-title { margin: 0; }
+
+.detail-meta-panel { margin-bottom: 20px; }
+.detail-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px 24px;
+}
+.detail-meta > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.9375rem;
+  color: var(--color-text);
+}
+.detail-meta-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--color-text-muted);
+}
+
+/* ── Requests: Thread ─────────────────────────────────────────── */
+.thread {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+.thread-message {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px;
+}
+.thread-message--request  { border-left-color: var(--color-secondary); }
+.thread-message--response { border-left-color: var(--color-primary); }
+.thread-message-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+  font-size: 0.875rem;
+}
+.thread-message-body {
+  white-space: pre-wrap;
+  line-height: 1.6;
+  color: var(--color-text);
+}
+.thread-message-actions {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border);
+}
+
+.thread-approval {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
+.thread-approval i { margin-top: 2px; flex-shrink: 0; }
+.thread-approval--approved { background: var(--color-success-bg); color: var(--color-success); }
+.thread-approval--returned { background: var(--color-warning-bg); color: var(--color-warning); }
+
+.detail-actions-panel .panel { margin-bottom: 0; }
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.detail-actions form.modal-form { width: 100%; }

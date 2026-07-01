@@ -334,9 +334,14 @@ CREATE POLICY "requests_update" ON requests
   );
 
 -- Supervisors can update status + lock (approval workflow); admins can route.
+-- Requires is_supervisor_or_above() — without it this policy has no role
+-- check at all beyond "your org is party to this request", which would let
+-- any staff member set status/reference_number/is_locked directly and skip
+-- the approval workflow entirely.
 CREATE POLICY "requests_update_supervisor" ON requests
   FOR UPDATE USING (
-    from_org_id = get_my_org_id() OR to_org_id = get_my_org_id()
+    (from_org_id = get_my_org_id() OR to_org_id = get_my_org_id())
+    AND is_supervisor_or_above()
   );
 
 -- ─── responses ────────────────────────────────────────────────
@@ -377,11 +382,19 @@ CREATE POLICY "responses_update_supervisor" ON responses
   );
 
 -- ─── approvals ────────────────────────────────────────────────
+-- reviewed_by/is_admin() alone would hide a request's own approval
+-- history from the person who submitted it — they need to see whether
+-- it was approved or returned (and why), so also allow the creator of
+-- the request/response the approval record is about.
 CREATE POLICY "approvals_select" ON approvals
   FOR SELECT USING (
     reviewed_by = auth.uid() OR is_admin()
-    -- Also allow viewing approvals for requests/responses you can see.
-    -- Extended via joins in the application layer.
+    OR (record_type = 'request' AND EXISTS (
+      SELECT 1 FROM requests r WHERE r.id = record_id AND r.created_by = auth.uid()
+    ))
+    OR (record_type = 'response' AND EXISTS (
+      SELECT 1 FROM responses re WHERE re.id = record_id AND re.created_by = auth.uid()
+    ))
   );
 
 CREATE POLICY "approvals_insert" ON approvals
@@ -391,11 +404,36 @@ CREATE POLICY "approvals_insert" ON approvals
   );
 
 -- ─── attachments ──────────────────────────────────────────────
+-- uploaded_by/is_supervisor_or_above() alone would hide an attachment
+-- from a section staff member who didn't upload it but can otherwise
+-- see the parent request/response (e.g. the recipient-side assignee) —
+-- mirror requests_select/responses_select visibility for those record
+-- types instead of requiring supervisor rank just to view a file.
 CREATE POLICY "attachments_select" ON attachments
   FOR SELECT USING (
     uploaded_by = auth.uid()
     OR is_supervisor_or_above()
-    -- Full visibility controlled in application layer via parent record access.
+    OR (record_type = 'request' AND EXISTS (
+      SELECT 1 FROM requests r
+      WHERE r.id = record_id
+        AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
+        AND (
+          r.from_section_id IN (SELECT my_section_ids())
+          OR r.to_section_id IN (SELECT my_section_ids())
+          OR r.created_by = auth.uid()
+        )
+    ))
+    OR (record_type = 'response' AND EXISTS (
+      SELECT 1 FROM responses re
+      JOIN requests r ON r.id = re.request_id
+      WHERE re.id = record_id
+        AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
+        AND (
+          r.from_section_id IN (SELECT my_section_ids())
+          OR r.to_section_id IN (SELECT my_section_ids())
+          OR r.created_by = auth.uid()
+        )
+    ))
   );
 
 CREATE POLICY "attachments_insert" ON attachments
