@@ -56,32 +56,10 @@ const AdminView = {
 
   _shell() {
     const user = this._user;
-    const name = user.full_name;
 
     return `
       <div class="app-layout">
-        <header class="topbar">
-          <div class="topbar-brand">
-            <div class="topbar-logo-crop"><img src="assets/logo.jpg" alt="${APP_NAME} logo" /></div>
-            <span class="topbar-appname">${APP_NAME}</span>
-          </div>
-          <nav class="topbar-nav">
-            <a href="#dashboard" class="topbar-link">Dashboard</a>
-            <a href="#admin" class="topbar-link topbar-link--active">Admin</a>
-          </nav>
-          <div class="topbar-actions">
-            <div class="user-menu-wrap">
-              <button class="user-menu-btn" id="user-menu-btn">
-                <div class="avatar">${name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()}</div>
-                <span class="user-name-short">${name.split(' ')[0]}</span>
-                <i class="ti ti-chevron-down"></i>
-              </button>
-              <div class="user-menu-dropdown hidden" id="user-menu-dropdown">
-                <button class="menu-item" id="sign-out-btn"><i class="ti ti-logout"></i> Sign Out</button>
-              </div>
-            </div>
-          </div>
-        </header>
+        ${AppShell.topbarHtml(user, 'admin')}
 
         <main class="main-content">
           <div class="page-header">
@@ -112,17 +90,7 @@ const AdminView = {
   },
 
   _bindShell() {
-    document.getElementById('user-menu-btn')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      document.getElementById('user-menu-dropdown').classList.toggle('hidden');
-    });
-    document.addEventListener('click', () => {
-      document.getElementById('user-menu-dropdown')?.classList.add('hidden');
-    });
-    document.getElementById('sign-out-btn')?.addEventListener('click', async () => {
-      await Auth.signOut();
-      Router.navigate('login');
-    });
+    AppShell.bindTopbar();
 
     document.querySelectorAll('.tab-btn').forEach(btn => {
       btn.addEventListener('click', async () => {

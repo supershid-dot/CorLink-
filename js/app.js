@@ -6,6 +6,8 @@ async function init() {
   Router.register('change-password', ChangePasswordView);
   Router.register('dashboard',       DashboardView);
   Router.register('admin',           AdminView);
+  Router.register('requests',        RequestsView);
+  Router.register('request-detail',  RequestDetailView);
 
   // Try to resume an existing session — always fall through to Router.start()
   try {
