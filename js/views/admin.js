@@ -155,14 +155,19 @@ const AdminView = {
     const content = document.getElementById('admin-tab-content');
     content.innerHTML = `<div class="tab-loading"><span class="spinner spinner--dark"></span> Loading…</div>`;
 
-    if (this._state.tab === 'organizations') {
-      await this._renderOrganizations(content);
-    } else if (this._state.tab === 'structure') {
-      await this._renderStructure(content);
-    } else if (this._state.tab === 'users') {
-      await this._renderUsers(content);
-    } else if (this._state.tab === 'audit') {
-      await this._renderAuditLog(content);
+    try {
+      if (this._state.tab === 'organizations') {
+        await this._renderOrganizations(content);
+      } else if (this._state.tab === 'structure') {
+        await this._renderStructure(content);
+      } else if (this._state.tab === 'users') {
+        await this._renderUsers(content);
+      } else if (this._state.tab === 'audit') {
+        await this._renderAuditLog(content);
+      }
+    } catch (err) {
+      console.error('CorLink: failed to load admin tab', err);
+      content.innerHTML = `<div class="alert alert-error"><i class="ti ti-alert-triangle"></i> Couldn't load this tab: ${err.message || 'unknown error'}. Check the browser console for details.</div>`;
     }
   },
 
