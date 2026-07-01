@@ -380,25 +380,38 @@ const AdminView = {
           ${commands.map(cmd => `
             <div class="structure-node">
               <div class="structure-node-header">
-                <i class="ti ti-building"></i> <strong>${cmd.name}</strong>
-                ${this._statusBadge(cmd.is_active)}
-                <button class="btn btn-secondary btn-xs" data-edit-command="${cmd.id}" data-name="${cmd.name}"><i class="ti ti-pencil"></i></button>
-                <button class="btn btn-secondary btn-xs" data-toggle-command="${cmd.id}" data-active="${cmd.is_active}">${cmd.is_active ? 'Deactivate' : 'Activate'}</button>
-                <button class="btn btn-secondary btn-xs" data-new-dept="${cmd.id}">+ Department</button>
+                <div class="structure-node-title">
+                  <i class="ti ti-building"></i>
+                  <strong>${cmd.name}</strong>
+                  ${this._statusBadge(cmd.is_active)}
+                </div>
+                <div class="structure-node-actions">
+                  ${this._iconBtn('edit-command', cmd.id, 'Rename', 'ti-pencil', { name: cmd.name })}
+                  ${this._toggleIconBtn('toggle-command', cmd.id, cmd.is_active)}
+                  <button class="btn btn-secondary btn-xs" data-new-dept="${cmd.id}"><i class="ti ti-plus"></i> Department</button>
+                </div>
               </div>
               <ul class="structure-children">
                 ${(departmentsByCommand[cmd.id] || []).map(d => `
-                  <li>${d.name} ${this._statusBadge(d.is_active)}
-                    <button class="btn btn-secondary btn-xs" data-edit-department="${d.id}" data-name="${d.name}"><i class="ti ti-pencil"></i></button>
-                    <button class="btn btn-secondary btn-xs" data-toggle-department="${d.id}" data-active="${d.is_active}">${d.is_active ? 'Deactivate' : 'Activate'}</button>
-                    <span class="structure-sections">
+                  <li class="structure-child-row">
+                    <div class="structure-child-top">
+                      <span class="structure-child-name">${d.name} ${this._statusBadge(d.is_active)}</span>
+                      <div class="structure-node-actions">
+                        ${this._iconBtn('edit-department', d.id, 'Rename', 'ti-pencil', { name: d.name })}
+                        ${this._toggleIconBtn('toggle-department', d.id, d.is_active)}
+                      </div>
+                    </div>
+                    <div class="structure-sections">
                       ${sections.filter(s => s.department_id === d.id).map(s => `
-                        <span class="badge badge-outline">${s.code}</span> ${this._statusBadge(s.is_active)}
-                        <button class="btn btn-secondary btn-xs" data-edit-section="${s.id}" data-name="${s.name}" data-code="${s.code}"><i class="ti ti-pencil"></i></button>
-                        <button class="btn btn-secondary btn-xs" data-toggle-section="${s.id}" data-active="${s.is_active}">${s.is_active ? 'Deactivate' : 'Activate'}</button>
-                      `).join('')}
-                      <button class="btn btn-secondary btn-xs" data-new-section-dept="${d.id}" data-org="${org.id}">+ Section</button>
-                    </span>
+                        <span class="structure-section-chip">
+                          <span class="structure-section-code">${s.code}</span>
+                          ${this._statusBadge(s.is_active)}
+                          ${this._iconBtn('edit-section', s.id, 'Rename', 'ti-pencil', { name: s.name, code: s.code })}
+                          ${this._toggleIconBtn('toggle-section', s.id, s.is_active)}
+                        </span>
+                      `).join('') || '<span class="structure-empty">No sections yet</span>'}
+                      <button class="btn btn-secondary btn-xs" data-new-section-dept="${d.id}" data-org="${org.id}"><i class="ti ti-plus"></i> Section</button>
+                    </div>
                   </li>
                 `).join('') || '<li class="structure-empty">No departments yet</li>'}
               </ul>
@@ -478,20 +491,27 @@ const AdminView = {
           ${divisions.map(div => `
             <div class="structure-node">
               <div class="structure-node-header">
-                <i class="ti ti-building"></i> <strong>${div.name}</strong>
-                ${this._statusBadge(div.is_active)}
-                <button class="btn btn-secondary btn-xs" data-edit-division="${div.id}" data-name="${div.name}"><i class="ti ti-pencil"></i></button>
-                <button class="btn btn-secondary btn-xs" data-toggle-division="${div.id}" data-active="${div.is_active}">${div.is_active ? 'Deactivate' : 'Activate'}</button>
-                <button class="btn btn-secondary btn-xs" data-new-section-div="${div.id}" data-org="${org.id}">+ Section</button>
+                <div class="structure-node-title">
+                  <i class="ti ti-building"></i>
+                  <strong>${div.name}</strong>
+                  ${this._statusBadge(div.is_active)}
+                </div>
+                <div class="structure-node-actions">
+                  ${this._iconBtn('edit-division', div.id, 'Rename', 'ti-pencil', { name: div.name })}
+                  ${this._toggleIconBtn('toggle-division', div.id, div.is_active)}
+                  <button class="btn btn-secondary btn-xs" data-new-section-div="${div.id}" data-org="${org.id}"><i class="ti ti-plus"></i> Section</button>
+                </div>
               </div>
-              <ul class="structure-children">
+              <div class="structure-sections structure-sections--top">
                 ${sections.filter(s => s.division_id === div.id).map(s => `
-                  <li>${s.name} <span class="badge badge-outline">${s.code}</span> ${this._statusBadge(s.is_active)}
-                    <button class="btn btn-secondary btn-xs" data-edit-section="${s.id}" data-name="${s.name}" data-code="${s.code}"><i class="ti ti-pencil"></i></button>
-                    <button class="btn btn-secondary btn-xs" data-toggle-section="${s.id}" data-active="${s.is_active}">${s.is_active ? 'Deactivate' : 'Activate'}</button>
-                  </li>
-                `).join('') || '<li class="structure-empty">No sections yet</li>'}
-              </ul>
+                  <span class="structure-section-chip">
+                    <span class="structure-section-code">${s.name} · ${s.code}</span>
+                    ${this._statusBadge(s.is_active)}
+                    ${this._iconBtn('edit-section', s.id, 'Rename', 'ti-pencil', { name: s.name, code: s.code })}
+                    ${this._toggleIconBtn('toggle-section', s.id, s.is_active)}
+                  </span>
+                `).join('') || '<span class="structure-empty">No sections yet</span>'}
+              </div>
             </div>
           `).join('') || '<p class="structure-empty">No divisions yet.</p>'}
         </div>
@@ -540,6 +560,21 @@ const AdminView = {
     return isActive
       ? ''
       : '<span class="badge badge-muted">Inactive</span>';
+  },
+
+  // Small icon-only button for a secondary structure-tree action (rename,
+  // etc). extraData becomes additional data-* attributes the existing
+  // event-binding code (content.querySelectorAll('[data-edit-command]')
+  // and friends) already reads off btn.dataset.
+  _iconBtn(action, id, title, icon, extraData = {}) {
+    const extra = Object.entries(extraData).map(([k, v]) => `data-${k}="${v}"`).join(' ');
+    return `<button class="icon-btn-xs" data-${action}="${id}" ${extra} title="${title}"><i class="ti ${icon}"></i></button>`;
+  },
+
+  _toggleIconBtn(action, id, isActive) {
+    const icon = isActive ? 'ti-ban' : 'ti-circle-check';
+    const title = isActive ? 'Deactivate' : 'Activate';
+    return `<button class="icon-btn-xs" data-${action}="${id}" data-active="${isActive}" title="${title}"><i class="ti ${icon}"></i></button>`;
   },
 
   _openEditSectionModal(section) {

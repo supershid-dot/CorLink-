@@ -159,6 +159,20 @@ p  { line-height: 1.6; }
 }
 .icon-btn:disabled { opacity: .4; cursor: not-allowed; }
 
+/* Compact icon-only button for inline row actions (structure tree rename/
+   toggle) where a labeled .btn would add more visual noise than the row
+   needs — the icon + title tooltip carries enough meaning on its own. */
+.icon-btn-xs {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  transition: background var(--transition), color var(--transition);
+}
+.icon-btn-xs:hover { background: var(--color-primary-light); color: var(--color-primary); }
+
 /* ── Form Fields ────────────────────────────────────────────── */
 .field-group { display: flex; flex-direction: column; gap: 6px; }
 
@@ -541,8 +555,8 @@ p  { line-height: 1.6; }
     margin-bottom: 3px;
   }
 
-  .structure-children { margin-left: 12px; }
-  .structure-sections { margin-left: 0; width: 100%; }
+  .structure-node { padding: 12px; }
+  .structure-children { margin-left: 4px; padding-left: 10px; }
 }
 
 /* ── Divehi / Faruma font support ────────────────────────────── */
@@ -741,40 +755,92 @@ p  { line-height: 1.6; }
 }
 
 /* ── Structure Tree (Commands/Departments/Divisions/Sections) ──── */
+/* Each command/division is its own card rather than a row in a flat,
+   divider-separated list — makes each top-level entity a clear visual
+   unit instead of everything running together. */
 .structure-node {
-  padding: 14px 0;
-  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 14px 16px;
 }
-.structure-node:last-child { border-bottom: none; }
+.structure-node + .structure-node { margin-top: 12px; }
+
 .structure-node-header {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 10px;
   font-size: 0.9375rem;
 }
-.structure-node-header .btn:last-child { margin-left: auto; }
-.structure-children {
-  list-style: none;
-  margin: 10px 0 0 24px;
+.structure-node-title {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 8px;
 }
-.structure-children li {
+.structure-node-title i { color: var(--color-primary); }
+.structure-node-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  gap: 4px;
+}
+
+/* Indented, left-lined list of departments/divisions under a command,
+   so the hierarchy reads at a glance instead of relying on a bare
+   margin with no visual connection to its parent. */
+.structure-children {
+  list-style: none;
+  margin: 12px 0 0 12px;
+  padding-left: 16px;
+  border-left: 2px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
   gap: 10px;
+}
+.structure-child-row {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+}
+.structure-child-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   font-size: 0.875rem;
   color: var(--color-text);
 }
+.structure-child-name { font-weight: 500; }
+
+/* Sections under a department/division: each one is a self-contained
+   "chip" (code + status + its own actions) instead of loose badges and
+   buttons all competing for space on the same line. */
 .structure-sections {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  margin-left: auto;
+  margin-top: 8px;
+}
+.structure-sections--top { margin-top: 12px; }
+.structure-section-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 3px 4px 3px 10px;
+}
+.structure-section-code {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-primary-dark);
+  white-space: nowrap;
 }
 .structure-empty {
   color: var(--color-text-light);
