@@ -15,11 +15,14 @@ In the Supabase SQL editor (if you already ran an earlier version, run `reset.sq
 5. `supabase/security-functions.sql` — server-side login lockout + audit logging RPCs
 6. `supabase/create-super-admin.sql` — creates the initial super admin account
 7. `supabase/storage-policies.sql` — org-logos bucket access (run after creating the buckets in step 5 below)
+8. `supabase/notifications.sql` — notification lookup RPCs + the daily overdue-request check (needs the pg_cron extension — see step 6 below)
 
-If you already ran an earlier version of `schema.sql`/`rls.sql` (before user_assignments
-supported command/department/division-level scoping), run
-`supabase/patch-user-assignments-scope.sql` instead of re-running the full files —
-it migrates existing section-scoped assignments in place.
+If you already ran an earlier version of `schema.sql`/`rls.sql`, run whichever of these
+match what changed since, instead of re-running the full files:
+- `supabase/patch-user-assignments-scope.sql` — user_assignments command/department/
+  division-level scoping
+- `supabase/patch-phase3-requests-rls.sql` — requests/approvals/attachments RLS fixes
+- `supabase/patch-phase4-prisoner-letters-rls.sql` — prisoner_letters/prisoner_replies RLS fixes
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 
@@ -69,9 +72,9 @@ Create these buckets in Supabase → Storage:
 
 Enable RLS on all private buckets.
 
-## 6. Realtime (for Phase 5 — Notifications)
-Enable Realtime on: `notifications`, `requests`, `responses`
-(Leave disabled for Phase 1)
+## 6. Realtime & pg_cron (Phase 5 — Notifications)
+- **Realtime**: Database → Replication (or Table Editor → table → "Realtime") → enable on `notifications`, `requests`, `responses`. The notification bell subscribes to `notifications` INSERTs live; without this it still works, just requires a page reload to see new notifications.
+- **pg_cron**: Database → Extensions → search "pg_cron" → enable. `supabase/notifications.sql` schedules a daily job (`check_deadlines()`, 03:00 UTC) that flips requests past their deadline to `overdue` and notifies the relevant section. If you run that file before enabling the extension, re-run just the `CREATE EXTENSION`/`cron.schedule` lines at the top afterward.
 
 ## 7. Edge Functions
 
@@ -81,7 +84,9 @@ client-side). See `supabase/functions/README.md` for deploy steps —
 either paste-and-deploy via the Supabase Dashboard, or `supabase functions deploy create-user`
 if you have the CLI.
 
-### Later phases (Phase 5+)
-- `send-notification-email` — Sends email notifications via Resend
-- `check-deadlines` — Cron: marks overdue requests, sends warnings
-- `validate-password` — Checks password history on change
+### reset-password (Phase 2 — required now)
+Admin-initiated password resets. Same deploy steps as create-user.
+
+### Not yet built
+- `send-notification-email` — Email notifications via Resend, for when in-app notifications alone aren't enough (needs a Resend API key you'd provide)
+- `validate-password` — Server-side password-history check beyond what the client already enforces

@@ -210,6 +210,11 @@ const RequestsAPI = (() => {
         .update({ status: 'pending_approval' }).eq('id', id).select().single();
       if (error) throw wrapRowError(error);
       await logAudit('submitted', 'request', id, 'Submitted request for approval');
+      const recipients = await NotificationsAPI.sectionUserIds(data.from_section_id, ['mcs_admin', 'authority_admin', 'supervisor']);
+      await NotificationsAPI.notify(recipients, {
+        type: 'approval_requested', recordType: 'request', recordId: id,
+        message: `"${data.subject}" needs your approval`,
+      });
       return data;
     },
 
@@ -228,6 +233,11 @@ const RequestsAPI = (() => {
         decision: 'approved', comment: comment || null,
       });
       await logAudit('approved', 'request', id, 'Approved and sent request');
+      const recipients = await NotificationsAPI.orgSupervisorUserIds(data.to_org_id);
+      await NotificationsAPI.notify(recipients, {
+        type: 'new_request', recordType: 'request', recordId: id,
+        message: `New request received: "${data.subject}" (${data.reference_number})`,
+      });
       return data;
     },
 
@@ -242,6 +252,10 @@ const RequestsAPI = (() => {
         decision: 'returned', comment: comment || null,
       });
       await logAudit('returned', 'request', id, 'Returned request for changes');
+      await NotificationsAPI.notify([data.created_by], {
+        type: 'draft_returned', recordType: 'request', recordId: id,
+        message: `"${data.subject}" was returned for changes`,
+      });
       return data;
     },
 
@@ -252,6 +266,11 @@ const RequestsAPI = (() => {
         .update({ to_section_id: toSectionId, status: 'received' }).eq('id', id).select().single();
       if (error) throw wrapRowError(error);
       await logAudit('routed', 'request', id, 'Routed request to section');
+      const recipients = await NotificationsAPI.sectionUserIds(toSectionId);
+      await NotificationsAPI.notify(recipients, {
+        type: 'new_request', recordType: 'request', recordId: id,
+        message: `"${data.subject}" has been routed to your section`,
+      });
       return data;
     },
 
@@ -278,9 +297,15 @@ const RequestsAPI = (() => {
     async submitResponse(id) {
       const db = getSupabase();
       const { data, error } = await db.from('responses')
-        .update({ status: 'pending_approval' }).eq('id', id).select().single();
+        .update({ status: 'pending_approval' }).eq('id', id)
+        .select('*, request:requests(subject, to_section_id)').single();
       if (error) throw wrapRowError(error);
       await logAudit('submitted', 'response', id, 'Submitted response for approval');
+      const recipients = await NotificationsAPI.sectionUserIds(data.request?.to_section_id, ['mcs_admin', 'authority_admin', 'supervisor']);
+      await NotificationsAPI.notify(recipients, {
+        type: 'approval_requested', recordType: 'request', recordId: data.request_id,
+        message: `A response to "${data.request?.subject}" needs your approval`,
+      });
       return data;
     },
 
@@ -289,7 +314,8 @@ const RequestsAPI = (() => {
       const db = getSupabase();
       const session = await Auth.getSession();
       const { data, error } = await db.from('responses')
-        .update({ status: 'sent', is_locked: true }).eq('id', id).select().single();
+        .update({ status: 'sent', is_locked: true }).eq('id', id)
+        .select('*, request:requests(subject, created_by)').single();
       if (error) throw wrapRowError(error);
       await db.from('approvals').insert({
         record_type: 'response', record_id: id, reviewed_by: session.user.id,
@@ -297,6 +323,12 @@ const RequestsAPI = (() => {
       });
       await db.from('requests').update({ status: 'responded' }).eq('id', requestId);
       await logAudit('approved', 'response', id, 'Approved and sent response');
+      if (data.request?.created_by) {
+        await NotificationsAPI.notify([data.request.created_by], {
+          type: 'new_response', recordType: 'request', recordId: requestId,
+          message: `You received a response to "${data.request.subject}"`,
+        });
+      }
       return data;
     },
 
@@ -304,13 +336,18 @@ const RequestsAPI = (() => {
       const db = getSupabase();
       const session = await Auth.getSession();
       const { data, error } = await db.from('responses')
-        .update({ status: 'draft' }).eq('id', id).select().single();
+        .update({ status: 'draft' }).eq('id', id)
+        .select('*, request:requests(subject)').single();
       if (error) throw wrapRowError(error);
       await db.from('approvals').insert({
         record_type: 'response', record_id: id, reviewed_by: session.user.id,
         decision: 'returned', comment: comment || null,
       });
       await logAudit('returned', 'response', id, 'Returned response for changes');
+      await NotificationsAPI.notify([data.created_by], {
+        type: 'draft_returned', recordType: 'request', recordId: data.request_id,
+        message: `Your response to "${data.request?.subject}" was returned for changes`,
+      });
       return data;
     },
 

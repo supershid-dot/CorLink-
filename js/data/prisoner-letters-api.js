@@ -114,6 +114,11 @@ const PrisonerLettersAPI = (() => {
       }).select().single();
       if (error) throw wrapRowError(error);
       await logAudit('created', 'prisoner_letter', data.id, `Submitted prisoner letter for ${prisonerName}`);
+      const recipients = await NotificationsAPI.orgSupervisorUserIds(toOrgId);
+      await NotificationsAPI.notify(recipients, {
+        type: 'new_prisoner_letter', recordType: 'prisoner_letter', recordId: data.id,
+        message: `New prisoner letter from ${prisonerName} (${data.reference_number})`,
+      });
       return data;
     },
 
@@ -125,6 +130,18 @@ const PrisonerLettersAPI = (() => {
       const { data, error } = await db.from('prisoner_letters').update(patch).eq('id', id).select().single();
       if (error) throw wrapRowError(error);
       await logAudit('routed', 'prisoner_letter', id, 'Routed prisoner letter to section');
+      if (assignedTo) {
+        await NotificationsAPI.notify([assignedTo], {
+          type: 'new_prisoner_letter', recordType: 'prisoner_letter', recordId: id,
+          message: `A prisoner letter has been assigned to you (${data.prisoner_name})`,
+        });
+      } else {
+        const recipients = await NotificationsAPI.sectionUserIds(toSectionId, ['mcs_admin', 'authority_admin', 'supervisor']);
+        await NotificationsAPI.notify(recipients, {
+          type: 'new_prisoner_letter', recordType: 'prisoner_letter', recordId: id,
+          message: `A prisoner letter (${data.prisoner_name}) has been routed to your section`,
+        });
+      }
       return data;
     },
 
@@ -136,10 +153,15 @@ const PrisonerLettersAPI = (() => {
         letter_id: letterId, body, replied_by: session.user.id,
       }).select().single();
       if (error) throw wrapRowError(error);
-      const { error: updateErr } = await db.from('prisoner_letters')
-        .update({ status: 'replied' }).eq('id', letterId);
+      const { data: letterData, error: updateErr } = await db.from('prisoner_letters')
+        .update({ status: 'replied' }).eq('id', letterId)
+        .select('submitted_by, prisoner_name').single();
       if (updateErr) throw wrapRowError(updateErr);
       await logAudit('created', 'prisoner_letter', letterId, 'Replied to prisoner letter');
+      await NotificationsAPI.notify([letterData.submitted_by], {
+        type: 'letter_replied', recordType: 'prisoner_letter', recordId: letterId,
+        message: `A reply has been received for ${letterData.prisoner_name}'s letter`,
+      });
       return data;
     },
 

@@ -455,6 +455,97 @@ p  { line-height: 1.6; }
 .menu-item:hover { background: var(--color-bg); }
 .menu-item.danger { color: var(--color-error); }
 
+.menu-item-link {
+  font-size: 0.8125rem;
+  color: var(--color-primary);
+  font-weight: 500;
+}
+.menu-item-link:hover { text-decoration: underline; }
+
+/* ── Notifications ───────────────────────────────────────────── */
+.notif-wrap { position: relative; }
+.notif-btn { position: relative; }
+.notif-badge {
+  position: absolute;
+  top: 2px; right: 2px;
+  min-width: 16px; height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-full);
+  background: var(--color-error);
+  color: #fff;
+  font-size: 0.625rem;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+.notif-dropdown {
+  position: absolute; right: 0; top: calc(100% + 6px);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  width: 340px;
+  max-width: calc(100vw - 32px);
+  overflow: hidden;
+  z-index: 200;
+}
+.notif-dropdown-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--color-border);
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+.notif-list {
+  max-height: 360px;
+  overflow-y: auto;
+}
+.notif-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--color-text-light);
+  font-size: 0.875rem;
+}
+.notif-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border);
+  transition: background var(--transition);
+}
+.notif-item:last-child { border-bottom: none; }
+.notif-item:hover { background: var(--color-bg); }
+.notif-item-dot {
+  width: 8px; height: 8px;
+  border-radius: var(--radius-full);
+  margin-top: 6px;
+  flex-shrink: 0;
+  background: transparent;
+}
+.notif-item--unread .notif-item-dot { background: var(--color-primary); }
+.notif-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.notif-item-message {
+  font-size: 0.875rem;
+  color: var(--color-text);
+  white-space: normal;
+}
+.notif-item--unread .notif-item-message { font-weight: 600; }
+.notif-item-time {
+  font-size: 0.75rem;
+  color: var(--color-text-light);
+}
+
 /* ── Main Content ────────────────────────────────────────────── */
 .main-content {
   flex: 1;
