@@ -167,6 +167,16 @@ const AdminView = {
   },
 
   // ── Audit Log Tab ───────────────────────────────────────────────
+  // notes is free text built (in admin-api.js) by concatenating
+  // admin-supplied names — the audit log is the first place in the app
+  // that surfaces it to a whole org's worth of admins/supervisors, so
+  // unlike the rest of this view it's escaped before going into innerHTML.
+  _escapeHtml(value) {
+    const div = document.createElement('div');
+    div.textContent = value == null ? '' : String(value);
+    return div.innerHTML;
+  },
+
   async _renderAuditLog(content) {
     const org = this._state.orgs.find(o => o.id === this._state.selectedOrgId);
     if (!org) { content.innerHTML = `<div class="alert alert-info">No organization selected.</div>`; return; }
@@ -184,10 +194,10 @@ const AdminView = {
             ${logs.map(l => `
               <tr>
                 <td>${new Date(l.created_at).toLocaleString()}</td>
-                <td>${l.users?.full_name || ''} <span class="structure-empty">(${l.users?.service_number || ''})</span></td>
-                <td><span class="badge badge-outline">${l.action}</span></td>
-                <td>${l.record_type}</td>
-                <td>${l.notes || ''}</td>
+                <td>${this._escapeHtml(l.users?.full_name)} <span class="structure-empty">(${this._escapeHtml(l.users?.service_number)})</span></td>
+                <td><span class="badge badge-outline">${this._escapeHtml(l.action)}</span></td>
+                <td>${this._escapeHtml(l.record_type)}</td>
+                <td>${this._escapeHtml(l.notes)}</td>
               </tr>
             `).join('') || '<tr><td colspan="5" class="structure-empty">No audit log entries yet.</td></tr>'}
           </tbody>
@@ -263,8 +273,8 @@ const AdminView = {
       <form id="logo-form" class="modal-form">
         <div class="field-group">
           <label class="field-label">Upload New Logo</label>
-          <input class="field-input-plain" type="file" name="logo" accept="image/png,image/jpeg,image/svg+xml" required />
-          <div class="field-hint">PNG, JPG, or SVG.</div>
+          <input class="field-input-plain" type="file" name="logo" accept="image/png,image/jpeg" required />
+          <div class="field-hint">PNG or JPG. (SVG isn't accepted — it's served publicly and can carry embedded scripts.)</div>
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">

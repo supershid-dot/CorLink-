@@ -202,8 +202,9 @@ const AdminAPI = (() => {
         (commands || []).forEach(c => scopes.push({ type: 'command', id: c.id, name: c.name, label: `Command — ${c.name}` }));
 
         const { data: departments, error: deptErr } = await db.from('departments')
-          .select('id, name, commands!inner(name, org_id)')
-          .eq('commands.org_id', org.id).eq('is_active', true).order('name');
+          .select('id, name, commands!inner(name, org_id, is_active)')
+          .eq('commands.org_id', org.id).eq('commands.is_active', true)
+          .eq('is_active', true).order('name');
         if (deptErr) throw deptErr;
         (departments || []).forEach(d => scopes.push({
           type: 'department', id: d.id, name: d.name, label: `Department — ${d.name} (${d.commands?.name || ''})`,
