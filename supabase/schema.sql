@@ -71,7 +71,7 @@ CREATE TABLE sections (
 -- Login identity: service_number maps to '{service_number}@corlink.internal'
 -- in Supabase Auth. Real email stored here for notifications only.
 -- NOTE: org membership is 1:1 (a user belongs to exactly one organization),
--- but section + role are many-to-many — see user_assignments below.
+-- but scope + role are many-to-many — see user_assignments below.
 -- 'super_admin' is the one exception: it is a system-wide flag on this table,
 -- not a section-scoped assignment (MCS super admins operate above section level).
 CREATE TABLE users (
@@ -89,27 +89,32 @@ CREATE TABLE users (
   updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- ─── User Assignments (many-to-many: section + role) ─────────
+-- ─── User Assignments (many-to-many: scope + role) ────────────
 -- A user can hold multiple assignments: e.g. staff in Section A AND
--- supervisor in Section B, or supervisor across several sections at once
--- (models a department/command head by assigning them to every section
--- under that department/command).
+-- supervisor in Section B. An assignment can also be scoped ABOVE
+-- section level — a command head or department head (MCS) or a
+-- division head (Authority) is assigned once at that level rather
+-- than once per section underneath them; RLS expands the scope down
+-- to the relevant sections. scope_type/scope_id follow the same
+-- polymorphic-reference convention used elsewhere in this schema
+-- (approvals.record_id, attachments.record_id).
 CREATE TABLE user_assignments (
   id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id     UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  section_id  UUID        NOT NULL REFERENCES sections(id) ON DELETE CASCADE,
+  scope_type  TEXT        NOT NULL CHECK (scope_type IN ('command', 'department', 'division', 'section')),
+  scope_id    UUID        NOT NULL,
   role        TEXT        NOT NULL CHECK (role IN (
                  'mcs_admin', 'authority_admin', 'supervisor',
                  'assigned_receiver', 'staff'
               )),
-  is_primary  BOOLEAN     NOT NULL DEFAULT FALSE,  -- Default section shown at login
+  is_primary  BOOLEAN     NOT NULL DEFAULT FALSE,  -- Default scope shown at login
   is_active   BOOLEAN     NOT NULL DEFAULT TRUE,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (user_id, section_id, role)
+  UNIQUE (user_id, scope_type, scope_id, role)
 );
 
-CREATE INDEX idx_user_assignments_user    ON user_assignments(user_id);
-CREATE INDEX idx_user_assignments_section ON user_assignments(section_id);
+CREATE INDEX idx_user_assignments_user  ON user_assignments(user_id);
+CREATE INDEX idx_user_assignments_scope ON user_assignments(scope_type, scope_id);
 
 -- Only one primary assignment per user
 CREATE UNIQUE INDEX idx_user_assignments_one_primary

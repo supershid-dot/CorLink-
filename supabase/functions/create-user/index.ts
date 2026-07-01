@@ -95,7 +95,7 @@ Deno.serve(async (req) => {
     const body = await req.json();
     const {
       service_number, full_name, email, org_id,
-      preferred_language, assignments, // assignments: [{section_id, role, is_primary}]
+      preferred_language, assignments, // assignments: [{scope_type, scope_id, role, is_primary}]
     } = body;
 
     if (!service_number || !full_name || !email || !org_id) {
@@ -146,9 +146,10 @@ Deno.serve(async (req) => {
     }
 
     if (Array.isArray(assignments) && assignments.length > 0) {
-      const rows = assignments.map((a: { section_id: string; role: string; is_primary?: boolean }) => ({
+      const rows = assignments.map((a: { scope_type: string; scope_id: string; role: string; is_primary?: boolean }) => ({
         user_id: newAuthUser.user.id,
-        section_id: a.section_id,
+        scope_type: a.scope_type,
+        scope_id: a.scope_id,
         role: a.role,
         is_primary: !!a.is_primary,
       }));

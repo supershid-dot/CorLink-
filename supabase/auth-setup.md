@@ -14,6 +14,12 @@ In the Supabase SQL editor (if you already ran an earlier version, run `reset.sq
 4. `supabase/seed.sql`
 5. `supabase/security-functions.sql` — server-side login lockout + audit logging RPCs
 6. `supabase/create-super-admin.sql` — creates the initial super admin account
+7. `supabase/storage-policies.sql` — org-logos bucket access (run after creating the buckets in step 5 below)
+
+If you already ran an earlier version of `schema.sql`/`rls.sql` (before user_assignments
+supported command/department/division-level scoping), run
+`supabase/patch-user-assignments-scope.sql` instead of re-running the full files —
+it migrates existing section-scoped assignments in place.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

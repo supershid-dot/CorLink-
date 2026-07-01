@@ -145,13 +145,13 @@ const DashboardView = {
 
     const primary = assignments.find(a => a.is_primary) || assignments[0];
     const primaryLabel = labels[primary.role] || primary.role;
-    const sectionName = primary.sections?.name || '';
+    const scopeName = primary.scope_name || '';
 
     const extra = assignments.length - 1;
     const suffix = extra > 0 ? ` +${extra} more` : '';
 
-    return sectionName
-      ? `${primaryLabel} — ${sectionName}${suffix}`
+    return scopeName
+      ? `${primaryLabel} — ${scopeName}${suffix}`
       : `${primaryLabel}${suffix}`;
   },
 };

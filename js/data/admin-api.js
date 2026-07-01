@@ -57,6 +57,27 @@ const AdminAPI = (() => {
       return data;
     },
 
+    // Uploads a logo file to the (public) org-logos bucket and points
+    // the organization row at it. Storage RLS restricts writes to
+    // super admins — see supabase/storage-policies.sql.
+    async uploadOrgLogo(orgId, file) {
+      const db = getSupabase();
+      const ext = (file.name.split('.').pop() || 'png').toLowerCase();
+      const path = `${orgId}/logo.${ext}`;
+      const { error: uploadError } = await db.storage.from('org-logos')
+        .upload(path, file, { upsert: true, contentType: file.type });
+      if (uploadError) throw uploadError;
+      await this.updateOrganization(orgId, { logo_path: path });
+      return this.getOrgLogoUrl(path);
+    },
+
+    getOrgLogoUrl(logoPath) {
+      if (!logoPath) return null;
+      const db = getSupabase();
+      const { data } = db.storage.from('org-logos').getPublicUrl(logoPath);
+      return data.publicUrl;
+    },
+
     // ── Commands (MCS) ─────────────────────────────────────────
     async listCommands(orgId) {
       const db = getSupabase();
@@ -164,11 +185,62 @@ const AdminAPI = (() => {
       return data;
     },
 
+    // ── Assignable Scopes ──────────────────────────────────────────
+    // Not everyone belongs at section level — a command or department
+    // head (MCS) / division head (Authority) is assigned once at that
+    // higher level instead of once per section underneath it. Returns
+    // a flat, active-only list of everything a role can be assigned to
+    // in this org, for the assignment-scope picker.
+    async listAssignableScopes(org) {
+      const db = getSupabase();
+      const scopes = [];
+
+      if (org.type === 'mcs') {
+        const { data: commands, error: cmdErr } = await db.from('commands')
+          .select('id, name').eq('org_id', org.id).eq('is_active', true).order('name');
+        if (cmdErr) throw cmdErr;
+        (commands || []).forEach(c => scopes.push({ type: 'command', id: c.id, name: c.name, label: `Command — ${c.name}` }));
+
+        const { data: departments, error: deptErr } = await db.from('departments')
+          .select('id, name, commands!inner(name, org_id, is_active)')
+          .eq('commands.org_id', org.id).eq('commands.is_active', true)
+          .eq('is_active', true).order('name');
+        if (deptErr) throw deptErr;
+        (departments || []).forEach(d => scopes.push({
+          type: 'department', id: d.id, name: d.name, label: `Department — ${d.name} (${d.commands?.name || ''})`,
+        }));
+      } else {
+        const { data: divisions, error: divErr } = await db.from('divisions')
+          .select('id, name').eq('org_id', org.id).eq('is_active', true).order('name');
+        if (divErr) throw divErr;
+        (divisions || []).forEach(d => scopes.push({ type: 'division', id: d.id, name: d.name, label: `Division — ${d.name}` }));
+      }
+
+      const { data: sections, error: secErr } = await db.from('sections')
+        .select('id, name').eq('org_id', org.id).eq('is_active', true).order('name');
+      if (secErr) throw secErr;
+      (sections || []).forEach(s => scopes.push({ type: 'section', id: s.id, name: s.name, label: `Section — ${s.name}` }));
+
+      return scopes;
+    },
+
+    // ── Audit Log ────────────────────────────────────────────────
+    async listAuditLogs(orgId, limit = 100) {
+      const db = getSupabase();
+      const { data, error } = await db.from('audit_logs')
+        .select('id, action, record_type, record_id, notes, created_at, users!inner(full_name, service_number, org_id)')
+        .eq('users.org_id', orgId)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      return data;
+    },
+
     // ── Users ────────────────────────────────────────────────────
     async listUsersByOrg(orgId) {
       const db = getSupabase();
       const { data, error } = await db.from('users')
-        .select('*, user_assignments(id, section_id, role, is_primary, is_active, sections(name, code))')
+        .select('*, user_assignments(id, scope_type, scope_id, role, is_primary, is_active)')
         .eq('org_id', orgId).order('full_name');
       if (error) throw error;
       return data;
@@ -215,10 +287,11 @@ const AdminAPI = (() => {
     },
 
     // ── Assignments ──────────────────────────────────────────────
-    async createAssignment({ userId, sectionId, role, isPrimary }) {
+    async createAssignment({ userId, scopeType, scopeId, role, isPrimary }) {
       const db = getSupabase();
+      if (isPrimary) await this._clearPrimary(userId);
       const { data, error } = await db.from('user_assignments')
-        .insert({ user_id: userId, section_id: sectionId, role, is_primary: !!isPrimary })
+        .insert({ user_id: userId, scope_type: scopeType, scope_id: scopeId, role, is_primary: !!isPrimary })
         .select().single();
       if (error) throw error;
       await logAudit('created', 'user', userId, `Assigned role ${role}`);
@@ -235,6 +308,23 @@ const AdminAPI = (() => {
 
     async deactivateAssignment(id) {
       return this.updateAssignment(id, { is_active: false });
+    },
+
+    // Unsets any existing is_primary flag for the user first — the
+    // partial unique index only allows one is_primary=true row per
+    // user, so the old primary must be cleared before a new one is set.
+    async _clearPrimary(userId) {
+      const db = getSupabase();
+      const { error } = await db.from('user_assignments')
+        .update({ is_primary: false }).eq('user_id', userId).eq('is_primary', true);
+      if (error) throw error;
+    },
+
+    async setPrimaryAssignment(userId, assignmentId) {
+      await this._clearPrimary(userId);
+      const data = await this.updateAssignment(assignmentId, { is_primary: true });
+      await logAudit('edited', 'user', userId, 'Changed primary assignment');
+      return data;
     },
   };
 })();
