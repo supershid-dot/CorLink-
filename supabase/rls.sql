@@ -457,11 +457,18 @@ CREATE POLICY "prisoner_letters_insert" ON prisoner_letters
     AND from_prison_id = get_my_org_id()
   );
 
+-- The bare is_supervisor_or_above() clause (no org-membership check) let
+-- ANY supervisor in ANY organization update ANY prisoner letter, including
+-- ones belonging to a completely unrelated MCS/authority pair — mirrors
+-- the requests_update_supervisor gap fixed in Phase 3.
 CREATE POLICY "prisoner_letters_update" ON prisoner_letters
   FOR UPDATE USING (
     submitted_by = auth.uid()
     OR assigned_to = auth.uid()
-    OR is_supervisor_or_above()
+    OR (
+      is_supervisor_or_above()
+      AND (from_prison_id = get_my_org_id() OR to_org_id = get_my_org_id())
+    )
   );
 
 -- ─── prisoner_replies ────────────────────────────────────────
@@ -476,8 +483,27 @@ CREATE POLICY "prisoner_replies_select" ON prisoner_replies
     )
   );
 
+-- replied_by = auth.uid() alone put no restriction on WHICH letter you
+-- could attach a reply to — any authenticated user who obtained a
+-- letter_id (even one they have no visibility into) could insert a
+-- reply against it. Mirror prisoner_letters_select's visibility so only
+-- someone who can actually see the letter can reply to it.
 CREATE POLICY "prisoner_replies_insert" ON prisoner_replies
-  FOR INSERT WITH CHECK (replied_by = auth.uid());
+  FOR INSERT WITH CHECK (
+    replied_by = auth.uid()
+    AND EXISTS (
+      SELECT 1 FROM prisoner_letters pl
+      WHERE pl.id = letter_id
+        AND (
+          pl.submitted_by = auth.uid()
+          OR pl.assigned_to = auth.uid()
+          OR (
+            is_supervisor_or_above()
+            AND (pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
+          )
+        )
+    )
+  );
 
 -- ─── deadline_extensions ─────────────────────────────────────
 CREATE POLICY "deadline_ext_select" ON deadline_extensions

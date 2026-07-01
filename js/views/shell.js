@@ -66,6 +66,7 @@ const AppShell = {
         <nav class="topbar-nav" id="topbar-nav">
           ${link('dashboard', 'Dashboard')}
           ${link('requests', 'Requests')}
+          ${link('prisoner-letters', 'Letters')}
           ${admin ? link('admin', 'Admin') : ''}
         </nav>
         <div class="topbar-actions">

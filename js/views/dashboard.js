@@ -1,7 +1,5 @@
 // ─── Dashboard View ───────────────────────────────────────────
-// Authenticated landing page. Stat cards are wired to real counts
-// once their module ships (Requests in Phase 3); the rest stay
-// disabled placeholders until Phases 4-5 land.
+// Authenticated landing page. Stat cards are wired to real counts.
 
 const DashboardView = {
   async render(container) {
@@ -35,12 +33,11 @@ const DashboardView = {
               <div class="stat-label">Overdue</div>
               <div class="stat-value"><span class="spinner spinner--dark"></span></div>
             </a>
-            <div class="stat-card stat-card--disabled">
+            <a href="#prisoner-letters" class="stat-card" id="stat-letters">
               <div class="stat-icon"><i class="ti ti-mail"></i></div>
               <div class="stat-label">Prisoner Letters</div>
-              <div class="stat-value">—</div>
-              <div class="stat-note">Available Phase 4</div>
-            </div>
+              <div class="stat-value"><span class="spinner spinner--dark"></span></div>
+            </a>
           </div>
         </main>
       </div>
@@ -51,13 +48,15 @@ const DashboardView = {
 
   async _loadStats(user) {
     try {
-      const [inbox, sent, overdue] = await Promise.all([
+      const [inbox, sent, overdue, letters] = await Promise.all([
         RequestsAPI.countInbox(user.org_id),
         RequestsAPI.countSent(user.id),
         RequestsAPI.countOverdue(user.org_id),
+        PrisonerLettersAPI.countInbox(user.org_id),
       ]);
       document.querySelector('#stat-inbox .stat-value').textContent = inbox;
       document.querySelector('#stat-sent .stat-value').textContent = sent;
+      document.querySelector('#stat-letters .stat-value').textContent = letters;
       const overdueEl = document.querySelector('#stat-overdue .stat-value');
       overdueEl.textContent = overdue;
       if (overdue > 0) overdueEl.style.color = 'var(--color-error)';
