@@ -100,8 +100,13 @@ CREATE POLICY "orgs_update" ON organizations
 CREATE POLICY "commands_select" ON commands
   FOR SELECT USING (auth.uid() IS NOT NULL);
 
+-- Scoped to the caller's own org so an authority_admin cannot insert
+-- rows into MCS's command structure (or vice versa).
 CREATE POLICY "commands_insert" ON commands
-  FOR INSERT WITH CHECK (is_admin());
+  FOR INSERT WITH CHECK (
+    is_super_admin() OR
+    (has_role('mcs_admin') AND org_id = get_my_org_id())
+  );
 
 CREATE POLICY "commands_update" ON commands
   FOR UPDATE USING (
@@ -113,11 +118,22 @@ CREATE POLICY "commands_update" ON commands
 CREATE POLICY "departments_select" ON departments
   FOR SELECT USING (auth.uid() IS NOT NULL);
 
+-- Scoped via the parent command's org_id — same reasoning as commands_insert.
 CREATE POLICY "departments_insert" ON departments
-  FOR INSERT WITH CHECK (is_admin());
+  FOR INSERT WITH CHECK (
+    is_super_admin() OR
+    (has_role('mcs_admin') AND EXISTS (
+      SELECT 1 FROM commands c WHERE c.id = command_id AND c.org_id = get_my_org_id()
+    ))
+  );
 
 CREATE POLICY "departments_update" ON departments
-  FOR UPDATE USING (is_admin());
+  FOR UPDATE USING (
+    is_super_admin() OR
+    (has_role('mcs_admin') AND EXISTS (
+      SELECT 1 FROM commands c WHERE c.id = command_id AND c.org_id = get_my_org_id()
+    ))
+  );
 
 -- ─── divisions ────────────────────────────────────────────────
 CREATE POLICY "divisions_select" ON divisions

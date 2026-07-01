@@ -18,7 +18,8 @@ const DashboardView = {
             <span class="topbar-appname">${APP_NAME}</span>
           </div>
           <nav class="topbar-nav" id="topbar-nav">
-            <!-- Populated in later phases -->
+            <a href="#dashboard" class="topbar-link topbar-link--active">Dashboard</a>
+            ${this._isAdmin(user) ? `<a href="#admin" class="topbar-link">Admin</a>` : ''}
           </nav>
           <div class="topbar-actions">
             <button class="icon-btn" title="Notifications (Phase 5)" disabled>
@@ -113,6 +114,13 @@ const DashboardView = {
       await Auth.signOut();
       Router.navigate('login');
     });
+  },
+
+  _isAdmin(user) {
+    if (user.is_super_admin) return true;
+    return (user.assignments || []).some(
+      a => a.is_active && (a.role === 'mcs_admin' || a.role === 'authority_admin')
+    );
   },
 
   _initials(name) {

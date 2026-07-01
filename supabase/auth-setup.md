@@ -67,9 +67,15 @@ Enable RLS on all private buckets.
 Enable Realtime on: `notifications`, `requests`, `responses`
 (Leave disabled for Phase 1)
 
-## 7. Edge Functions (Phase 5+)
+## 7. Edge Functions
+
+### create-user (Phase 2 — required now)
+Creates new staff accounts (needs the service role key, so it can't run
+client-side). See `supabase/functions/README.md` for deploy steps —
+either paste-and-deploy via the Supabase Dashboard, or `supabase functions deploy create-user`
+if you have the CLI.
+
+### Later phases (Phase 5+)
 - `send-notification-email` — Sends email notifications via Resend
 - `check-deadlines` — Cron: marks overdue requests, sends warnings
 - `validate-password` — Checks password history on change
-
-These are scaffolded in `supabase/functions/` (Phase 5 deliverable).
