@@ -183,7 +183,19 @@ const AdminAPI = (() => {
           assignments: assignments || [],
         },
       });
-      if (error) throw error;
+      if (error) {
+        // supabase-js's FunctionsHttpError.message is a generic
+        // "non-2xx status code" string — the real reason is in the
+        // response body, which the client doesn't parse automatically.
+        let detail = error.message;
+        if (error.context && typeof error.context.json === 'function') {
+          try {
+            const body = await error.context.json();
+            detail = body.error || body.message || detail;
+          } catch { /* body wasn't JSON — fall back to the generic message */ }
+        }
+        throw new Error(detail);
+      }
       if (data?.error) throw new Error(data.error);
       return data;
     },
