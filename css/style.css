@@ -219,6 +219,20 @@ p  { line-height: 1.6; }
   color: var(--color-text-muted);
 }
 
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9375rem;
+  color: var(--color-text);
+}
+.checkbox-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--color-primary);
+  flex-shrink: 0;
+}
+
 /* ── Password Requirements ───────────────────────────────────── */
 .pw-requirements {
   display: flex; flex-direction: column; gap: 4px;
