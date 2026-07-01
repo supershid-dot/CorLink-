@@ -70,17 +70,17 @@ CREATE TABLE sections (
 -- id links to auth.users so Supabase Auth handles credentials.
 -- Login identity: service_number maps to '{service_number}@corlink.internal'
 -- in Supabase Auth. Real email stored here for notifications only.
+-- NOTE: org membership is 1:1 (a user belongs to exactly one organization),
+-- but section + role are many-to-many — see user_assignments below.
+-- 'super_admin' is the one exception: it is a system-wide flag on this table,
+-- not a section-scoped assignment (MCS super admins operate above section level).
 CREATE TABLE users (
   id                   UUID    PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   org_id               UUID    NOT NULL REFERENCES organizations(id),
-  section_id           UUID    NOT NULL REFERENCES sections(id),
   service_number       TEXT    NOT NULL UNIQUE,
   full_name            TEXT    NOT NULL,
   email                TEXT    NOT NULL UNIQUE,     -- Real email for notifications
-  role                 TEXT    NOT NULL CHECK (role IN (
-                          'super_admin', 'mcs_admin', 'authority_admin',
-                          'supervisor', 'assigned_receiver', 'staff'
-                       )),
+  is_super_admin       BOOLEAN NOT NULL DEFAULT FALSE,
   preferred_language   TEXT    NOT NULL DEFAULT 'en' CHECK (preferred_language IN ('en', 'dv')),
   is_active            BOOLEAN NOT NULL DEFAULT TRUE,
   password_changed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -88,6 +88,32 @@ CREATE TABLE users (
   created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- ─── User Assignments (many-to-many: section + role) ─────────
+-- A user can hold multiple assignments: e.g. staff in Section A AND
+-- supervisor in Section B, or supervisor across several sections at once
+-- (models a department/command head by assigning them to every section
+-- under that department/command).
+CREATE TABLE user_assignments (
+  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  section_id  UUID        NOT NULL REFERENCES sections(id) ON DELETE CASCADE,
+  role        TEXT        NOT NULL CHECK (role IN (
+                 'mcs_admin', 'authority_admin', 'supervisor',
+                 'assigned_receiver', 'staff'
+              )),
+  is_primary  BOOLEAN     NOT NULL DEFAULT FALSE,  -- Default section shown at login
+  is_active   BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (user_id, section_id, role)
+);
+
+CREATE INDEX idx_user_assignments_user    ON user_assignments(user_id);
+CREATE INDEX idx_user_assignments_section ON user_assignments(section_id);
+
+-- Only one primary assignment per user
+CREATE UNIQUE INDEX idx_user_assignments_one_primary
+  ON user_assignments(user_id) WHERE is_primary = TRUE;
 
 -- ─── Password History (reuse prevention) ────────────────────
 -- Stores hashed passwords via Supabase Auth hooks / Edge Function.
@@ -269,7 +295,6 @@ CREATE TABLE login_attempts (
 
 -- ─── Indexes ────────────────────────────────────────────────
 CREATE INDEX idx_users_org_id           ON users(org_id);
-CREATE INDEX idx_users_section_id       ON users(section_id);
 CREATE INDEX idx_users_service_number   ON users(service_number);
 CREATE INDEX idx_requests_from_org      ON requests(from_org_id);
 CREATE INDEX idx_requests_to_org        ON requests(to_org_id);

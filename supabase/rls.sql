@@ -10,6 +10,7 @@ ALTER TABLE departments          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE divisions            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sections             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE users                ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_assignments     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_password_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE reference_sequences  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE requests             ENABLE ROW LEVEL SECURITY;
@@ -30,31 +31,57 @@ RETURNS UUID AS $$
   SELECT org_id FROM users WHERE id = auth.uid();
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
-CREATE OR REPLACE FUNCTION get_my_role()
-RETURNS TEXT AS $$
-  SELECT role FROM users WHERE id = auth.uid();
-$$ LANGUAGE sql STABLE SECURITY DEFINER;
-
-CREATE OR REPLACE FUNCTION get_my_section_id()
-RETURNS UUID AS $$
-  SELECT section_id FROM users WHERE id = auth.uid();
-$$ LANGUAGE sql STABLE SECURITY DEFINER;
+-- A user now holds zero or more (section_id, role) assignments via
+-- user_assignments, so "my role" and "my section" are no longer scalars.
+-- These helpers check membership/role across ALL of a user's assignments.
 
 CREATE OR REPLACE FUNCTION is_super_admin()
 RETURNS BOOLEAN AS $$
-  SELECT COALESCE((SELECT role = 'super_admin' FROM users WHERE id = auth.uid()), FALSE);
+  SELECT COALESCE((SELECT is_super_admin FROM users WHERE id = auth.uid()), FALSE);
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+
+-- True if the user holds the given role in ANY of their assignments.
+CREATE OR REPLACE FUNCTION has_role(p_role TEXT)
+RETURNS BOOLEAN AS $$
+  SELECT is_super_admin() OR EXISTS (
+    SELECT 1 FROM user_assignments
+    WHERE user_id = auth.uid() AND role = p_role AND is_active = TRUE
+  );
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+
+-- True if the user holds the given role specifically in p_section_id.
+CREATE OR REPLACE FUNCTION has_role_in_section(p_section_id UUID, p_role TEXT)
+RETURNS BOOLEAN AS $$
+  SELECT is_super_admin() OR EXISTS (
+    SELECT 1 FROM user_assignments
+    WHERE user_id = auth.uid() AND section_id = p_section_id
+      AND role = p_role AND is_active = TRUE
+  );
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+
+-- Set of section_ids the user holds ANY active assignment in.
+CREATE OR REPLACE FUNCTION my_section_ids()
+RETURNS SETOF UUID AS $$
+  SELECT section_id FROM user_assignments
+  WHERE user_id = auth.uid() AND is_active = TRUE;
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+
+-- Set of section_ids the user supervises (supervisor role or above).
+CREATE OR REPLACE FUNCTION my_supervised_section_ids()
+RETURNS SETOF UUID AS $$
+  SELECT section_id FROM user_assignments
+  WHERE user_id = auth.uid() AND is_active = TRUE
+    AND role IN ('mcs_admin', 'authority_admin', 'supervisor');
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION is_admin()
 RETURNS BOOLEAN AS $$
-  SELECT COALESCE((SELECT role IN ('super_admin', 'mcs_admin', 'authority_admin')
-    FROM users WHERE id = auth.uid()), FALSE);
+  SELECT is_super_admin() OR has_role('mcs_admin') OR has_role('authority_admin');
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION is_supervisor_or_above()
 RETURNS BOOLEAN AS $$
-  SELECT COALESCE((SELECT role IN ('super_admin', 'mcs_admin', 'authority_admin', 'supervisor')
-    FROM users WHERE id = auth.uid()), FALSE);
+  SELECT is_admin() OR has_role('supervisor');
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
 -- ─── organizations ────────────────────────────────────────────
@@ -79,7 +106,7 @@ CREATE POLICY "commands_insert" ON commands
 CREATE POLICY "commands_update" ON commands
   FOR UPDATE USING (
     is_super_admin() OR
-    (get_my_role() = 'mcs_admin' AND org_id = get_my_org_id())
+    (has_role('mcs_admin') AND org_id = get_my_org_id())
   );
 
 -- ─── departments ──────────────────────────────────────────────
@@ -149,6 +176,39 @@ CREATE POLICY "users_update_admin" ON users
     (is_admin() AND org_id = get_my_org_id())
   );
 
+-- ─── user_assignments ─────────────────────────────────────────
+-- Own assignments: always readable (needed to know your own roles/sections).
+-- Same-org assignments: readable (needed for routing, approval-chain display).
+-- Admins in same org can create/deactivate assignments.
+CREATE POLICY "assignments_select_own" ON user_assignments
+  FOR SELECT USING (user_id = auth.uid());
+
+CREATE POLICY "assignments_select_same_org" ON user_assignments
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM users u
+      WHERE u.id = user_assignments.user_id AND u.org_id = get_my_org_id()
+    )
+  );
+
+CREATE POLICY "assignments_insert" ON user_assignments
+  FOR INSERT WITH CHECK (
+    is_super_admin() OR
+    (is_admin() AND EXISTS (
+      SELECT 1 FROM users u
+      WHERE u.id = user_assignments.user_id AND u.org_id = get_my_org_id()
+    ))
+  );
+
+CREATE POLICY "assignments_update" ON user_assignments
+  FOR UPDATE USING (
+    is_super_admin() OR
+    (is_admin() AND EXISTS (
+      SELECT 1 FROM users u
+      WHERE u.id = user_assignments.user_id AND u.org_id = get_my_org_id()
+    ))
+  );
+
 -- ─── user_password_history ────────────────────────────────────
 -- Only admins and edge functions (service role) should access this.
 CREATE POLICY "pw_history_insert" ON user_password_history
@@ -171,8 +231,8 @@ CREATE POLICY "requests_select" ON requests
     (from_org_id = get_my_org_id() OR to_org_id = get_my_org_id())
     AND (
       is_supervisor_or_above()
-      OR from_section_id = get_my_section_id()
-      OR to_section_id   = get_my_section_id()
+      OR from_section_id IN (SELECT my_section_ids())
+      OR to_section_id   IN (SELECT my_section_ids())
       OR created_by      = auth.uid()
     )
   );
@@ -181,7 +241,7 @@ CREATE POLICY "requests_insert" ON requests
   FOR INSERT WITH CHECK (
     from_org_id  = get_my_org_id()
     AND created_by = auth.uid()
-    AND get_my_role() IN ('staff', 'supervisor', 'assigned_receiver', 'mcs_admin', 'authority_admin', 'super_admin')
+    AND from_section_id IN (SELECT my_section_ids())
   );
 
 -- Only the creator can edit their own draft (not locked).

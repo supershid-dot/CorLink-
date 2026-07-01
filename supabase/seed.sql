@@ -72,15 +72,21 @@ VALUES (
 -- The super admin user must be created via Supabase Auth dashboard first:
 --   Email: SUPERADMIN_SERVICE_NUMBER@corlink.internal
 --   Password: (strong, meets policy)
--- Then insert their profile here with the UUID returned by Supabase Auth:
+-- Then insert their profile here with the UUID returned by Supabase Auth.
+-- Super admin is a system-wide flag (is_super_admin = TRUE) — it does NOT
+-- need a user_assignments row, since super admins bypass section scoping.
 --
--- INSERT INTO users (id, org_id, section_id, service_number, full_name, email, role)
+-- INSERT INTO users (id, org_id, service_number, full_name, email, is_super_admin)
 -- VALUES (
 --   '<AUTH_UUID_FROM_SUPABASE>',
 --   '00000000-0000-0000-0000-000000000001',
---   '00000000-0000-0000-0000-000000000030',
 --   'MCS-001',
 --   'System Administrator',
 --   'admin@mcs.gov.mv',
---   'super_admin'
+--   TRUE
 -- );
+--
+-- ─── Example: a staff member who is ALSO a supervisor in another section ──
+-- INSERT INTO user_assignments (user_id, section_id, role, is_primary) VALUES
+--   ('<STAFF_UUID>', '00000000-0000-0000-0000-000000000030', 'staff', TRUE),
+--   ('<STAFF_UUID>', '00000000-0000-0000-0000-000000000050', 'supervisor', FALSE);

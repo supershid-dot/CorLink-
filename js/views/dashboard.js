@@ -5,22 +5,16 @@ const DashboardView = {
   render(container) {
     const user = Auth.getCachedProfile();
     const name = user ? user.full_name : 'User';
-    const role = user ? this._formatRole(user.role) : '';
+    const role = user ? this._formatRoleSummary(user) : '';
 
     container.innerHTML = `
       <div class="app-layout">
         <!-- Topbar -->
         <header class="topbar">
           <div class="topbar-brand">
-            <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" width="32" height="32">
-              <path d="M20 2L4 9v12c0 9 6.5 16 16 18 9.5-2 16-9 16-18V9L20 2z"
-                fill="#1A7A6E" opacity="0.15"/>
-              <path d="M20 2L4 9v12c0 9 6.5 16 16 18 9.5-2 16-9 16-18V9L20 2z"
-                stroke="#1A7A6E" stroke-width="1.5" fill="none"/>
-              <circle cx="16" cy="20" r="3" fill="none" stroke="#1D4E89" stroke-width="1.5"/>
-              <circle cx="24" cy="20" r="3" fill="none" stroke="#1D4E89" stroke-width="1.5"/>
-              <line x1="19" y1="20" x2="21" y2="20" stroke="#1D4E89" stroke-width="1.5"/>
-            </svg>
+            <div class="topbar-logo-crop">
+              <img src="assets/logo.jpg" alt="${APP_NAME} logo" />
+            </div>
             <span class="topbar-appname">${APP_NAME}</span>
           </div>
           <nav class="topbar-nav" id="topbar-nav">
@@ -125,15 +119,31 @@ const DashboardView = {
     return name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
   },
 
-  _formatRole(role) {
+  // A user can hold several (section, role) assignments at once —
+  // e.g. staff in one section and supervisor in another. Summarize them.
+  _formatRoleSummary(user) {
     const labels = {
-      super_admin:       'Super Administrator',
       mcs_admin:         'MCS Administrator',
       authority_admin:   'Authority Administrator',
       supervisor:        'Supervisor',
       assigned_receiver: 'Assigned Receiver',
       staff:             'Staff',
     };
-    return labels[role] || role;
+
+    if (user.is_super_admin) return 'Super Administrator';
+
+    const assignments = user.assignments || [];
+    if (assignments.length === 0) return 'No role assigned';
+
+    const primary = assignments.find(a => a.is_primary) || assignments[0];
+    const primaryLabel = labels[primary.role] || primary.role;
+    const sectionName = primary.sections?.name || '';
+
+    const extra = assignments.length - 1;
+    const suffix = extra > 0 ? ` +${extra} more` : '';
+
+    return sectionName
+      ? `${primaryLabel} — ${sectionName}${suffix}`
+      : `${primaryLabel}${suffix}`;
   },
 };

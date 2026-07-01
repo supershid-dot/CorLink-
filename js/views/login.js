@@ -13,21 +13,7 @@ const LoginView = {
       <div class="login-bg">
         <div class="login-card">
           <div class="login-brand">
-            <div class="login-logo" aria-label="CorLink logo">
-              <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" width="64" height="64">
-                <!-- Shield -->
-                <path d="M32 4L8 14v18c0 14 10.5 24.5 24 28 13.5-3.5 24-14 24-28V14L32 4z"
-                  fill="#1A7A6E" opacity="0.15"/>
-                <path d="M32 4L8 14v18c0 14 10.5 24.5 24 28 13.5-3.5 24-14 24-28V14L32 4z"
-                  stroke="#1A7A6E" stroke-width="2.5" fill="none"/>
-                <!-- Link chain -->
-                <circle cx="25" cy="30" r="5" fill="none" stroke="#1D4E89" stroke-width="2.5"/>
-                <circle cx="39" cy="30" r="5" fill="none" stroke="#1D4E89" stroke-width="2.5"/>
-                <line x1="30" y1="30" x2="34" y2="30" stroke="#1D4E89" stroke-width="2.5"/>
-              </svg>
-            </div>
-            <h1 class="login-appname">${APP_NAME}</h1>
-            <p class="login-tagline">${APP_TAGLINE}</p>
+            <img src="assets/logo.jpg" alt="${APP_NAME} logo" class="login-logo-img" />
           </div>
 
           ${timeoutMsg}
@@ -135,14 +121,6 @@ const LoginView = {
     }
     if (!password) {
       this._showError(errorEl, pwInput, 'Please enter your password.');
-      return;
-    }
-
-    // Check client-side lockout before attempting
-    const remainingMin = Auth.getRemainingLockoutMinutes(serviceNumber);
-    if (remainingMin > 0) {
-      this._showError(errorEl, null,
-        `Account locked. Try again in ${remainingMin} minute${remainingMin !== 1 ? 's' : ''}.`);
       return;
     }
 

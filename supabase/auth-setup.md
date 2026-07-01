@@ -7,10 +7,13 @@
 4. Save the **Project URL** and **anon key** → paste into `js/config.js`
 
 ## 2. Run SQL Files in Order
-In the Supabase SQL editor:
-1. `supabase/schema.sql`
-2. `supabase/rls.sql`
-3. `supabase/seed.sql`
+In the Supabase SQL editor (if you already ran an earlier version, run `reset.sql` first):
+1. `supabase/reset.sql` — only needed if re-running after schema changes
+2. `supabase/schema.sql`
+3. `supabase/rls.sql`
+4. `supabase/seed.sql`
+5. `supabase/security-functions.sql` — server-side login lockout + audit logging RPCs
+6. `supabase/create-super-admin.sql` — creates the initial super admin account
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

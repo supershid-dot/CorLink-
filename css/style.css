@@ -261,22 +261,11 @@ p  { line-height: 1.6; }
   text-align: center;
 }
 
-.login-logo {
-  width: 64px; height: 64px;
-  display: flex; align-items: center; justify-content: center;
-}
-
-.login-appname {
-  font-size: 2rem;
-  font-weight: 700;
-  color: var(--color-primary);
-  letter-spacing: -0.5px;
-}
-
-.login-tagline {
-  font-size: 0.875rem;
-  color: var(--color-text-muted);
-  letter-spacing: 0.3px;
+/* Full CorLink lockup (icon + wordmark + tagline baked into the image) */
+.login-logo-img {
+  width: 180px;
+  height: auto;
+  display: block;
 }
 
 .login-form {
@@ -331,6 +320,22 @@ p  { line-height: 1.6; }
   align-items: center;
   gap: 10px;
   flex-shrink: 0;
+}
+
+/* Crops the square logo lockup down to just the icon mark for the
+   compact topbar — the wordmark/tagline in the source image only fit
+   comfortably in the larger login screen version. */
+.topbar-logo-crop {
+  width: 32px;
+  height: 32px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+.topbar-logo-crop img {
+  width: 145%;
+  max-width: none;
+  transform: translate(-15%, -8%);
 }
 
 .topbar-appname {

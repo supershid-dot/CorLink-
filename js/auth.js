@@ -1,9 +1,12 @@
 // ─── Auth Service ─────────────────────────────────────────────
 // Handles login, logout, session management, lockout, and password expiry.
+//
+// Login lockout is enforced SERVER-SIDE via the check_login_lockout /
+// record_login_attempt RPCs (see supabase/security-functions.sql), backed
+// by the login_attempts table. This cannot be bypassed by clearing
+// browser storage or switching devices, unlike a client-only lockout.
 
 const Auth = (() => {
-  const LOCKOUT_KEY   = 'cl_lockout_';
-  const ATTEMPTS_KEY  = 'cl_attempts_';
   const ACTIVITY_KEY  = 'cl_last_activity';
   const USER_KEY      = 'cl_user_profile';
 
@@ -16,36 +19,28 @@ const Auth = (() => {
     return `${serviceNumber.trim().toUpperCase()}@${AUTH_DOMAIN}`;
   }
 
-  function getLockout(serviceNumber) {
-    const raw = localStorage.getItem(LOCKOUT_KEY + serviceNumber);
-    if (!raw) return null;
-    const data = JSON.parse(raw);
-    if (Date.now() > data.until) {
-      localStorage.removeItem(LOCKOUT_KEY + serviceNumber);
-      localStorage.removeItem(ATTEMPTS_KEY + serviceNumber);
-      return null;
+  async function checkLockout(db, serviceNumber) {
+    const { data, error } = await db.rpc('check_login_lockout', {
+      p_service_number: serviceNumber,
+    });
+    if (error) {
+      console.warn('CorLink: lockout check failed:', error.message);
+      return { locked: false, remaining_seconds: 0, fail_count: 0 };
     }
     return data;
   }
 
-  function getAttempts(serviceNumber) {
-    return parseInt(localStorage.getItem(ATTEMPTS_KEY + serviceNumber) || '0', 10);
+  async function recordAttempt(db, serviceNumber, success) {
+    const { error } = await db.rpc('record_login_attempt', {
+      p_service_number: serviceNumber,
+      p_success: success,
+    });
+    if (error) console.warn('CorLink: failed to record login attempt:', error.message);
   }
 
-  function recordFailedAttempt(serviceNumber) {
-    const count = getAttempts(serviceNumber) + 1;
-    localStorage.setItem(ATTEMPTS_KEY + serviceNumber, count);
-
-    if (count >= MAX_LOGIN_ATTEMPTS) {
-      const until = Date.now() + LOCKOUT_DURATION_MINUTES * 60 * 1000;
-      localStorage.setItem(LOCKOUT_KEY + serviceNumber, JSON.stringify({ until, count }));
-    }
-    return count;
-  }
-
-  function clearAttempts(serviceNumber) {
-    localStorage.removeItem(ATTEMPTS_KEY + serviceNumber);
-    localStorage.removeItem(LOCKOUT_KEY + serviceNumber);
+  async function logAuthEvent(db, action) {
+    const { error } = await db.rpc('log_auth_event', { p_action: action });
+    if (error) console.warn('CorLink: failed to log auth event:', error.message);
   }
 
   function isPasswordExpired(user) {
@@ -101,12 +96,12 @@ const Auth = (() => {
 
     async signIn(serviceNumber, password) {
       const sn = serviceNumber.trim().toUpperCase();
+      const db = getSupabase();
 
-      // Client-side lockout check
-      const lockout = getLockout(sn);
-      if (lockout) {
-        const remainingMs = lockout.until - Date.now();
-        const remainingMin = Math.ceil(remainingMs / 60_000);
+      // Server-authoritative lockout check — cannot be bypassed client-side.
+      const lockout = await checkLockout(db, sn);
+      if (lockout.locked) {
+        const remainingMin = Math.ceil(lockout.remaining_seconds / 60);
         return {
           error: {
             type: 'locked',
@@ -115,17 +110,16 @@ const Auth = (() => {
         };
       }
 
-      const db = getSupabase();
       const { data, error } = await db.auth.signInWithPassword({
         email: authEmail(sn),
         password,
       });
 
       if (error) {
-        const count = recordFailedAttempt(sn);
-        const remaining = MAX_LOGIN_ATTEMPTS - count;
+        await recordAttempt(db, sn, false);
+        const postAttempt = await checkLockout(db, sn);
 
-        if (count >= MAX_LOGIN_ATTEMPTS) {
+        if (postAttempt.locked) {
           return {
             error: {
               type: 'locked',
@@ -134,6 +128,7 @@ const Auth = (() => {
           };
         }
 
+        const remaining = MAX_LOGIN_ATTEMPTS - postAttempt.fail_count;
         return {
           error: {
             type: 'credentials',
@@ -145,27 +140,38 @@ const Auth = (() => {
       }
 
       // Fetch user profile
-      const { data: profile, error: profileError } = await db
+      const { data: profileRow, error: profileError } = await db
         .from('users')
         .select('*')
         .eq('id', data.user.id)
         .single();
 
-      if (profileError || !profile) {
+      if (profileError || !profileRow) {
         await db.auth.signOut();
         return {
           error: { type: 'profile', message: 'User profile not found. Contact your administrator.' },
         };
       }
 
-      if (!profile.is_active) {
+      if (!profileRow.is_active) {
         await db.auth.signOut();
         return {
           error: { type: 'inactive', message: 'Account is inactive. Contact your administrator.' },
         };
       }
 
-      clearAttempts(sn);
+      // Fetch all section/role assignments (a user may hold several)
+      const { data: assignments } = await db
+        .from('user_assignments')
+        .select('id, section_id, role, is_primary, is_active, sections(name, code)')
+        .eq('user_id', data.user.id)
+        .eq('is_active', true);
+
+      const profile = { ...profileRow, assignments: assignments || [] };
+
+      await recordAttempt(db, sn, true);
+      await logAuthEvent(db, 'login');
+
       localStorage.setItem(USER_KEY, JSON.stringify(profile));
       touchActivity();
       bindActivityListeners();
@@ -181,10 +187,11 @@ const Auth = (() => {
     async signOut({ reason } = {}) {
       stopSessionWatchdog();
       unbindActivityListeners();
-      localStorage.removeItem(USER_KEY);
-      localStorage.removeItem(ACTIVITY_KEY);
 
       const db = getSupabase();
+      await logAuthEvent(db, 'logout');
+      localStorage.removeItem(USER_KEY);
+      localStorage.removeItem(ACTIVITY_KEY);
       await db.auth.signOut();
     },
 
@@ -216,8 +223,16 @@ const Auth = (() => {
         .single();
 
       if (error || !data) return null;
-      localStorage.setItem(USER_KEY, JSON.stringify(data));
-      return data;
+
+      const { data: assignments } = await db
+        .from('user_assignments')
+        .select('id, section_id, role, is_primary, is_active, sections(name, code)')
+        .eq('user_id', session.user.id)
+        .eq('is_active', true);
+
+      const profile = { ...data, assignments: assignments || [] };
+      localStorage.setItem(USER_KEY, JSON.stringify(profile));
+      return profile;
     },
 
     resumeSession() {
@@ -229,10 +244,16 @@ const Auth = (() => {
       return true;
     },
 
-    getRemainingLockoutMinutes(serviceNumber) {
-      const lockout = getLockout(serviceNumber.trim().toUpperCase());
-      if (!lockout) return 0;
-      return Math.ceil((lockout.until - Date.now()) / 60_000);
+    // Async now — the lockout check is a server RPC (see checkLockout above).
+    // Returns { locked, remainingSeconds } for the login view to consult
+    // before even attempting a sign-in.
+    async checkLockoutStatus(serviceNumber) {
+      const db = getSupabase();
+      const result = await checkLockout(db, serviceNumber.trim().toUpperCase());
+      return {
+        locked: result.locked,
+        remainingSeconds: result.remaining_seconds || 0,
+      };
     },
   };
 })();
