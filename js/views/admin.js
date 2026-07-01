@@ -193,11 +193,11 @@ const AdminView = {
           <tbody>
             ${logs.map(l => `
               <tr>
-                <td>${new Date(l.created_at).toLocaleString()}</td>
-                <td>${this._escapeHtml(l.users?.full_name)} <span class="structure-empty">(${this._escapeHtml(l.users?.service_number)})</span></td>
-                <td><span class="badge badge-outline">${this._escapeHtml(l.action)}</span></td>
-                <td>${this._escapeHtml(l.record_type)}</td>
-                <td>${this._escapeHtml(l.notes)}</td>
+                <td data-label="Time">${new Date(l.created_at).toLocaleString()}</td>
+                <td data-label="User">${this._escapeHtml(l.users?.full_name)} <span class="structure-empty">(${this._escapeHtml(l.users?.service_number)})</span></td>
+                <td data-label="Action"><span class="badge badge-outline">${this._escapeHtml(l.action)}</span></td>
+                <td data-label="Record">${this._escapeHtml(l.record_type)}</td>
+                <td data-label="Notes">${this._escapeHtml(l.notes)}</td>
               </tr>
             `).join('') || '<tr><td colspan="5" class="structure-empty">No audit log entries yet.</td></tr>'}
           </tbody>
@@ -221,18 +221,18 @@ const AdminView = {
           <tbody>
             ${orgs.map(o => `
               <tr>
-                <td>
+                <td data-label="Logo">
                   ${o.logo_path
                     ? `<img class="org-logo-thumb" src="${AdminAPI.getOrgLogoUrl(o.logo_path)}" alt="${o.name} logo" />`
                     : '<span class="structure-empty">None</span>'}
                 </td>
-                <td>${o.name}</td>
-                <td><span class="badge">${o.code}</span></td>
-                <td>${o.type === 'mcs' ? 'MCS' : 'Authority'}</td>
-                <td>${o.is_active
+                <td data-label="Name">${o.name}</td>
+                <td data-label="Code"><span class="badge">${o.code}</span></td>
+                <td data-label="Type">${o.type === 'mcs' ? 'MCS' : 'Authority'}</td>
+                <td data-label="Status">${o.is_active
                   ? '<span class="badge badge-success">Active</span>'
                   : '<span class="badge badge-muted">Inactive</span>'}</td>
-                <td>
+                <td data-label="Actions">
                   <button class="btn btn-secondary btn-xs" data-edit-logo="${o.id}">Logo</button>
                   <button class="btn btn-secondary btn-xs" data-toggle-org="${o.id}" data-active="${o.is_active}">
                     ${o.is_active ? 'Deactivate' : 'Activate'}
@@ -634,15 +634,17 @@ const AdminView = {
           <tbody>
             ${users.map(u => `
               <tr>
-                <td>${u.full_name}${u.is_super_admin ? ' <span class="badge badge-primary">Super Admin</span>' : ''}</td>
-                <td>${u.service_number}</td>
-                <td>
-                  ${(u.user_assignments || []).filter(a => a.is_active).map(a =>
-                    `<span class="badge badge-outline">${this._roleLabel(a.role)} · ${this._scopeLabel(a, scopeMap)}${a.is_primary ? ' ★' : ''}</span>`
-                  ).join(' ') || '<span class="structure-empty">None</span>'}
+                <td data-label="Name">${u.full_name}${u.is_super_admin ? ' <span class="badge badge-primary">Super Admin</span>' : ''}</td>
+                <td data-label="Service #">${u.service_number}</td>
+                <td data-label="Assignments">
+                  <div class="badge-list">
+                    ${(u.user_assignments || []).filter(a => a.is_active).map(a =>
+                      `<span class="badge badge-outline badge-wrap">${this._roleLabel(a.role)} · ${this._scopeLabel(a, scopeMap)}${a.is_primary ? ' ★' : ''}</span>`
+                    ).join('') || '<span class="structure-empty">None</span>'}
+                  </div>
                 </td>
-                <td>${u.is_active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-muted">Inactive</span>'}</td>
-                <td>
+                <td data-label="Status">${u.is_active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-muted">Inactive</span>'}</td>
+                <td data-label="Actions">
                   <button class="btn btn-secondary btn-xs" data-manage-user="${u.id}">Manage</button>
                 </td>
               </tr>
