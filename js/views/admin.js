@@ -739,10 +739,14 @@ const AdminView = {
             <option value="staff">Staff</option>
             <option value="supervisor">Supervisor</option>
             <option value="assigned_receiver">Assigned Receiver</option>
-            <option value="${org.type === 'mcs' ? 'mcs_admin' : 'authority_admin'}">
-              ${org.type === 'mcs' ? 'MCS Admin' : 'Authority Admin'}
-            </option>
           </select>
+        </div>
+        <div class="field-group">
+          <label class="checkbox-row">
+            <input type="checkbox" name="isAdmin" />
+            Also grant ${org.type === 'mcs' ? 'MCS Admin' : 'Authority Admin'} access
+          </label>
+          <div class="field-hint">Admin access applies across the whole organization — it isn't limited to the section picked above.</div>
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
@@ -760,13 +764,21 @@ const AdminView = {
       const submitBtn = form.querySelector('button[type="submit"]');
       submitBtn.disabled = true;
       const [scopeType, scopeId] = fd.get('scope').split(':');
+      const assignments = [{ scope_type: scopeType, scope_id: scopeId, role: fd.get('role'), is_primary: true }];
+      if (fd.get('isAdmin')) {
+        assignments.push({
+          scope_type: scopeType, scope_id: scopeId,
+          role: org.type === 'mcs' ? 'mcs_admin' : 'authority_admin',
+          is_primary: false,
+        });
+      }
       try {
         const result = await AdminAPI.createUser({
           serviceNumber: fd.get('serviceNumber'),
           fullName: fd.get('fullName'),
           email: fd.get('email'),
           orgId: org.id,
-          assignments: [{ scope_type: scopeType, scope_id: scopeId, role: fd.get('role'), is_primary: true }],
+          assignments,
         });
         this._showTempPassword(result);
         await this._renderTab();
@@ -800,6 +812,9 @@ const AdminView = {
   _openManageUserModal(user, scopes, org) {
     const activeAssignments = (user.user_assignments || []).filter(a => a.is_active);
     const scopeMap = this._scopeMap(scopes);
+    const adminRole = org.type === 'mcs' ? 'mcs_admin' : 'authority_admin';
+    const adminLabel = org.type === 'mcs' ? 'MCS Admin' : 'Authority Admin';
+    const hasAdmin = activeAssignments.some(a => a.role === adminRole);
 
     this._openModal(`
       <h3>Manage — ${user.full_name}</h3>
@@ -823,6 +838,16 @@ const AdminView = {
           </button>
           <button class="btn btn-secondary btn-sm" id="reset-password-btn">Reset Password</button>
         </div>
+      </div>
+
+      <div class="field-group">
+        <label class="field-label">${adminLabel} Access</label>
+        <div class="assignment-add-row">
+          <button class="btn ${hasAdmin ? 'btn-secondary' : 'btn-primary'} btn-sm" id="toggle-admin-access">
+            ${hasAdmin ? `Revoke ${adminLabel} Access` : `Grant ${adminLabel} Access`}
+          </button>
+        </div>
+        <div class="field-hint">Admin access is organization-wide — it's kept separate from the section/role assignments below.</div>
       </div>
 
       <div class="field-group">
@@ -850,9 +875,6 @@ const AdminView = {
             <option value="staff">Staff</option>
             <option value="supervisor">Supervisor</option>
             <option value="assigned_receiver">Assigned Receiver</option>
-            <option value="${org.type === 'mcs' ? 'mcs_admin' : 'authority_admin'}">
-              ${org.type === 'mcs' ? 'MCS Admin' : 'Authority Admin'}
-            </option>
           </select>
           <button type="submit" class="btn btn-primary btn-sm">Add</button>
         </div>
@@ -892,6 +914,33 @@ const AdminView = {
           title: 'Password Reset',
           message: `Password reset for service number <strong>${result.service_number}</strong>.`,
         });
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+
+    document.getElementById('toggle-admin-access').addEventListener('click', async () => {
+      const errEl = document.querySelector('.modal-error');
+      try {
+        if (hasAdmin) {
+          const adminAssignments = activeAssignments.filter(a => a.role === adminRole);
+          for (const a of adminAssignments) {
+            await AdminAPI.deactivateAssignment(a.id);
+          }
+        } else {
+          const anchor = activeAssignments.find(a => a.is_primary) || activeAssignments[0];
+          if (!anchor) {
+            errEl.textContent = 'This user has no active section assignment yet — add one first, then grant admin access.';
+            errEl.classList.remove('hidden');
+            return;
+          }
+          await AdminAPI.createAssignment({
+            userId: user.id, scopeType: anchor.scope_type, scopeId: anchor.scope_id, role: adminRole,
+          });
+        }
+        this._closeModal();
+        await this._renderTab();
       } catch (err) {
         errEl.textContent = err.message;
         errEl.classList.remove('hidden');
