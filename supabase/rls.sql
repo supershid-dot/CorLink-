@@ -31,7 +31,7 @@ RETURNS UUID AS $$
   SELECT org_id FROM users WHERE id = auth.uid();
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
--- A user now holds zero or more (section_id, role) assignments via
+-- A user now holds zero or more (scope, role) assignments via
 -- user_assignments, so "my role" and "my section" are no longer scalars.
 -- These helpers check membership/role across ALL of a user's assignments.
 
@@ -49,29 +49,66 @@ RETURNS BOOLEAN AS $$
   );
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
--- True if the user holds the given role specifically in p_section_id.
+-- True if the user holds the given role in an assignment that covers
+-- p_section_id — either directly on the section, or on the command/
+-- department/division that section rolls up under.
 CREATE OR REPLACE FUNCTION has_role_in_section(p_section_id UUID, p_role TEXT)
 RETURNS BOOLEAN AS $$
   SELECT is_super_admin() OR EXISTS (
-    SELECT 1 FROM user_assignments
-    WHERE user_id = auth.uid() AND section_id = p_section_id
-      AND role = p_role AND is_active = TRUE
+    SELECT 1 FROM user_assignments ua, sections s
+    WHERE s.id = p_section_id
+      AND ua.user_id = auth.uid() AND ua.role = p_role AND ua.is_active = TRUE
+      AND (
+        (ua.scope_type = 'section'    AND ua.scope_id = s.id) OR
+        (ua.scope_type = 'department' AND ua.scope_id = s.department_id) OR
+        (ua.scope_type = 'division'   AND ua.scope_id = s.division_id) OR
+        (ua.scope_type = 'command'    AND ua.scope_id IN (
+           SELECT d.command_id FROM departments d WHERE d.id = s.department_id
+        ))
+      )
   );
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
--- Set of section_ids the user holds ANY active assignment in.
+-- Set of section_ids implied by ANY of the user's active assignments,
+-- expanding command/department/division-level assignments down to
+-- every section underneath them.
 CREATE OR REPLACE FUNCTION my_section_ids()
 RETURNS SETOF UUID AS $$
-  SELECT section_id FROM user_assignments
-  WHERE user_id = auth.uid() AND is_active = TRUE;
+  SELECT s.id
+  FROM sections s
+  WHERE EXISTS (
+    SELECT 1 FROM user_assignments ua
+    WHERE ua.user_id = auth.uid() AND ua.is_active = TRUE
+      AND (
+        (ua.scope_type = 'section'    AND ua.scope_id = s.id) OR
+        (ua.scope_type = 'department' AND ua.scope_id = s.department_id) OR
+        (ua.scope_type = 'division'   AND ua.scope_id = s.division_id) OR
+        (ua.scope_type = 'command'    AND ua.scope_id IN (
+           SELECT d.command_id FROM departments d WHERE d.id = s.department_id
+        ))
+      )
+  );
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
--- Set of section_ids the user supervises (supervisor role or above).
+-- Set of section_ids the user supervises (supervisor role or above),
+-- with the same command/department/division expansion as my_section_ids().
 CREATE OR REPLACE FUNCTION my_supervised_section_ids()
 RETURNS SETOF UUID AS $$
-  SELECT section_id FROM user_assignments
-  WHERE user_id = auth.uid() AND is_active = TRUE
-    AND role IN ('mcs_admin', 'authority_admin', 'supervisor');
+  SELECT s.id
+  FROM sections s
+  WHERE EXISTS (
+    SELECT 1 FROM user_assignments ua
+    WHERE ua.user_id = auth.uid() AND ua.is_active = TRUE
+      AND ua.role IN ('mcs_admin', 'authority_admin', 'supervisor')
+      AND (
+        (ua.scope_type = 'section'    AND ua.scope_id = s.id) OR
+        (ua.scope_type = 'department' AND ua.scope_id = s.department_id) OR
+        (ua.scope_type = 'division'   AND ua.scope_id = s.division_id) OR
+        (ua.scope_type = 'command'    AND ua.scope_id IN (
+           SELECT d.command_id FROM departments d WHERE d.id = s.department_id
+        ))
+      )
+  );
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
 CREATE OR REPLACE FUNCTION is_admin()
@@ -395,12 +432,19 @@ CREATE POLICY "deadline_ext_update" ON deadline_extensions
 
 -- ─── audit_logs ───────────────────────────────────────────────
 -- INSERT: any authenticated user (the application always logs on behalf of users).
--- SELECT: admins only. No UPDATE or DELETE — immutability enforced here.
+-- SELECT: super admins see everything; org admins/supervisors see only
+-- entries about users in their own organization. No UPDATE or DELETE —
+-- immutability enforced here.
 CREATE POLICY "audit_insert" ON audit_logs
   FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
 
 CREATE POLICY "audit_select" ON audit_logs
-  FOR SELECT USING (is_admin());
+  FOR SELECT USING (
+    is_super_admin() OR
+    (is_admin() AND EXISTS (
+      SELECT 1 FROM users u WHERE u.id = audit_logs.user_id AND u.org_id = get_my_org_id()
+    ))
+  );
 
 -- No UPDATE policy → no one can update audit logs.
 -- No DELETE policy → no one can delete audit logs.

@@ -93,6 +93,7 @@ const AdminView = {
             ${this._isSuperAdmin ? `<button class="tab-btn" data-tab="organizations">Organizations</button>` : ''}
             <button class="tab-btn" data-tab="structure">Structure</button>
             <button class="tab-btn" data-tab="users">Users</button>
+            <button class="tab-btn" data-tab="audit">Audit Log</button>
           </div>
 
           ${this._isSuperAdmin ? `
@@ -160,7 +161,39 @@ const AdminView = {
       await this._renderStructure(content);
     } else if (this._state.tab === 'users') {
       await this._renderUsers(content);
+    } else if (this._state.tab === 'audit') {
+      await this._renderAuditLog(content);
     }
+  },
+
+  // ── Audit Log Tab ───────────────────────────────────────────────
+  async _renderAuditLog(content) {
+    const org = this._state.orgs.find(o => o.id === this._state.selectedOrgId);
+    if (!org) { content.innerHTML = `<div class="alert alert-info">No organization selected.</div>`; return; }
+
+    const logs = await AdminAPI.listAuditLogs(org.id);
+
+    content.innerHTML = `
+      <div class="panel">
+        <div class="panel-header">
+          <h3>Audit Log — ${org.name}</h3>
+        </div>
+        <table class="data-table">
+          <thead><tr><th>Time</th><th>User</th><th>Action</th><th>Record</th><th>Notes</th></tr></thead>
+          <tbody>
+            ${logs.map(l => `
+              <tr>
+                <td>${new Date(l.created_at).toLocaleString()}</td>
+                <td>${l.users?.full_name || ''} <span class="structure-empty">(${l.users?.service_number || ''})</span></td>
+                <td><span class="badge badge-outline">${l.action}</span></td>
+                <td>${l.record_type}</td>
+                <td>${l.notes || ''}</td>
+              </tr>
+            `).join('') || '<tr><td colspan="5" class="structure-empty">No audit log entries yet.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    `;
   },
 
   // ── Organizations Tab ─────────────────────────────────────────
@@ -174,10 +207,15 @@ const AdminView = {
           <button class="btn btn-primary btn-sm" id="new-org-btn"><i class="ti ti-plus"></i> New Organization</button>
         </div>
         <table class="data-table">
-          <thead><tr><th>Name</th><th>Code</th><th>Type</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>Logo</th><th>Name</th><th>Code</th><th>Type</th><th>Status</th><th></th></tr></thead>
           <tbody>
             ${orgs.map(o => `
               <tr>
+                <td>
+                  ${o.logo_path
+                    ? `<img class="org-logo-thumb" src="${AdminAPI.getOrgLogoUrl(o.logo_path)}" alt="${o.name} logo" />`
+                    : '<span class="structure-empty">None</span>'}
+                </td>
                 <td>${o.name}</td>
                 <td><span class="badge">${o.code}</span></td>
                 <td>${o.type === 'mcs' ? 'MCS' : 'Authority'}</td>
@@ -185,6 +223,7 @@ const AdminView = {
                   ? '<span class="badge badge-success">Active</span>'
                   : '<span class="badge badge-muted">Inactive</span>'}</td>
                 <td>
+                  <button class="btn btn-secondary btn-xs" data-edit-logo="${o.id}">Logo</button>
                   <button class="btn btn-secondary btn-xs" data-toggle-org="${o.id}" data-active="${o.is_active}">
                     ${o.is_active ? 'Deactivate' : 'Activate'}
                   </button>
@@ -206,6 +245,54 @@ const AdminView = {
         this._state.orgs = await AdminAPI.listOrganizations();
         await this._renderTab();
       });
+    });
+
+    content.querySelectorAll('[data-edit-logo]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const org = orgs.find(o => o.id === btn.dataset.editLogo);
+        this._openLogoModal(org);
+      });
+    });
+  },
+
+  _openLogoModal(org) {
+    const currentUrl = org.logo_path ? AdminAPI.getOrgLogoUrl(org.logo_path) : null;
+    this._openModal(`
+      <h3>Logo — ${org.name}</h3>
+      ${currentUrl ? `<img class="org-logo-preview" src="${currentUrl}" alt="${org.name} logo" />` : ''}
+      <form id="logo-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Upload New Logo</label>
+          <input class="field-input-plain" type="file" name="logo" accept="image/png,image/jpeg,image/svg+xml" required />
+          <div class="field-hint">PNG, JPG, or SVG.</div>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Upload</button>
+        </div>
+      </form>
+    `);
+
+    const form = document.getElementById('logo-form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const file = new FormData(form).get('logo');
+      const errEl = form.querySelector('.modal-error');
+      if (!file || !file.size) {
+        errEl.textContent = 'Choose a file first.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      try {
+        await AdminAPI.uploadOrgLogo(org.id, file);
+        this._closeModal();
+        this._state.orgs = await AdminAPI.listOrganizations();
+        await this._renderTab();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
     });
   },
 
@@ -279,17 +366,21 @@ const AdminView = {
             <div class="structure-node">
               <div class="structure-node-header">
                 <i class="ti ti-building"></i> <strong>${cmd.name}</strong>
+                ${this._statusBadge(cmd.is_active)}
                 <button class="btn btn-secondary btn-xs" data-edit-command="${cmd.id}" data-name="${cmd.name}"><i class="ti ti-pencil"></i></button>
+                <button class="btn btn-secondary btn-xs" data-toggle-command="${cmd.id}" data-active="${cmd.is_active}">${cmd.is_active ? 'Deactivate' : 'Activate'}</button>
                 <button class="btn btn-secondary btn-xs" data-new-dept="${cmd.id}">+ Department</button>
               </div>
               <ul class="structure-children">
                 ${(departmentsByCommand[cmd.id] || []).map(d => `
-                  <li>${d.name}
+                  <li>${d.name} ${this._statusBadge(d.is_active)}
                     <button class="btn btn-secondary btn-xs" data-edit-department="${d.id}" data-name="${d.name}"><i class="ti ti-pencil"></i></button>
+                    <button class="btn btn-secondary btn-xs" data-toggle-department="${d.id}" data-active="${d.is_active}">${d.is_active ? 'Deactivate' : 'Activate'}</button>
                     <span class="structure-sections">
                       ${sections.filter(s => s.department_id === d.id).map(s => `
-                        <span class="badge badge-outline">${s.code}</span>
+                        <span class="badge badge-outline">${s.code}</span> ${this._statusBadge(s.is_active)}
                         <button class="btn btn-secondary btn-xs" data-edit-section="${s.id}" data-name="${s.name}" data-code="${s.code}"><i class="ti ti-pencil"></i></button>
+                        <button class="btn btn-secondary btn-xs" data-toggle-section="${s.id}" data-active="${s.is_active}">${s.is_active ? 'Deactivate' : 'Activate'}</button>
                       `).join('')}
                       <button class="btn btn-secondary btn-xs" data-new-section-dept="${d.id}" data-org="${org.id}">+ Section</button>
                     </span>
@@ -315,6 +406,12 @@ const AdminView = {
           }, btn.dataset.name);
         });
       });
+      content.querySelectorAll('[data-toggle-command]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          await AdminAPI.updateCommand(btn.dataset.toggleCommand, { is_active: btn.dataset.active !== 'true' });
+          await this._renderTab();
+        });
+      });
       content.querySelectorAll('[data-edit-department]').forEach(btn => {
         btn.addEventListener('click', () => {
           this._openTextModal('Rename Department', 'Department name', async (name) => {
@@ -323,9 +420,21 @@ const AdminView = {
           }, btn.dataset.name);
         });
       });
+      content.querySelectorAll('[data-toggle-department]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          await AdminAPI.updateDepartment(btn.dataset.toggleDepartment, { is_active: btn.dataset.active !== 'true' });
+          await this._renderTab();
+        });
+      });
       content.querySelectorAll('[data-edit-section]').forEach(btn => {
         btn.addEventListener('click', () => {
           this._openEditSectionModal({ id: btn.dataset.editSection, name: btn.dataset.name, code: btn.dataset.code });
+        });
+      });
+      content.querySelectorAll('[data-toggle-section]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          await AdminAPI.updateSection(btn.dataset.toggleSection, { is_active: btn.dataset.active !== 'true' });
+          await this._renderTab();
         });
       });
       content.querySelectorAll('[data-new-dept]').forEach(btn => {
@@ -355,13 +464,16 @@ const AdminView = {
             <div class="structure-node">
               <div class="structure-node-header">
                 <i class="ti ti-building"></i> <strong>${div.name}</strong>
+                ${this._statusBadge(div.is_active)}
                 <button class="btn btn-secondary btn-xs" data-edit-division="${div.id}" data-name="${div.name}"><i class="ti ti-pencil"></i></button>
+                <button class="btn btn-secondary btn-xs" data-toggle-division="${div.id}" data-active="${div.is_active}">${div.is_active ? 'Deactivate' : 'Activate'}</button>
                 <button class="btn btn-secondary btn-xs" data-new-section-div="${div.id}" data-org="${org.id}">+ Section</button>
               </div>
               <ul class="structure-children">
                 ${sections.filter(s => s.division_id === div.id).map(s => `
-                  <li>${s.name} <span class="badge badge-outline">${s.code}</span>
+                  <li>${s.name} <span class="badge badge-outline">${s.code}</span> ${this._statusBadge(s.is_active)}
                     <button class="btn btn-secondary btn-xs" data-edit-section="${s.id}" data-name="${s.name}" data-code="${s.code}"><i class="ti ti-pencil"></i></button>
+                    <button class="btn btn-secondary btn-xs" data-toggle-section="${s.id}" data-active="${s.is_active}">${s.is_active ? 'Deactivate' : 'Activate'}</button>
                   </li>
                 `).join('') || '<li class="structure-empty">No sections yet</li>'}
               </ul>
@@ -384,9 +496,21 @@ const AdminView = {
           }, btn.dataset.name);
         });
       });
+      content.querySelectorAll('[data-toggle-division]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          await AdminAPI.updateDivision(btn.dataset.toggleDivision, { is_active: btn.dataset.active !== 'true' });
+          await this._renderTab();
+        });
+      });
       content.querySelectorAll('[data-edit-section]').forEach(btn => {
         btn.addEventListener('click', () => {
           this._openEditSectionModal({ id: btn.dataset.editSection, name: btn.dataset.name, code: btn.dataset.code });
+        });
+      });
+      content.querySelectorAll('[data-toggle-section]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          await AdminAPI.updateSection(btn.dataset.toggleSection, { is_active: btn.dataset.active !== 'true' });
+          await this._renderTab();
         });
       });
       content.querySelectorAll('[data-new-section-div]').forEach(btn => {
@@ -395,6 +519,12 @@ const AdminView = {
         });
       });
     }
+  },
+
+  _statusBadge(isActive) {
+    return isActive
+      ? ''
+      : '<span class="badge badge-muted">Inactive</span>';
   },
 
   _openEditSectionModal(section) {
@@ -480,7 +610,8 @@ const AdminView = {
     if (!org) { content.innerHTML = `<div class="alert alert-info">No organization selected.</div>`; return; }
 
     const users = await AdminAPI.listUsersByOrg(org.id);
-    const sections = await AdminAPI.listSectionsByOrg(org.id);
+    const scopes = await AdminAPI.listAssignableScopes(org);
+    const scopeMap = this._scopeMap(scopes);
 
     content.innerHTML = `
       <div class="panel">
@@ -497,7 +628,7 @@ const AdminView = {
                 <td>${u.service_number}</td>
                 <td>
                   ${(u.user_assignments || []).filter(a => a.is_active).map(a =>
-                    `<span class="badge badge-outline">${this._roleLabel(a.role)} · ${a.sections?.name || ''}</span>`
+                    `<span class="badge badge-outline">${this._roleLabel(a.role)} · ${this._scopeLabel(a, scopeMap)}${a.is_primary ? ' ★' : ''}</span>`
                   ).join(' ') || '<span class="structure-empty">None</span>'}
                 </td>
                 <td>${u.is_active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-muted">Inactive</span>'}</td>
@@ -512,12 +643,12 @@ const AdminView = {
     `;
 
     document.getElementById('new-user-btn').addEventListener('click', () => {
-      this._openNewUserModal(org, sections);
+      this._openNewUserModal(org, scopes);
     });
     content.querySelectorAll('[data-manage-user]').forEach(btn => {
       btn.addEventListener('click', () => {
         const u = users.find(x => x.id === btn.dataset.manageUser);
-        this._openManageUserModal(u, sections, org);
+        this._openManageUserModal(u, scopes, org);
       });
     });
   },
@@ -530,11 +661,34 @@ const AdminView = {
     return labels[role] || role;
   },
 
-  _openNewUserModal(org, sections) {
-    if (sections.length === 0) {
+  _scopeTypeLabel(type) {
+    const labels = { command: 'Command', department: 'Department', division: 'Division', section: 'Section' };
+    return labels[type] || type;
+  },
+
+  // scopes: flat list from AdminAPI.listAssignableScopes(). Keyed by
+  // "type:id" so an assignment (scope_type, scope_id) can look up its name.
+  _scopeMap(scopes) {
+    const map = new Map();
+    scopes.forEach(s => map.set(`${s.type}:${s.id}`, s));
+    return map;
+  },
+
+  _scopeLabel(assignment, scopeMap) {
+    const scope = scopeMap.get(`${assignment.scope_type}:${assignment.scope_id}`);
+    const name = scope ? scope.name : '(inactive/removed)';
+    return `${this._scopeTypeLabel(assignment.scope_type)}: ${name}`;
+  },
+
+  _scopeOptionsHtml(scopes) {
+    return scopes.map(s => `<option value="${s.type}:${s.id}">${s.label}</option>`).join('');
+  },
+
+  _openNewUserModal(org, scopes) {
+    if (scopes.length === 0) {
       this._openModal(`
         <h3>New User</h3>
-        <div class="alert alert-info">Create at least one section for this organization first.</div>
+        <div class="alert alert-info">Create at least one command/department/division/section for this organization first.</div>
         <div class="modal-actions"><button class="btn btn-secondary" data-close-modal>Close</button></div>
       `);
       return;
@@ -556,10 +710,11 @@ const AdminView = {
           <input class="field-input-plain" type="email" name="email" required placeholder="For notifications" />
         </div>
         <div class="field-group">
-          <label class="field-label">Section</label>
-          <select class="field-select" name="sectionId">
-            ${sections.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
+          <label class="field-label">Assigned To</label>
+          <select class="field-select" name="scope">
+            ${this._scopeOptionsHtml(scopes)}
           </select>
+          <div class="field-hint">A command/department head does not need a section-level assignment — pick the level they actually operate at.</div>
         </div>
         <div class="field-group">
           <label class="field-label">Role</label>
@@ -587,13 +742,14 @@ const AdminView = {
       const errEl = form.querySelector('.modal-error');
       const submitBtn = form.querySelector('button[type="submit"]');
       submitBtn.disabled = true;
+      const [scopeType, scopeId] = fd.get('scope').split(':');
       try {
         const result = await AdminAPI.createUser({
           serviceNumber: fd.get('serviceNumber'),
           fullName: fd.get('fullName'),
           email: fd.get('email'),
           orgId: org.id,
-          assignments: [{ section_id: fd.get('sectionId'), role: fd.get('role'), is_primary: true }],
+          assignments: [{ scope_type: scopeType, scope_id: scopeId, role: fd.get('role'), is_primary: true }],
         });
         this._showTempPassword(result);
         await this._renderTab();
@@ -624,8 +780,9 @@ const AdminView = {
     `);
   },
 
-  _openManageUserModal(user, sections, org) {
+  _openManageUserModal(user, scopes, org) {
     const activeAssignments = (user.user_assignments || []).filter(a => a.is_active);
+    const scopeMap = this._scopeMap(scopes);
 
     this._openModal(`
       <h3>Manage — ${user.full_name}</h3>
@@ -656,8 +813,11 @@ const AdminView = {
         <ul class="assignment-list">
           ${activeAssignments.map(a => `
             <li>
-              <span>${this._roleLabel(a.role)} — ${a.sections?.name || ''} ${a.is_primary ? '<span class="badge badge-primary">Primary</span>' : ''}</span>
-              <button class="btn btn-secondary btn-xs" data-remove-assignment="${a.id}">Remove</button>
+              <span>${this._roleLabel(a.role)} — ${this._scopeLabel(a, scopeMap)} ${a.is_primary ? '<span class="badge badge-primary">Primary</span>' : ''}</span>
+              <span>
+                ${!a.is_primary ? `<button class="btn btn-secondary btn-xs" data-set-primary="${a.id}">Set Primary</button>` : ''}
+                <button class="btn btn-secondary btn-xs" data-remove-assignment="${a.id}">Remove</button>
+              </span>
             </li>
           `).join('') || '<li class="structure-empty">No active assignments</li>'}
         </ul>
@@ -666,8 +826,8 @@ const AdminView = {
       <form id="add-assignment-form" class="modal-form">
         <label class="field-label">Add Assignment</label>
         <div class="assignment-add-row">
-          <select class="field-select" name="sectionId">
-            ${sections.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
+          <select class="field-select" name="scope">
+            ${this._scopeOptionsHtml(scopes)}
           </select>
           <select class="field-select" name="role">
             <option value="staff">Staff</option>
@@ -729,14 +889,23 @@ const AdminView = {
       });
     });
 
+    document.querySelectorAll('[data-set-primary]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        await AdminAPI.setPrimaryAssignment(user.id, btn.dataset.setPrimary);
+        this._closeModal();
+        await this._renderTab();
+      });
+    });
+
     const addForm = document.getElementById('add-assignment-form');
     addForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(addForm);
       const errEl = document.querySelector('.modal-error');
+      const [scopeType, scopeId] = fd.get('scope').split(':');
       try {
         await AdminAPI.createAssignment({
-          userId: user.id, sectionId: fd.get('sectionId'), role: fd.get('role'),
+          userId: user.id, scopeType, scopeId, role: fd.get('role'),
         });
         this._closeModal();
         await this._renderTab();

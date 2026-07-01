@@ -87,6 +87,11 @@ VALUES (
 -- );
 --
 -- ─── Example: a staff member who is ALSO a supervisor in another section ──
--- INSERT INTO user_assignments (user_id, section_id, role, is_primary) VALUES
---   ('<STAFF_UUID>', '00000000-0000-0000-0000-000000000030', 'staff', TRUE),
---   ('<STAFF_UUID>', '00000000-0000-0000-0000-000000000050', 'supervisor', FALSE);
+-- INSERT INTO user_assignments (user_id, scope_type, scope_id, role, is_primary) VALUES
+--   ('<STAFF_UUID>', 'section', '00000000-0000-0000-0000-000000000030', 'staff', TRUE),
+--   ('<STAFF_UUID>', 'section', '00000000-0000-0000-0000-000000000050', 'supervisor', FALSE);
+--
+-- ─── Example: a department head, assigned once at department level ──
+-- (covers every section under that department — no per-section rows needed)
+-- INSERT INTO user_assignments (user_id, scope_type, scope_id, role, is_primary) VALUES
+--   ('<HEAD_UUID>', 'department', '00000000-0000-0000-0000-000000000020', 'supervisor', TRUE);

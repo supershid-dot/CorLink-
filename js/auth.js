@@ -43,6 +43,30 @@ const Auth = (() => {
     if (error) console.warn('CorLink: failed to log auth event:', error.message);
   }
 
+  // user_assignments stores scope_type/scope_id (not a direct FK to any
+  // one table — see schema.sql), so the display name for each assignment
+  // has to be resolved with a follow-up lookup per scope level rather
+  // than a single embedded select.
+  async function resolveScopeNames(db, assignments) {
+    const idsByType = { command: [], department: [], division: [], section: [] };
+    assignments.forEach(a => { if (idsByType[a.scope_type]) idsByType[a.scope_type].push(a.scope_id); });
+
+    const [commands, departments, divisions, sections] = await Promise.all([
+      idsByType.command.length    ? db.from('commands').select('id, name').in('id', idsByType.command)       : Promise.resolve({ data: [] }),
+      idsByType.department.length ? db.from('departments').select('id, name').in('id', idsByType.department) : Promise.resolve({ data: [] }),
+      idsByType.division.length   ? db.from('divisions').select('id, name').in('id', idsByType.division)     : Promise.resolve({ data: [] }),
+      idsByType.section.length    ? db.from('sections').select('id, name, code').in('id', idsByType.section) : Promise.resolve({ data: [] }),
+    ]);
+
+    const nameMap = new Map();
+    (commands.data || []).forEach(c => nameMap.set(`command:${c.id}`, c.name));
+    (departments.data || []).forEach(d => nameMap.set(`department:${d.id}`, d.name));
+    (divisions.data || []).forEach(d => nameMap.set(`division:${d.id}`, d.name));
+    (sections.data || []).forEach(s => nameMap.set(`section:${s.id}`, s.name));
+
+    return assignments.map(a => ({ ...a, scope_name: nameMap.get(`${a.scope_type}:${a.scope_id}`) || '' }));
+  }
+
   function isPasswordExpired(user) {
     if (!user.password_expires_at) return false;
     return new Date(user.password_expires_at) < new Date();
@@ -160,14 +184,14 @@ const Auth = (() => {
         };
       }
 
-      // Fetch all section/role assignments (a user may hold several)
+      // Fetch all scope/role assignments (a user may hold several)
       const { data: assignments } = await db
         .from('user_assignments')
-        .select('id, section_id, role, is_primary, is_active, sections(name, code)')
+        .select('id, scope_type, scope_id, role, is_primary, is_active')
         .eq('user_id', data.user.id)
         .eq('is_active', true);
 
-      const profile = { ...profileRow, assignments: assignments || [] };
+      const profile = { ...profileRow, assignments: await resolveScopeNames(db, assignments || []) };
 
       await recordAttempt(db, sn, true);
       await logAuthEvent(db, 'login');
@@ -226,11 +250,11 @@ const Auth = (() => {
 
       const { data: assignments } = await db
         .from('user_assignments')
-        .select('id, section_id, role, is_primary, is_active, sections(name, code)')
+        .select('id, scope_type, scope_id, role, is_primary, is_active')
         .eq('user_id', session.user.id)
         .eq('is_active', true);
 
-      const profile = { ...data, assignments: assignments || [] };
+      const profile = { ...data, assignments: await resolveScopeNames(db, assignments || []) };
       localStorage.setItem(USER_KEY, JSON.stringify(profile));
       return profile;
     },
