@@ -9,6 +9,7 @@ ALTER TABLE commands             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE departments          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE divisions            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sections             ENABLE ROW LEVEL SECURITY;
+ALTER TABLE designations         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE users                ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_assignments     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_password_history ENABLE ROW LEVEL SECURITY;
@@ -221,6 +222,22 @@ CREATE POLICY "sections_insert" ON sections
   );
 
 CREATE POLICY "sections_update" ON sections
+  FOR UPDATE USING (
+    is_super_admin() OR
+    (is_admin() AND org_id = get_my_org_id())
+  );
+
+-- ─── designations ───────────────────────────────────────────────
+CREATE POLICY "designations_select" ON designations
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "designations_insert" ON designations
+  FOR INSERT WITH CHECK (
+    is_super_admin() OR
+    (is_admin() AND org_id = get_my_org_id())
+  );
+
+CREATE POLICY "designations_update" ON designations
   FOR UPDATE USING (
     is_super_admin() OR
     (is_admin() AND org_id = get_my_org_id())
