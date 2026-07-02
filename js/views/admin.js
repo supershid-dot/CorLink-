@@ -629,7 +629,7 @@ const AdminView = {
 
     const users = await AdminAPI.listUsersByOrg(org.id);
     const scopes = await AdminAPI.listAssignableScopes(org);
-    const scopeMap = this._scopeMap(scopes);
+    const scopeMap = this._scopeMap(scopes, org);
 
     content.innerHTML = `
       <div class="panel">
@@ -682,15 +682,24 @@ const AdminView = {
   },
 
   _scopeTypeLabel(type) {
-    const labels = { command: 'Command', department: 'Department', division: 'Division', section: 'Section' };
+    const labels = { organization: 'Organization', command: 'Command', department: 'Department', division: 'Division', section: 'Section' };
     return labels[type] || type;
   },
 
-  // scopes: flat list from AdminAPI.listAssignableScopes(). Keyed by
-  // "type:id" so an assignment (scope_type, scope_id) can look up its name.
-  _scopeMap(scopes) {
+  // scopes: flat list from AdminAPI.listAssignableScopes() (command/
+  // department/division/section only — those are the only levels a
+  // regular role assignment can target). Keyed by "type:id" so an
+  // assignment (scope_type, scope_id) can look up its name. Admin
+  // assignments are always scope_type='organization' rather than one of
+  // the above (see _openManageUserModal's Grant Admin Access button),
+  // so that entry is added here too even though it's deliberately never
+  // offered in the regular Assigned To/Add Assignment dropdowns.
+  _scopeMap(scopes, org) {
     const map = new Map();
     scopes.forEach(s => map.set(`${s.type}:${s.id}`, s));
+    if (org) {
+      map.set(`organization:${org.id}`, { type: 'organization', id: org.id, name: org.name });
+    }
     return map;
   },
 
@@ -705,14 +714,14 @@ const AdminView = {
   },
 
   _openNewUserModal(org, scopes) {
-    if (scopes.length === 0) {
-      this._openModal(`
-        <h3>New User</h3>
-        <div class="alert alert-info">Create at least one command/department/division/section for this organization first.</div>
-        <div class="modal-actions"><button class="btn btn-secondary" data-close-modal>Close</button></div>
-      `);
-      return;
-    }
+    const adminRole = org.type === 'mcs' ? 'mcs_admin' : 'authority_admin';
+    const adminLabel = org.type === 'mcs' ? 'MCS Admin' : 'Authority Admin';
+    // A brand-new organization has no command/department/division/
+    // section yet — MCS creates the organization, then the
+    // organization's own admin builds out its structure, not MCS. So
+    // this can't hard-require a scope to already exist: the first user
+    // created here needs to be creatable with admin access only.
+    const hasScopes = scopes.length > 0;
 
     this._openModal(`
       <h3>New User</h3>
@@ -729,6 +738,7 @@ const AdminView = {
           <label class="field-label">Email</label>
           <input class="field-input-plain" type="email" name="email" required placeholder="For notifications" />
         </div>
+        ${hasScopes ? `
         <div class="field-group">
           <label class="field-label">Assigned To</label>
           <select class="field-select" name="scope">
@@ -747,10 +757,17 @@ const AdminView = {
         <div class="field-group">
           <label class="checkbox-row">
             <input type="checkbox" name="isAdmin" />
-            Also grant ${org.type === 'mcs' ? 'MCS Admin' : 'Authority Admin'} access
+            Also grant ${adminLabel} access
           </label>
           <div class="field-hint">Admin access applies across the whole organization — it isn't limited to the section picked above.</div>
         </div>
+        ` : `
+        <div class="alert alert-info">
+          <i class="ti ti-info-circle"></i>
+          This organization has no structure yet, so this user will be created with ${adminLabel} access only — they can add commands/departments/divisions/sections once they sign in.
+        </div>
+        <input type="hidden" name="isAdmin" value="on" />
+        `}
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
@@ -766,15 +783,19 @@ const AdminView = {
       const errEl = form.querySelector('.modal-error');
       const submitBtn = form.querySelector('button[type="submit"]');
       submitBtn.disabled = true;
-      const [scopeType, scopeId] = fd.get('scope').split(':');
-      const assignments = [{ scope_type: scopeType, scope_id: scopeId, role: fd.get('role'), is_primary: true }];
+
+      const assignments = [];
+      if (hasScopes) {
+        const [scopeType, scopeId] = fd.get('scope').split(':');
+        assignments.push({ scope_type: scopeType, scope_id: scopeId, role: fd.get('role'), is_primary: true });
+      }
       if (fd.get('isAdmin')) {
         assignments.push({
-          scope_type: scopeType, scope_id: scopeId,
-          role: org.type === 'mcs' ? 'mcs_admin' : 'authority_admin',
-          is_primary: false,
+          scope_type: 'organization', scope_id: org.id,
+          role: adminRole, is_primary: !hasScopes,
         });
       }
+
       try {
         const result = await AdminAPI.createUser({
           serviceNumber: fd.get('serviceNumber'),
@@ -814,7 +835,7 @@ const AdminView = {
 
   _openManageUserModal(user, scopes, org) {
     const activeAssignments = (user.user_assignments || []).filter(a => a.is_active);
-    const scopeMap = this._scopeMap(scopes);
+    const scopeMap = this._scopeMap(scopes, org);
     const adminRole = org.type === 'mcs' ? 'mcs_admin' : 'authority_admin';
     const adminLabel = org.type === 'mcs' ? 'MCS Admin' : 'Authority Admin';
     const hasAdmin = activeAssignments.some(a => a.role === adminRole);
@@ -932,14 +953,12 @@ const AdminView = {
             await AdminAPI.deactivateAssignment(a.id);
           }
         } else {
-          const anchor = activeAssignments.find(a => a.is_primary) || activeAssignments[0];
-          if (!anchor) {
-            errEl.textContent = 'This user has no active section assignment yet — add one first, then grant admin access.';
-            errEl.classList.remove('hidden');
-            return;
-          }
+          // Org-wide scope, not anchored to whatever section the user's
+          // primary assignment happens to be in — admin access applies
+          // to the whole organization regardless, and this also means
+          // a user doesn't need any other assignment first to grant it.
           await AdminAPI.createAssignment({
-            userId: user.id, scopeType: anchor.scope_type, scopeId: anchor.scope_id, role: adminRole,
+            userId: user.id, scopeType: 'organization', scopeId: org.id, role: adminRole,
           });
         }
         this._closeModal();

@@ -59,6 +59,7 @@ $$ LANGUAGE sql STABLE SECURITY DEFINER;
 CREATE OR REPLACE FUNCTION scope_org_id(p_scope_type TEXT, p_scope_id UUID)
 RETURNS UUID AS $$
   SELECT CASE p_scope_type
+    WHEN 'organization' THEN (SELECT id FROM organizations WHERE id = p_scope_id AND is_active = TRUE)
     WHEN 'command'    THEN (SELECT org_id FROM commands WHERE id = p_scope_id AND is_active = TRUE)
     WHEN 'department' THEN (
       SELECT c.org_id FROM departments d JOIN commands c ON c.id = d.command_id
@@ -92,7 +93,9 @@ RETURNS SETOF UUID AS $$
          SELECT 1 FROM departments d
          WHERE d.id = s.department_id AND d.command_id = p_scope_id AND d.is_active = TRUE
            AND EXISTS (SELECT 1 FROM commands c WHERE c.id = p_scope_id AND c.is_active = TRUE)
-      ))
+      )) OR
+      (p_scope_type = 'organization' AND s.org_id = p_scope_id
+         AND EXISTS (SELECT 1 FROM organizations o WHERE o.id = p_scope_id AND o.is_active = TRUE))
     );
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 

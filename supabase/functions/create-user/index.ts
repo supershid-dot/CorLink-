@@ -111,6 +111,36 @@ Deno.serve(async (req) => {
       });
     }
 
+    // This function uses the service-role client, which bypasses RLS
+    // entirely — including assignments_insert's scope_org_id(scope_type,
+    // scope_id) = get_my_org_id() check that normally stops an
+    // assignment's scope from pointing at a DIFFERENT organization than
+    // the one it's supposedly for. organization ids are readable by any
+    // authenticated user (orgs_select has no org-membership restriction),
+    // so without this check here an org admin could create a user in
+    // their own org but hand them an 'organization'-scoped admin
+    // assignment over a completely unrelated org — a cross-tenant
+    // privilege escalation. Validate every assignment's scope resolves
+    // to org_id before creating anything, using the same scope_org_id()
+    // SQL function the RLS policy itself calls.
+    if (Array.isArray(assignments) && assignments.length > 0) {
+      for (const a of assignments) {
+        if (!a || typeof a.scope_type !== 'string' || typeof a.scope_id !== 'string') {
+          return new Response(JSON.stringify({ error: 'Invalid assignment payload' }), {
+            status: 400, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+          });
+        }
+        const { data: scopeOrgId, error: scopeErr } = await adminClient.rpc('scope_org_id', {
+          p_scope_type: a.scope_type, p_scope_id: a.scope_id,
+        });
+        if (scopeErr || !scopeOrgId || scopeOrgId !== org_id) {
+          return new Response(JSON.stringify({ error: 'One or more assignments do not belong to the target organization' }), {
+            status: 403, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+          });
+        }
+      }
+    }
+
     const sn = String(service_number).trim().toUpperCase();
     const tempPassword = randomPassword();
 

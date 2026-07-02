@@ -98,10 +98,17 @@ CREATE TABLE users (
 -- to the relevant sections. scope_type/scope_id follow the same
 -- polymorphic-reference convention used elsewhere in this schema
 -- (approvals.record_id, attachments.record_id).
+--
+-- 'organization' is its own scope level (not just a broader version of
+-- command/division): mcs_admin/authority_admin are inherently org-wide
+-- roles, and an organization can have this role assigned before any
+-- command/department/division/section exists under it at all — MCS
+-- creates the organization, then the organization's own admin (an
+-- 'organization'-scoped assignment) builds out its structure, not MCS.
 CREATE TABLE user_assignments (
   id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id     UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  scope_type  TEXT        NOT NULL CHECK (scope_type IN ('command', 'department', 'division', 'section')),
+  scope_type  TEXT        NOT NULL CHECK (scope_type IN ('organization', 'command', 'department', 'division', 'section')),
   scope_id    UUID        NOT NULL,
   role        TEXT        NOT NULL CHECK (role IN (
                  'mcs_admin', 'authority_admin', 'supervisor',
