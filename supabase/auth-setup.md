@@ -23,6 +23,8 @@ match what changed since, instead of re-running the full files:
   division-level scoping
 - `supabase/patch-phase3-requests-rls.sql` — requests/approvals/attachments RLS fixes
 - `supabase/patch-phase4-prisoner-letters-rls.sql` — prisoner_letters/prisoner_replies RLS fixes
+- `supabase/patch-org-scope-admin.sql` — adds 'organization' as a user_assignments scope
+  level, so an org's first admin can be created before it has any structure
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

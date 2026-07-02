@@ -48,10 +48,11 @@ const Auth = (() => {
   // has to be resolved with a follow-up lookup per scope level rather
   // than a single embedded select.
   async function resolveScopeNames(db, assignments) {
-    const idsByType = { command: [], department: [], division: [], section: [] };
+    const idsByType = { organization: [], command: [], department: [], division: [], section: [] };
     assignments.forEach(a => { if (idsByType[a.scope_type]) idsByType[a.scope_type].push(a.scope_id); });
 
-    const [commands, departments, divisions, sections] = await Promise.all([
+    const [orgs, commands, departments, divisions, sections] = await Promise.all([
+      idsByType.organization.length ? db.from('organizations').select('id, name').in('id', idsByType.organization) : Promise.resolve({ data: [] }),
       idsByType.command.length    ? db.from('commands').select('id, name').in('id', idsByType.command)       : Promise.resolve({ data: [] }),
       idsByType.department.length ? db.from('departments').select('id, name').in('id', idsByType.department) : Promise.resolve({ data: [] }),
       idsByType.division.length   ? db.from('divisions').select('id, name').in('id', idsByType.division)     : Promise.resolve({ data: [] }),
@@ -59,6 +60,7 @@ const Auth = (() => {
     ]);
 
     const nameMap = new Map();
+    (orgs.data || []).forEach(o => nameMap.set(`organization:${o.id}`, o.name));
     (commands.data || []).forEach(c => nameMap.set(`command:${c.id}`, c.name));
     (departments.data || []).forEach(d => nameMap.set(`department:${d.id}`, d.name));
     (divisions.data || []).forEach(d => nameMap.set(`division:${d.id}`, d.name));

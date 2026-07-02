@@ -95,3 +95,10 @@ VALUES (
 -- (covers every section under that department — no per-section rows needed)
 -- INSERT INTO user_assignments (user_id, scope_type, scope_id, role, is_primary) VALUES
 --   ('<HEAD_UUID>', 'department', '00000000-0000-0000-0000-000000000020', 'supervisor', TRUE);
+--
+-- ─── Example: an organization's own admin, assigned org-wide ──
+-- (created by MCS/super admin right after the organization itself — this
+-- is how an authority's first admin exists before it has any structure
+-- of its own to be scoped to; they build that structure afterward)
+-- INSERT INTO user_assignments (user_id, scope_type, scope_id, role, is_primary) VALUES
+--   ('<AUTHORITY_ADMIN_UUID>', 'organization', '00000000-0000-0000-0000-000000000002', 'authority_admin', TRUE);
