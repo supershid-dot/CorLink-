@@ -155,7 +155,9 @@ const RequestsAPI = (() => {
           to_org:organizations!requests_to_org_id_fkey(name, code, type),
           from_section:sections!requests_from_section_id_fkey(name, code),
           to_section:sections!requests_to_section_id_fkey(name, code),
-          created_by_user:users!requests_created_by_fkey(full_name, service_number)
+          created_by_user:users!requests_created_by_fkey(full_name, service_number),
+          assigned_to_user:users!requests_assigned_to_fkey(full_name, service_number),
+          received_by_user:users!requests_received_by_fkey(full_name, designations(name))
         `)
         .eq('id', id).single();
       if (error) throw wrapRowError(error);
@@ -165,8 +167,36 @@ const RequestsAPI = (() => {
     async listResponses(requestId) {
       const db = getSupabase();
       const { data, error } = await db.from('responses')
-        .select('*, created_by_user:users!responses_created_by_fkey(full_name, service_number)')
+        .select(`
+          *,
+          created_by_user:users!responses_created_by_fkey(full_name, service_number),
+          received_by_user:users!responses_received_by_fkey(full_name, designations(name))
+        `)
         .eq('request_id', requestId)
+        .order('created_at', { ascending: true });
+      if (error) throw wrapRowError(error);
+      return data;
+    },
+
+    // ── Conversation (case spanning multiple request/response round-trips) ──
+    async getConversation(requestId) {
+      const db = getSupabase();
+      const { data: ids, error: idErr } = await db.rpc('conversation_request_ids', { p_request_id: requestId });
+      if (idErr) throw wrapRowError(idErr);
+      const flatIds = (ids || []).map(r => (typeof r === 'string' ? r : r.conversation_request_ids)).filter(Boolean);
+      if (flatIds.length === 0) return [];
+      const { data, error } = await db.from('requests')
+        .select(`
+          *,
+          from_org:organizations!requests_from_org_id_fkey(name, code, type),
+          to_org:organizations!requests_to_org_id_fkey(name, code, type),
+          from_section:sections!requests_from_section_id_fkey(name, code),
+          to_section:sections!requests_to_section_id_fkey(name, code),
+          created_by_user:users!requests_created_by_fkey(full_name, service_number),
+          assigned_to_user:users!requests_assigned_to_fkey(full_name, service_number),
+          received_by_user:users!requests_received_by_fkey(full_name, designations(name))
+        `)
+        .in('id', flatIds)
         .order('created_at', { ascending: true });
       if (error) throw wrapRowError(error);
       return data;
@@ -183,13 +213,17 @@ const RequestsAPI = (() => {
     },
 
     // ── Compose / submit ─────────────────────────────────────────
-    async createRequest({ fromOrgId, fromSectionId, toOrgId, subject, body, language, deadline }) {
+    // parentRequestId links a follow-up request to the same "case" —
+    // conversation_request_ids() walks this chain both directions so
+    // getConversation() can render every round-trip as one thread.
+    async createRequest({ fromOrgId, fromSectionId, toOrgId, subject, body, language, deadline, parentRequestId }) {
       const db = getSupabase();
       const session = await Auth.getSession();
       const { data, error } = await db.from('requests').insert({
         from_org_id: fromOrgId, to_org_id: toOrgId, from_section_id: fromSectionId,
-        created_by: session.user.id, subject, body, language: language || 'en',
+        created_by: session.user.id, subject, body: RichEditor.sanitize(body), language: language || 'en',
         deadline: deadline || null, status: 'draft',
+        parent_request_id: parentRequestId || null,
       }).select().single();
       if (error) throw wrapRowError(error);
       await logAudit('created', 'request', data.id, `Created request "${subject}"`);
@@ -198,6 +232,7 @@ const RequestsAPI = (() => {
 
     async updateRequestDraft(id, patch) {
       const db = getSupabase();
+      if (patch.body != null) patch = { ...patch, body: RichEditor.sanitize(patch.body) };
       const { data, error } = await db.from('requests').update(patch).eq('id', id).select().single();
       if (error) throw wrapRowError(error);
       await logAudit('edited', 'request', id, 'Edited request draft');
@@ -259,11 +294,28 @@ const RequestsAPI = (() => {
       return data;
     },
 
-    // ── Routing (receiving org, supervisor/admin) ───────────────────
+    // ── Receiving (destination org, supervisor/admin/assigned_receiver) ──
+    // Formally acknowledges the request arrived, recording who and when —
+    // this is the "received by [Name], [Designation]" receipt shown back
+    // to the sending org. A separate, earlier step from routing (below):
+    // an org's front-desk/registry staff receive mail before anyone has
+    // decided which section should own it.
+    async markRequestReceived(id) {
+      const db = getSupabase();
+      const session = await Auth.getSession();
+      const { data, error } = await db.from('requests')
+        .update({ status: 'received', received_by: session.user.id, received_at: new Date().toISOString() })
+        .eq('id', id).select().single();
+      if (error) throw wrapRowError(error);
+      await logAudit('received', 'request', id, 'Marked request as received');
+      return data;
+    },
+
+    // ── Routing (receiving org, supervisor/admin/assigned_receiver) ────
     async routeRequest(id, toSectionId) {
       const db = getSupabase();
       const { data, error } = await db.from('requests')
-        .update({ to_section_id: toSectionId, status: 'received' }).eq('id', id).select().single();
+        .update({ to_section_id: toSectionId, status: 'in_progress' }).eq('id', id).select().single();
       if (error) throw wrapRowError(error);
       await logAudit('routed', 'request', id, 'Routed request to section');
       const recipients = await NotificationsAPI.sectionUserIds(toSectionId);
@@ -274,13 +326,31 @@ const RequestsAPI = (() => {
       return data;
     },
 
+    // ── Assignment (section supervisor/assigned_receiver) ───────────
+    // Hands off drafting the reply to a specific staff member in the
+    // owning section — mirrors prisoner_letters.assigned_to.
+    async assignRequest(id, userId) {
+      const db = getSupabase();
+      const { data, error } = await db.from('requests')
+        .update({ assigned_to: userId }).eq('id', id).select().single();
+      if (error) throw wrapRowError(error);
+      await logAudit('assigned', 'request', id, 'Assigned request to staff');
+      if (userId) {
+        await NotificationsAPI.notify([userId], {
+          type: 'new_request', recordType: 'request', recordId: id,
+          message: `"${data.subject}" was assigned to you`,
+        });
+      }
+      return data;
+    },
+
     // ── Response ─────────────────────────────────────────────────
     async createResponse({ requestId, body, language }) {
       const db = getSupabase();
       const session = await Auth.getSession();
       const { data, error } = await db.from('responses').insert({
         request_id: requestId, created_by: session.user.id,
-        body, language: language || 'en', status: 'draft',
+        body: RichEditor.sanitize(body), language: language || 'en', status: 'draft',
       }).select().single();
       if (error) throw wrapRowError(error);
       await logAudit('created', 'response', data.id, 'Drafted response');
@@ -289,8 +359,24 @@ const RequestsAPI = (() => {
 
     async updateResponseDraft(id, patch) {
       const db = getSupabase();
+      if (patch.body != null) patch = { ...patch, body: RichEditor.sanitize(patch.body) };
       const { data, error } = await db.from('responses').update(patch).eq('id', id).select().single();
       if (error) throw wrapRowError(error);
+      return data;
+    },
+
+    // ── Receiving (requesting org, supervisor/admin/assigned_receiver) ──
+    // Symmetric to markRequestReceived — the requesting org acknowledges
+    // the final response arrived, recorded as "received by [Name],
+    // [Designation]" back on the responding org's side.
+    async markResponseReceived(id) {
+      const db = getSupabase();
+      const session = await Auth.getSession();
+      const { data, error } = await db.from('responses')
+        .update({ received_by: session.user.id, received_at: new Date().toISOString() })
+        .eq('id', id).select().single();
+      if (error) throw wrapRowError(error);
+      await logAudit('received', 'response', id, 'Marked response as received');
       return data;
     },
 

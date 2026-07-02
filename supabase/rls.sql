@@ -16,6 +16,8 @@ ALTER TABLE user_password_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE reference_sequences  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE requests             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE responses            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE internal_requests        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE internal_request_replies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE approvals            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE attachments          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE prisoner_letters     ENABLE ROW LEVEL SECURITY;
@@ -364,13 +366,107 @@ CREATE POLICY "requests_update_supervisor" ON requests
     AND is_supervisor_or_above()
   );
 
+-- assigned_receiver was previously a purely decorative role label (no
+-- policy anywhere referenced it) — these two give it real teeth: an
+-- org-level assigned_receiver can see/act on their org's *unrouted*
+-- inbox only (unlike supervisors, who see everything in the org), and
+-- a section-level assigned_receiver (has_role_in_section — previously
+-- also unreferenced by any policy) can set assigned_to once a request
+-- has already been routed to their section. Separate named policies
+-- rather than editing requests_select/requests_update_supervisor in
+-- place — Postgres ORs together all PERMISSIVE policies on the same
+-- command, so this is strictly additive.
+CREATE POLICY "requests_select_assigned_receiver" ON requests
+  FOR SELECT USING (
+    to_org_id = get_my_org_id() AND to_section_id IS NULL AND has_role('assigned_receiver')
+  );
+
+-- USING alone gates which rows are targetable (the org's still-unrouted
+-- inbox) — without an explicit WITH CHECK, Postgres reuses the USING
+-- expression against the POST-update row too, and both markReceived
+-- and routeRequest (js/data/requests-api.js) update rows in ways that
+-- make "to_section_id IS NULL" false afterwards (routing sets it; even
+-- marking received alone doesn't touch it, but routing is the very
+-- next step in the same workflow) — so without this, every actual use
+-- of this policy would self-reject. WITH CHECK only reasserts org/role,
+-- letting to_section_id become non-null.
+CREATE POLICY "requests_update_assigned_receiver" ON requests
+  FOR UPDATE USING (
+    to_org_id = get_my_org_id() AND to_section_id IS NULL AND has_role('assigned_receiver')
+  )
+  WITH CHECK (
+    to_org_id = get_my_org_id() AND has_role('assigned_receiver')
+  );
+
+-- RLS gates rows, not columns (same convention as requests_update_supervisor
+-- elsewhere in this file — column-level trust is the app's job, which here
+-- means AdminAPI.assignRequest() only ever sets assigned_to). The WITH
+-- CHECK below is narrower than that general convention on purpose: this
+-- role, unlike supervisor, carries "no rank of its own" by design, so it
+-- additionally can't use this policy to move a request to a DIFFERENT
+-- section or un-route it back to NULL — only touch a request that stays
+-- routed to a section they still hold assigned_receiver in.
+CREATE POLICY "requests_update_section_receiver" ON requests
+  FOR UPDATE USING (
+    to_section_id IS NOT NULL AND has_role_in_section(to_section_id, 'assigned_receiver')
+  )
+  WITH CHECK (
+    to_section_id IS NOT NULL AND has_role_in_section(to_section_id, 'assigned_receiver')
+  );
+
+-- Walks parent_request_id both up (to the root of the case) and back
+-- down (every follow-up), so a multi-round-trip "case" can be rendered
+-- as one conversation. Deliberately NOT SECURITY DEFINER, unlike every
+-- helper above — it must run under the CALLER's own privileges so each
+-- step of the recursion is still subject to requests_select exactly as
+-- if the caller queried requests directly; a chain that touches a row
+-- the caller can't see just silently stops yielding further rows in
+-- that direction instead of leaking it.
+-- parent_request_id has no acyclicity constraint (a draft's owner can
+-- freely edit it via requests_update before submitting), so both the
+-- ancestor walk-up and the descendant walk-down track a `visited`
+-- array and refuse to step into an id already seen — without that, a
+-- crafted or buggy cycle (A's parent is B, B's parent is A) would spin
+-- this CTE forever on every request-detail page load.
+CREATE OR REPLACE FUNCTION conversation_request_ids(p_request_id UUID)
+RETURNS SETOF UUID AS $$
+  WITH RECURSIVE ancestors AS (
+    SELECT id, parent_request_id, 0 AS depth, ARRAY[id] AS visited FROM requests WHERE id = p_request_id
+    UNION ALL
+    SELECT r.id, r.parent_request_id, a.depth + 1, a.visited || r.id
+    FROM requests r JOIN ancestors a ON r.id = a.parent_request_id
+    WHERE NOT (r.id = ANY(a.visited))
+  ),
+  root AS (SELECT id FROM ancestors ORDER BY depth DESC LIMIT 1),
+  descendants AS (
+    SELECT id, ARRAY[id] AS visited FROM root
+    UNION ALL
+    SELECT r.id, d.visited || r.id
+    FROM requests r JOIN descendants d ON r.parent_request_id = d.id
+    WHERE NOT (r.id = ANY(d.visited))
+  )
+  SELECT id FROM descendants;
+$$ LANGUAGE sql STABLE;
+
 -- ─── responses ────────────────────────────────────────────────
+-- Previously had no section-membership restriction at all — any user
+-- whose org was party to the parent request could read every response
+-- on it, unlike requests_select's section/supervisor/creator scoping.
+-- Tightened to match requests_select's shape now that receipt-tracking
+-- UI sits on top of this.
 CREATE POLICY "responses_select" ON responses
   FOR SELECT USING (
     EXISTS (
       SELECT 1 FROM requests r
       WHERE r.id = request_id
         AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
+        AND (
+          is_supervisor_or_above()
+          OR r.from_section_id IN (SELECT my_section_ids())
+          OR r.to_section_id   IN (SELECT my_section_ids())
+          OR r.created_by      = auth.uid()
+          OR created_by        = auth.uid()
+        )
     )
   );
 
@@ -399,6 +495,82 @@ CREATE POLICY "responses_update_supervisor" ON responses
         AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
     )
     AND is_supervisor_or_above()
+  );
+
+-- Symmetric to requests_update_assigned_receiver, on the response side:
+-- the ORIGINATING org's assigned_receiver can mark a sent response as
+-- received.
+-- Same USING-without-WITH-CHECK trap as requests_update_assigned_receiver
+-- above: markResponseReceived() sets received_by, which would make a
+-- reused-as-WITH-CHECK USING clause (received_by IS NULL) reject every
+-- real call. WITH CHECK only reasserts role/org, not received_by's value.
+CREATE POLICY "responses_update_assigned_receiver" ON responses
+  FOR UPDATE USING (
+    has_role('assigned_receiver') AND status = 'sent' AND received_by IS NULL
+    AND EXISTS (SELECT 1 FROM requests r WHERE r.id = request_id AND r.from_org_id = get_my_org_id())
+  )
+  WITH CHECK (
+    has_role('assigned_receiver')
+    AND EXISTS (SELECT 1 FROM requests r WHERE r.id = request_id AND r.from_org_id = get_my_org_id())
+  );
+
+-- ─── internal_requests / internal_request_replies ──────────────
+-- Org-only collaboration between sections, anchored to one external
+-- request. Deliberately has no from_org_id/to_org_id duality like
+-- `requests` — from_section_id/to_section_id are both validated (at
+-- INSERT) to resolve to the SAME org, which is what structurally
+-- guarantees the other org in the conversation can never see these
+-- rows: their get_my_org_id()/my_section_ids() can never match a
+-- section belonging to a different org.
+CREATE POLICY "internal_requests_select" ON internal_requests
+  FOR SELECT USING (
+    from_section_id IN (SELECT my_section_ids())
+    OR to_section_id IN (SELECT my_section_ids())
+    OR created_by = auth.uid()
+    OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', to_section_id))
+  );
+
+CREATE POLICY "internal_requests_insert" ON internal_requests
+  FOR INSERT WITH CHECK (
+    created_by = auth.uid()
+    AND (
+      from_section_id IN (SELECT my_section_ids())
+      OR (is_supervisor_or_above() AND scope_org_id('section', from_section_id) = get_my_org_id())
+    )
+    AND scope_org_id('section', to_section_id) = get_my_org_id()
+    AND EXISTS (
+      SELECT 1 FROM requests r WHERE r.id = parent_request_id
+        AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
+    )
+  );
+
+CREATE POLICY "internal_requests_update" ON internal_requests
+  FOR UPDATE USING (
+    to_section_id IN (SELECT my_section_ids())
+    OR from_section_id IN (SELECT my_section_ids())
+    OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', to_section_id))
+  );
+
+CREATE POLICY "internal_request_replies_select" ON internal_request_replies
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM internal_requests ir WHERE ir.id = internal_request_id
+        AND (
+          ir.from_section_id IN (SELECT my_section_ids())
+          OR ir.to_section_id IN (SELECT my_section_ids())
+          OR ir.created_by = auth.uid()
+          OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', ir.to_section_id))
+        )
+    )
+  );
+
+CREATE POLICY "internal_request_replies_insert" ON internal_request_replies
+  FOR INSERT WITH CHECK (
+    created_by = auth.uid()
+    AND EXISTS (
+      SELECT 1 FROM internal_requests ir WHERE ir.id = internal_request_id
+        AND ir.to_section_id IN (SELECT my_section_ids())
+    )
   );
 
 -- ─── approvals ────────────────────────────────────────────────
@@ -454,10 +626,23 @@ CREATE POLICY "attachments_select" ON attachments
           OR r.created_by = auth.uid()
         )
     ))
+    OR (record_type = 'internal_request' AND EXISTS (
+      SELECT 1 FROM internal_requests ir
+      WHERE ir.id = record_id
+        AND (
+          ir.from_section_id IN (SELECT my_section_ids())
+          OR ir.to_section_id IN (SELECT my_section_ids())
+          OR ir.created_by = auth.uid()
+          OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', ir.to_section_id))
+        )
+    ))
   );
 
 CREATE POLICY "attachments_insert" ON attachments
   FOR INSERT WITH CHECK (uploaded_by = auth.uid());
+
+CREATE POLICY "attachments_delete" ON attachments
+  FOR DELETE USING (uploaded_by = auth.uid());
 
 -- ─── prisoner_letters ────────────────────────────────────────
 -- Strict access: only submitter, assignee, supervisors, and admins.

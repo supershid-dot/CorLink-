@@ -12,6 +12,11 @@ const RequestsView = {
     if (!user) { Router.navigate('login'); return; }
     this._user = user;
     this._isSupervisor = AppShell.isSupervisorOrAbove(user);
+    // assigned_receiver has no rank of its own (any staff can hold it),
+    // but it does grant eligibility to receive/route the org's unrouted
+    // inbox — mirrors requests_select_assigned_receiver/
+    // requests_update_assigned_receiver in supabase/rls.sql.
+    this._canReceive = this._isSupervisor || AppShell.hasRole(user, 'assigned_receiver');
 
     const validTabs = ['inbox', 'sent', 'approvals'];
     if (params.tab && validTabs.includes(params.tab)) {
@@ -96,7 +101,7 @@ const RequestsView = {
 
   async _renderInbox(content) {
     const items = await RequestsAPI.listInbox(this._user.org_id);
-    content.innerHTML = this._listPanel('Inbox', items, { orgCol: 'From', orgKey: 'from_org', allowRoute: this._isSupervisor });
+    content.innerHTML = this._listPanel('Inbox', items, { orgCol: 'From', orgKey: 'from_org', allowReceive: this._canReceive });
     this._bindListActions(content, items);
   },
 
@@ -137,7 +142,10 @@ const RequestsView = {
 
   _listRow(r, opts) {
     const orgName = r[opts.orgKey]?.name || '';
-    const needsRouting = opts.allowRoute && r.status === 'sent' && !r.to_section_id;
+    // Receiving (acknowledging arrival) always happens before routing —
+    // see markRequestReceived/routeRequest in requests-api.js.
+    const needsReceiving = opts.allowReceive && r.status === 'sent' && !r.to_section_id;
+    const needsRouting = opts.allowReceive && r.status === 'received' && !r.to_section_id;
     return `
       <tr>
         <td data-label="Reference">${r.reference_number || '<span class="structure-empty">Draft</span>'}</td>
@@ -147,6 +155,7 @@ const RequestsView = {
         <td data-label="Deadline">${r.deadline || '—'}</td>
         <td data-label="Actions">
           <a class="btn btn-secondary btn-xs" href="#request-detail?id=${r.id}">View</a>
+          ${needsReceiving ? `<button class="btn btn-primary btn-xs" data-mark-received="${r.id}">Mark Received</button>` : ''}
           ${needsRouting ? `<button class="btn btn-primary btn-xs" data-route="${r.id}">Route</button>` : ''}
         </td>
       </tr>
@@ -154,6 +163,16 @@ const RequestsView = {
   },
 
   _bindListActions(content, items) {
+    content.querySelectorAll('[data-mark-received]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await RequestsAPI.markRequestReceived(btn.dataset.markReceived);
+          await this._renderTab();
+        } catch (err) {
+          alert(err.message || 'Something went wrong.');
+        }
+      });
+    });
     content.querySelectorAll('[data-route]').forEach(btn => {
       btn.addEventListener('click', () => {
         const r = items.find(x => x.id === btn.dataset.route);
@@ -236,7 +255,7 @@ const RequestsView = {
         </div>
         <div class="field-group">
           <label class="field-label">Message</label>
-          <textarea class="field-input-plain" name="body" rows="6" required id="compose-body"></textarea>
+          <div id="compose-body"></div>
         </div>
         <div class="field-group">
           <label class="field-label">Deadline (optional)</label>
@@ -250,8 +269,9 @@ const RequestsView = {
       </form>
     `);
 
+    const editor = RichEditor.create(document.getElementById('compose-body'), { language: 'en' });
     document.getElementById('compose-language').addEventListener('change', (e) => {
-      document.getElementById('compose-body').classList.toggle('field-divehi', e.target.value === 'dv');
+      editor.setLanguage(e.target.value);
     });
 
     const form = document.getElementById('compose-form');
@@ -259,13 +279,19 @@ const RequestsView = {
       e.preventDefault();
       const fd = new FormData(form);
       const errEl = form.querySelector('.modal-error');
+      const body = editor.getHTML();
+      if (!body || body === '<p><br></p>') {
+        errEl.textContent = 'Message cannot be empty.';
+        errEl.classList.remove('hidden');
+        return;
+      }
       try {
         const result = await RequestsAPI.createRequest({
           fromOrgId: this._user.org_id,
           fromSectionId: fd.get('fromSectionId'),
           toOrgId: fd.get('toOrgId'),
           subject: fd.get('subject'),
-          body: fd.get('body'),
+          body,
           language: fd.get('language'),
           deadline: fd.get('deadline') || null,
         });
@@ -305,6 +331,7 @@ const RequestsView = {
           <select class="field-select" name="sectionId">
             ${sections.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
           </select>
+          <div class="field-hint">This section owns the reply. Need input from another section too? That section can loop others in via Internal Collaboration once they open the request.</div>
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">

@@ -75,10 +75,19 @@
   <script src="js/auth.js" defer></script>
   <script src="js/router.js" defer></script>
 
+  <!-- Lib — dependency-free rich text editor + sanitizer (no CDN; a
+       library would need a build step or a script tag this static
+       site has no way to verify unattended). Loaded before the data
+       layer since requests-api.js/internal-requests-api.js sanitize
+       bodies at write time via RichEditor.sanitize(). -->
+  <script src="js/lib/rich-editor.js" defer></script>
+
   <!-- Data layer -->
   <script src="js/data/admin-api.js" defer></script>
   <script src="js/data/notifications-api.js" defer></script>
   <script src="js/data/requests-api.js" defer></script>
+  <script src="js/data/internal-requests-api.js" defer></script>
+  <script src="js/data/attachments-api.js" defer></script>
   <script src="js/data/prisoner-letters-api.js" defer></script>
 
   <!-- Views -->
