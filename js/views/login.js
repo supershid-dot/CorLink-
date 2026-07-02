@@ -13,7 +13,7 @@ const LoginView = {
       <div class="login-bg">
         <div class="login-card">
           <div class="login-brand">
-            <img src="assets/logo.jpg" alt="${APP_NAME} logo" class="login-logo-img" />
+            <img src="assets/logo.png" alt="${APP_NAME} logo" class="login-logo-img" />
           </div>
 
           ${timeoutMsg}
