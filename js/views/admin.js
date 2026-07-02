@@ -333,6 +333,8 @@ const AdminView = {
     if (!org) { content.innerHTML = `<div class="alert alert-info">No organization selected.</div>`; return; }
 
     const sections = await AdminAPI.listSectionsByOrg(org.id);
+    const designations = await AdminAPI.listDesignations(org.id);
+    const designationsPanelHtml = this._designationsPanelHtml(designations);
 
     if (org.type === 'mcs') {
       const commands = await AdminAPI.listCommands(org.id);
@@ -388,6 +390,7 @@ const AdminView = {
             </div>
           `).join('') || '<p class="structure-empty">No commands yet.</p>'}
         </div>
+        ${designationsPanelHtml}
       `;
 
       document.getElementById('new-command-btn').addEventListener('click', () => {
@@ -485,6 +488,7 @@ const AdminView = {
             </div>
           `).join('') || '<p class="structure-empty">No divisions yet.</p>'}
         </div>
+        ${designationsPanelHtml}
       `;
 
       document.getElementById('new-division-btn').addEventListener('click', () => {
@@ -524,6 +528,56 @@ const AdminView = {
         });
       });
     }
+
+    this._bindDesignationsPanel(content, org);
+  },
+
+  // Designations are a simple org-wide picklist (no hierarchy, unlike
+  // commands/departments/divisions/sections) — same panel for both org
+  // types, appended after the org-type-specific structure tree above.
+  _designationsPanelHtml(designations) {
+    return `
+      <div class="panel">
+        <div class="panel-header">
+          <h3>Designations</h3>
+          <button class="btn btn-primary btn-sm" id="new-designation-btn"><i class="ti ti-plus"></i> New Designation</button>
+        </div>
+        <div class="badge-list">
+          ${designations.map(d => `
+            <span class="structure-section-chip">
+              <span class="structure-section-code">${d.name}</span>
+              ${this._statusBadge(d.is_active)}
+              ${this._iconBtn('edit-designation', d.id, 'Rename', 'ti-pencil', { name: d.name })}
+              ${this._toggleIconBtn('toggle-designation', d.id, d.is_active)}
+            </span>
+          `).join('') || '<span class="structure-empty">No designations yet</span>'}
+        </div>
+        <div class="field-hint">Job titles/positions staff can be given — separate from their section assignment.</div>
+      </div>
+    `;
+  },
+
+  _bindDesignationsPanel(content, org) {
+    document.getElementById('new-designation-btn')?.addEventListener('click', () => {
+      this._openTextModal('New Designation', 'Designation name', async (name) => {
+        await AdminAPI.createDesignation(org.id, name);
+        await this._renderTab();
+      });
+    });
+    content.querySelectorAll('[data-edit-designation]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this._openTextModal('Rename Designation', 'Designation name', async (name) => {
+          await AdminAPI.updateDesignation(btn.dataset.editDesignation, { name });
+          await this._renderTab();
+        }, btn.dataset.name);
+      });
+    });
+    content.querySelectorAll('[data-toggle-designation]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        await AdminAPI.updateDesignation(btn.dataset.toggleDesignation, { is_active: btn.dataset.active !== 'true' });
+        await this._renderTab();
+      });
+    });
   },
 
   _statusBadge(isActive) {
@@ -632,6 +686,8 @@ const AdminView = {
     const users = await AdminAPI.listUsersByOrg(org.id);
     const scopes = await AdminAPI.listAssignableScopes(org);
     const scopeMap = this._scopeMap(scopes, org);
+    const designations = await AdminAPI.listDesignations(org.id);
+    const activeDesignations = designations.filter(d => d.is_active);
 
     content.innerHTML = `
       <div class="panel">
@@ -640,12 +696,13 @@ const AdminView = {
           <button class="btn btn-primary btn-sm" id="new-user-btn"><i class="ti ti-plus"></i> New User</button>
         </div>
         <table class="data-table">
-          <thead><tr><th>Name</th><th>Service #</th><th>Assignments</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Service #</th><th>Designation</th><th>Assignments</th><th>Status</th><th></th></tr></thead>
           <tbody>
             ${users.map(u => `
               <tr>
                 <td data-label="Name">${u.full_name}${u.is_super_admin ? ' <span class="badge badge-primary">Super Admin</span>' : ''}</td>
                 <td data-label="Service #">${u.service_number}</td>
+                <td data-label="Designation">${u.designations?.name || '<span class="structure-empty">—</span>'}</td>
                 <td data-label="Assignments">
                   <div class="badge-list">
                     ${(u.user_assignments || []).filter(a => a.is_active).map(a =>
@@ -665,12 +722,12 @@ const AdminView = {
     `;
 
     document.getElementById('new-user-btn').addEventListener('click', () => {
-      this._openNewUserModal(org, scopes);
+      this._openNewUserModal(org, scopes, activeDesignations);
     });
     content.querySelectorAll('[data-manage-user]').forEach(btn => {
       btn.addEventListener('click', () => {
         const u = users.find(x => x.id === btn.dataset.manageUser);
-        this._openManageUserModal(u, scopes, org);
+        this._openManageUserModal(u, scopes, org, activeDesignations);
       });
     });
   },
@@ -715,7 +772,7 @@ const AdminView = {
     return scopes.map(s => `<option value="${s.type}:${s.id}">${s.label}</option>`).join('');
   },
 
-  _openNewUserModal(org, scopes) {
+  _openNewUserModal(org, scopes, designations = []) {
     const adminRole = org.type === 'mcs' ? 'mcs_admin' : 'authority_admin';
     const adminLabel = org.type === 'mcs' ? 'MCS Admin' : 'Authority Admin';
     // A brand-new organization has no command/department/division/
@@ -740,13 +797,22 @@ const AdminView = {
           <label class="field-label">Email</label>
           <input class="field-input-plain" type="email" name="email" required placeholder="For notifications" />
         </div>
+        <div class="field-group">
+          <label class="field-label">Designation</label>
+          <select class="field-select" name="designationId">
+            <option value="">— None —</option>
+            ${designations.map(d => `<option value="${d.id}">${d.name}</option>`).join('')}
+          </select>
+          <div class="field-hint">${designations.length === 0 ? 'This organization has no designations yet — its admin can add some from the Structure tab.' : 'Optional job title/position.'}</div>
+        </div>
         ${hasScopes ? `
         <div class="field-group">
           <label class="field-label">Assigned To</label>
           <select class="field-select" name="scope">
+            <option value="">— Not assigned yet —</option>
             ${this._scopeOptionsHtml(scopes)}
           </select>
-          <div class="field-hint">A command/department head does not need a section-level assignment — pick the level they actually operate at.</div>
+          <div class="field-hint">Leave unassigned if the right section doesn't exist yet — this organization's own admin can assign it later from Manage User. A command/department head does not need a section-level assignment either — pick the level they actually operate at.</div>
         </div>
         <div class="field-group">
           <label class="field-label">Role</label>
@@ -755,6 +821,7 @@ const AdminView = {
             <option value="supervisor">Supervisor</option>
             <option value="assigned_receiver">Assigned Receiver</option>
           </select>
+          <div class="field-hint">Only used if a section/scope is picked above.</div>
         </div>
         <div class="field-group">
           <label class="checkbox-row">
@@ -787,14 +854,15 @@ const AdminView = {
       submitBtn.disabled = true;
 
       const assignments = [];
-      if (hasScopes) {
-        const [scopeType, scopeId] = fd.get('scope').split(':');
+      const scopeValue = hasScopes ? fd.get('scope') : '';
+      if (scopeValue) {
+        const [scopeType, scopeId] = scopeValue.split(':');
         assignments.push({ scope_type: scopeType, scope_id: scopeId, role: fd.get('role'), is_primary: true });
       }
       if (fd.get('isAdmin')) {
         assignments.push({
           scope_type: 'organization', scope_id: org.id,
-          role: adminRole, is_primary: !hasScopes,
+          role: adminRole, is_primary: !scopeValue,
         });
       }
 
@@ -804,6 +872,7 @@ const AdminView = {
           fullName: fd.get('fullName'),
           email: fd.get('email'),
           orgId: org.id,
+          designationId: fd.get('designationId') || null,
           assignments,
         });
         this._showTempPassword(result);
@@ -835,12 +904,20 @@ const AdminView = {
     `);
   },
 
-  _openManageUserModal(user, scopes, org) {
+  _openManageUserModal(user, scopes, org, designations = []) {
     const activeAssignments = (user.user_assignments || []).filter(a => a.is_active);
     const scopeMap = this._scopeMap(scopes, org);
     const adminRole = org.type === 'mcs' ? 'mcs_admin' : 'authority_admin';
     const adminLabel = org.type === 'mcs' ? 'MCS Admin' : 'Authority Admin';
     const hasAdmin = activeAssignments.some(a => a.role === adminRole);
+    // The user's current designation might have been deactivated since
+    // it was assigned — designations only lists active ones, so inject
+    // it back in as an extra option or the select would silently
+    // revert to "None" and drop it on the next Save Profile.
+    const designationOptions = [...designations];
+    if (user.designation_id && !designations.some(d => d.id === user.designation_id)) {
+      designationOptions.push({ id: user.designation_id, name: `${user.designations?.name || 'Unknown'} (inactive)` });
+    }
 
     this._openModal(`
       <h3>Manage — ${user.full_name}</h3>
@@ -852,6 +929,13 @@ const AdminView = {
         </div>
         <div class="field-group">
           <input class="field-input-plain" type="email" name="email" required value="${user.email}" placeholder="Email" />
+        </div>
+        <div class="field-group">
+          <label class="field-label">Designation</label>
+          <select class="field-select" name="designationId">
+            <option value="">— None —</option>
+            ${designationOptions.map(d => `<option value="${d.id}" ${user.designation_id === d.id ? 'selected' : ''}>${d.name}</option>`).join('')}
+          </select>
         </div>
         <button type="submit" class="btn btn-secondary btn-sm">Save Profile</button>
       </form>
@@ -917,7 +1001,10 @@ const AdminView = {
       const fd = new FormData(e.target);
       const errEl = document.querySelector('.modal-error');
       try {
-        await AdminAPI.updateUser(user.id, { full_name: fd.get('fullName'), email: fd.get('email') });
+        await AdminAPI.updateUser(user.id, {
+          full_name: fd.get('fullName'), email: fd.get('email'),
+          designation_id: fd.get('designationId') || null,
+        });
         this._closeModal();
         await this._renderTab();
       } catch (err) {

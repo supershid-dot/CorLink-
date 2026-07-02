@@ -94,7 +94,7 @@ Deno.serve(async (req) => {
 
     const body = await req.json();
     const {
-      service_number, full_name, email, org_id,
+      service_number, full_name, email, org_id, designation_id,
       preferred_language, assignments, // assignments: [{scope_type, scope_id, role, is_primary}]
     } = body;
 
@@ -141,6 +141,24 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Same cross-tenant concern as assignments above: designations are
+    // freely readable by any authenticated user (designations_select has
+    // no org-membership restriction), so a forged designation_id from a
+    // different organization would otherwise slip through the
+    // service-role client unnoticed.
+    if (designation_id) {
+      const { data: designation, error: designationErr } = await adminClient
+        .from('designations')
+        .select('org_id')
+        .eq('id', designation_id)
+        .maybeSingle();
+      if (designationErr || !designation || designation.org_id !== org_id) {
+        return new Response(JSON.stringify({ error: 'Designation does not belong to the target organization' }), {
+          status: 403, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' },
+        });
+      }
+    }
+
     const sn = String(service_number).trim().toUpperCase();
     const tempPassword = randomPassword();
 
@@ -162,6 +180,7 @@ Deno.serve(async (req) => {
       service_number: sn,
       full_name,
       email,
+      designation_id: designation_id || null,
       preferred_language: preferred_language || 'en',
       // New accounts start with an already-expired password so the user
       // is forced through the change-password flow on first login.

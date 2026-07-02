@@ -185,6 +185,32 @@ const AdminAPI = (() => {
       return data;
     },
 
+    // ── Designations (job titles/positions, org-managed) ────────
+    async listDesignations(orgId) {
+      const db = getSupabase();
+      const { data, error } = await db.from('designations')
+        .select('*').eq('org_id', orgId).order('name');
+      if (error) throw error;
+      return data;
+    },
+
+    async createDesignation(orgId, name) {
+      const db = getSupabase();
+      const { data, error } = await db.from('designations')
+        .insert({ org_id: orgId, name }).select().single();
+      if (error) throw error;
+      await logAudit('created', 'organization', data.id, `Created designation ${name}`);
+      return data;
+    },
+
+    async updateDesignation(id, patch) {
+      const db = getSupabase();
+      const { data, error } = await db.from('designations')
+        .update(patch).eq('id', id).select().single();
+      if (error) throw error;
+      return data;
+    },
+
     // ── Assignable Scopes ──────────────────────────────────────────
     // Not everyone belongs at section level — a command or department
     // head (MCS) / division head (Authority) is assigned once at that
@@ -240,7 +266,7 @@ const AdminAPI = (() => {
     async listUsersByOrg(orgId) {
       const db = getSupabase();
       const { data, error } = await db.from('users')
-        .select('*, user_assignments(id, scope_type, scope_id, role, is_primary, is_active)')
+        .select('*, user_assignments(id, scope_type, scope_id, role, is_primary, is_active), designations(id, name)')
         .eq('org_id', orgId).order('full_name');
       if (error) throw error;
       return data;
@@ -257,7 +283,7 @@ const AdminAPI = (() => {
 
     // Creates a new auth user + profile + assignments via Edge Function
     // (requires service role key, cannot be done with the anon key).
-    async createUser({ serviceNumber, fullName, email, orgId, preferredLanguage, assignments }) {
+    async createUser({ serviceNumber, fullName, email, orgId, designationId, preferredLanguage, assignments }) {
       const db = getSupabase();
       const { data, error } = await db.functions.invoke('create-user', {
         body: {
@@ -265,6 +291,7 @@ const AdminAPI = (() => {
           full_name: fullName,
           email,
           org_id: orgId,
+          designation_id: designationId || null,
           preferred_language: preferredLanguage || 'en',
           assignments: assignments || [],
         },

@@ -66,6 +66,22 @@ CREATE TABLE sections (
   UNIQUE (org_id, code)
 );
 
+-- ─── Designations (job titles / positions within an organization) ──
+-- Org-specific picklist (e.g. "Legal Officer", "Case Manager") — the
+-- organization's own admin manages this list, same as they manage
+-- their command/department/division/section structure; MCS does not
+-- set designations for other organizations. Purely descriptive — it
+-- has no bearing on RLS/role logic, unlike user_assignments.role.
+CREATE TABLE designations (
+  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id      UUID        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  name        TEXT        NOT NULL,
+  is_active   BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (org_id, name)
+);
+
 -- ─── Users ──────────────────────────────────────────────────
 -- id links to auth.users so Supabase Auth handles credentials.
 -- Login identity: service_number maps to '{service_number}@corlink.internal'
@@ -81,6 +97,7 @@ CREATE TABLE users (
   full_name            TEXT    NOT NULL,
   email                TEXT    NOT NULL UNIQUE,     -- Real email for notifications
   is_super_admin       BOOLEAN NOT NULL DEFAULT FALSE,
+  designation_id       UUID    REFERENCES designations(id),  -- Optional; set by the org's own admin
   preferred_language   TEXT    NOT NULL DEFAULT 'en' CHECK (preferred_language IN ('en', 'dv')),
   is_active            BOOLEAN NOT NULL DEFAULT TRUE,
   password_changed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),

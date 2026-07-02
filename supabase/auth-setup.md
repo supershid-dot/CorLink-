@@ -25,6 +25,8 @@ match what changed since, instead of re-running the full files:
 - `supabase/patch-phase4-prisoner-letters-rls.sql` — prisoner_letters/prisoner_replies RLS fixes
 - `supabase/patch-org-scope-admin.sql` — adds 'organization' as a user_assignments scope
   level, so an org's first admin can be created before it has any structure
+- `supabase/patch-designations.sql` — adds the designations table (org-managed job
+  titles/positions) and users.designation_id
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

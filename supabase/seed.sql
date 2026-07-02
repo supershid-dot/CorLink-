@@ -102,3 +102,10 @@ VALUES (
 -- of its own to be scoped to; they build that structure afterward)
 -- INSERT INTO user_assignments (user_id, scope_type, scope_id, role, is_primary) VALUES
 --   ('<AUTHORITY_ADMIN_UUID>', 'organization', '00000000-0000-0000-0000-000000000002', 'authority_admin', TRUE);
+--
+-- ─── Example: an organization's designations (job titles) ──
+-- Purely descriptive picklist, managed by the organization's own admin —
+-- optional and independent of the section/role assignments above.
+-- INSERT INTO designations (org_id, name) VALUES
+--   ('00000000-0000-0000-0000-000000000002', 'Legal Officer'),
+--   ('00000000-0000-0000-0000-000000000002', 'Case Manager');
