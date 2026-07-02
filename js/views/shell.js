@@ -19,6 +19,15 @@ const AppShell = {
     );
   },
 
+  // True if the user holds p_role in ANY active assignment, anywhere —
+  // matches the RLS helper has_role() (org-agnostic). Used to show/hide
+  // UX for the assigned_receiver role, which — unlike admin/supervisor —
+  // grants no rank, just eligibility for a specific action.
+  hasRole(user, role) {
+    if (user.is_super_admin) return true;
+    return (user.assignments || []).some(a => a.is_active && a.role === role);
+  },
+
   initials(name) {
     return name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
   },

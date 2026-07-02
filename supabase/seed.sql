@@ -109,3 +109,10 @@ VALUES (
 -- INSERT INTO designations (org_id, name) VALUES
 --   ('00000000-0000-0000-0000-000000000002', 'Legal Officer'),
 --   ('00000000-0000-0000-0000-000000000002', 'Case Manager');
+--
+-- ─── Example: looping another section in on a request (internal-only) ──
+-- Org-only collaboration, anchored to one external request — never
+-- visible to the other organization in that conversation.
+-- INSERT INTO internal_requests (parent_request_id, from_section_id, to_section_id, created_by, subject, body) VALUES
+--   ('<REQUEST_UUID>', '00000000-0000-0000-0000-000000000030', '00000000-0000-0000-0000-000000000040',
+--    '<STAFF_UUID>', 'FYI: case review', '<p>Please confirm the latest treatment notes.</p>');

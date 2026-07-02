@@ -1158,16 +1158,46 @@ p  { line-height: 1.6; }
   margin-bottom: 10px;
   font-size: 0.875rem;
 }
+/* Bodies are sanitized rich HTML (RichEditor.sanitize()), not plain
+   text — no white-space: pre-wrap here, real block elements (p/ul/
+   table) provide their own line breaks. The global reset zeroes all
+   margins, so paragraph/list/table spacing has to be restored
+   explicitly or a multi-paragraph message renders as one solid block. */
 .thread-message-body {
-  white-space: pre-wrap;
   line-height: 1.6;
   color: var(--color-text);
+}
+.thread-message-body p,
+.thread-message-body ul,
+.thread-message-body ol,
+.thread-message-body table { margin-bottom: 10px; }
+.thread-message-body p:last-child,
+.thread-message-body ul:last-child,
+.thread-message-body ol:last-child,
+.thread-message-body table:last-child { margin-bottom: 0; }
+.thread-message-body ul, .thread-message-body ol { padding-left: 1.5em; }
+.thread-message-body table { border-collapse: collapse; width: 100%; }
+.thread-message-body td, .thread-message-body th {
+  border: 1px solid var(--color-border);
+  padding: 6px 10px;
 }
 .thread-message-actions {
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid var(--color-border);
 }
+
+.thread-receipt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--color-border);
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
+.thread-receipt i { color: var(--color-success); }
 
 .thread-approval {
   display: flex;
@@ -1190,3 +1220,137 @@ p  { line-height: 1.6; }
   gap: 10px;
 }
 .detail-actions form.modal-form { width: 100%; }
+
+/* ── Conversation (multi-round-trip requests) ────────────────── */
+.conversation-divider {
+  border: none;
+  border-top: 1px dashed var(--color-border);
+  margin: 24px 0;
+}
+
+/* ── Rich Text Editor ─────────────────────────────────────────── */
+.rich-editor {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.rich-editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding: 6px;
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border);
+}
+.rich-editor-toolbar button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  transition: background var(--transition);
+}
+.rich-editor-toolbar button:hover { background: var(--color-primary-light); color: var(--color-primary); }
+.rich-editor-toolbar select {
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+.rich-editor-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--color-border);
+  margin: 0 4px;
+}
+.rich-editor-color {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.rich-editor-color:hover { background: var(--color-primary-light); }
+.rich-editor-color input[type="color"] {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+.rich-editor-body {
+  min-height: 140px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  color: var(--color-text);
+  outline: none;
+}
+.rich-editor-body:focus { background: var(--color-surface); }
+.rich-editor-body p, .rich-editor-body ul, .rich-editor-body ol, .rich-editor-body table { margin-bottom: 10px; }
+.rich-editor-body ul, .rich-editor-body ol { padding-left: 1.5em; }
+.rich-editor-body table { border-collapse: collapse; width: 100%; }
+.rich-editor-body td, .rich-editor-body th {
+  border: 1px solid var(--color-border);
+  padding: 6px 10px;
+  min-width: 40px;
+}
+
+/* ── Attachments ──────────────────────────────────────────────── */
+.attachments-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--color-border);
+}
+.attachments-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1;
+}
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+}
+.attachment-chip:hover { background: var(--color-primary-light); border-color: var(--color-primary); }
+.attachment-upload-btn { cursor: pointer; }
+
+/* ── Internal Collaboration (org-only) ───────────────────────── */
+.internal-collab-panel { background: var(--color-bg); }
+.internal-request-row {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.internal-request-row:last-child { margin-bottom: 0; }
+.internal-request-replies { display: flex; flex-direction: column; gap: 8px; }
+.internal-request-replies .thread-message { padding: 10px 12px; }

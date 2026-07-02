@@ -167,12 +167,16 @@ CREATE TABLE reference_sequences (
 );
 
 -- ─── Requests ───────────────────────────────────────────────
+-- body holds sanitized rich-text HTML (produced/rendered via
+-- js/lib/rich-editor.js), not plain text — TEXT already supports
+-- arbitrary length, only the client-side sanitize/render path cares.
 CREATE TABLE requests (
   id                UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
   from_org_id       UUID    NOT NULL REFERENCES organizations(id),
   to_org_id         UUID    NOT NULL REFERENCES organizations(id),
   from_section_id   UUID    NOT NULL REFERENCES sections(id),
   to_section_id     UUID    REFERENCES sections(id),   -- Set when routed by receiver
+  assigned_to       UUID    REFERENCES users(id),   -- Staff in to_section_id preparing the reply
   created_by        UUID    NOT NULL REFERENCES users(id),
   subject           TEXT    NOT NULL,
   body              TEXT    NOT NULL,
@@ -184,7 +188,13 @@ CREATE TABLE requests (
   deadline          DATE,
   reference_number  TEXT    UNIQUE,    -- Generated on supervisor approval + send
   is_locked         BOOLEAN NOT NULL DEFAULT FALSE,
-  parent_request_id UUID    REFERENCES requests(id),   -- For follow-up requests
+  parent_request_id UUID    REFERENCES requests(id),   -- Same "case" — follow-up requests
+  -- Read-receipt: which specific staff member at the destination org
+  -- formally acknowledged this request, and when. Shown to the sending
+  -- org as "Received by [Name], [Designation] — [time]". Distinct from
+  -- to_section_id (routing) — receiving happens first, then routing.
+  received_by       UUID    REFERENCES users(id),
+  received_at       TIMESTAMPTZ,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -200,8 +210,49 @@ CREATE TABLE responses (
                 'draft', 'pending_approval', 'sent', 'received'
               )),
   is_locked   BOOLEAN NOT NULL DEFAULT FALSE,
+  -- Read-receipt symmetric to requests.received_by/received_at — the
+  -- originating org's staff member who formally received this response.
+  received_by UUID    REFERENCES users(id),
+  received_at TIMESTAMPTZ,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ─── Internal Requests (org-only collaboration, never cross-org) ──
+-- Lets the section drafting a reply (or the staff initially routing a
+-- request) loop in OTHER sections within the SAME org — either to hand
+-- off part of the work or to collect supporting information. Always
+-- anchored to one external request (parent_request_id) but has no
+-- from_org_id/to_org_id duality like `requests` does: both
+-- from_section_id and to_section_id always resolve to the same org
+-- (enforced by RLS, not a DB constraint, since scope_org_id() is a SQL
+-- function not usable in a CHECK). That's what makes these structurally
+-- invisible to the other org in the conversation — there is no path in
+-- their RLS visibility that a foreign section id could ever satisfy.
+CREATE TABLE internal_requests (
+  id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  parent_request_id UUID        NOT NULL REFERENCES requests(id),
+  from_section_id   UUID        NOT NULL REFERENCES sections(id),
+  to_section_id     UUID        NOT NULL REFERENCES sections(id),
+  created_by        UUID        NOT NULL REFERENCES users(id),
+  subject           TEXT        NOT NULL,
+  body              TEXT        NOT NULL,
+  language          TEXT        NOT NULL DEFAULT 'en' CHECK (language IN ('en', 'dv')),
+  status            TEXT        NOT NULL DEFAULT 'sent' CHECK (status IN (
+                       'sent', 'received', 'responded', 'closed'
+                     )),
+  received_by       UUID        REFERENCES users(id),
+  received_at       TIMESTAMPTZ,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE internal_request_replies (
+  id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  internal_request_id UUID        NOT NULL REFERENCES internal_requests(id),
+  body                TEXT        NOT NULL,
+  created_by          UUID        NOT NULL REFERENCES users(id),
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ─── Approvals ──────────────────────────────────────────────
@@ -222,7 +273,7 @@ CREATE TABLE approvals (
 -- Allowed types: pdf, docx, xlsx, jpg, png  |  Max: 20 MB each, 100 MB total
 CREATE TABLE attachments (
   id            UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
-  record_type   TEXT    NOT NULL CHECK (record_type IN ('request', 'response', 'prisoner_letter')),
+  record_type   TEXT    NOT NULL CHECK (record_type IN ('request', 'response', 'prisoner_letter', 'internal_request')),
   record_id     UUID    NOT NULL,
   filename      TEXT    NOT NULL,
   storage_path  TEXT    NOT NULL,   -- Path within Supabase Storage bucket
@@ -288,7 +339,7 @@ CREATE TABLE audit_logs (
                  'password_changed', 'user_created', 'user_deactivated'
                )),
   record_type  TEXT    NOT NULL CHECK (record_type IN (
-                 'request', 'response', 'prisoner_letter', 'deadline_extension',
+                 'request', 'response', 'internal_request', 'prisoner_letter', 'deadline_extension',
                  'user', 'organization', 'section', 'session', 'attachment'
                )),
   record_id    UUID,

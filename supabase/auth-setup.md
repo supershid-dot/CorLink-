@@ -27,6 +27,10 @@ match what changed since, instead of re-running the full files:
   level, so an org's first admin can be created before it has any structure
 - `supabase/patch-designations.sql` — adds the designations table (org-managed job
   titles/positions) and users.designation_id
+- `supabase/patch-phase6-workflow.sql` — requests/responses read receipts, internal
+  section-to-section collaboration, conversation threading, assigned_receiver
+  permissions — run this AND re-run `supabase/storage-policies.sql` (it now also
+  covers the `attachments` bucket, which needs creating first — see step 5 below)
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 
