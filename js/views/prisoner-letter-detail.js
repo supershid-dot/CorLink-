@@ -18,6 +18,8 @@ const PrisonerLetterDetailView = {
         <main class="main-content" id="letter-detail-main">
           <div class="tab-loading"><span class="spinner spinner--dark"></span> Loading…</div>
         </main>
+
+        ${AppShell.bottomNavHtml(user, 'prisoner-letters')}
       </div>
       <div id="modal-root"></div>
     `;

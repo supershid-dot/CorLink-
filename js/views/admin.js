@@ -84,6 +84,8 @@ const AdminView = {
 
           <div id="admin-tab-content"></div>
         </main>
+
+        ${AppShell.bottomNavHtml(user, 'admin')}
       </div>
       <div id="modal-root"></div>
     `;

@@ -61,6 +61,8 @@ const PrisonerLettersView = {
 
           <div id="letters-tab-content"></div>
         </main>
+
+        ${AppShell.bottomNavHtml(this._user, 'prisoner-letters')}
       </div>
       <div id="modal-root"></div>
     `;
