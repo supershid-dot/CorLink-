@@ -110,6 +110,29 @@ const AppShell = {
     `;
   },
 
+  // Fixed bottom tab bar shown on mobile instead of the topbar's nav
+  // links (which get cramped/cut off at phone widths — 4+ links plus
+  // notif bell and user menu don't fit on one row). Desktop still uses
+  // the topbar links; see the .bottom-nav / .topbar-nav CSS toggle at
+  // the mobile breakpoint.
+  bottomNavHtml(user, activeRoute) {
+    const admin = this.isAdmin(user);
+    const item = (route, label, icon) =>
+      `<a href="#${route}" class="bottom-nav-item${activeRoute === route ? ' bottom-nav-item--active' : ''}">
+        <i class="ti ${icon}"></i>
+        <span>${label}</span>
+      </a>`;
+
+    return `
+      <nav class="bottom-nav">
+        ${item('dashboard', 'Home', 'ti-home')}
+        ${item('requests', 'Requests', 'ti-inbox')}
+        ${item('prisoner-letters', 'Letters', 'ti-mail')}
+        ${admin ? item('admin', 'Admin', 'ti-settings') : ''}
+      </nav>
+    `;
+  },
+
   bindTopbar() {
     const menuBtn = document.getElementById('user-menu-btn');
 

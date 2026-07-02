@@ -391,17 +391,51 @@ p  { line-height: 1.6; }
   flex-shrink: 0;
 }
 
+/* ── Bottom Tab Bar (mobile) ─────────────────────────────────── */
+/* Hidden by default (desktop uses .topbar-nav instead) — the
+   max-width: 640px block below flips both. */
+.bottom-nav {
+  display: none;
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  z-index: 150;
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+  box-shadow: 0 -2px 8px rgba(0,0,0,.04);
+}
+.bottom-nav-item {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 4px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  text-align: center;
+  transition: color var(--transition), background var(--transition);
+}
+.bottom-nav-item:hover { text-decoration: none; background: var(--color-bg); }
+.bottom-nav-item i { font-size: 1.25rem; }
+.bottom-nav-item--active { color: var(--color-primary); }
+
 /* ── User Menu ───────────────────────────────────────────────── */
 .user-menu-wrap { position: relative; }
 
 .user-menu-btn {
   display: flex; align-items: center; gap: 8px;
-  padding: 6px 10px;
-  border-radius: var(--radius-md);
+  padding: 5px 12px 5px 5px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
   color: var(--color-text);
-  transition: background var(--transition);
+  transition: background var(--transition), border-color var(--transition);
 }
-.user-menu-btn:hover { background: var(--color-bg); }
+.user-menu-btn:hover { background: var(--color-primary-light); border-color: var(--color-primary); }
 
 .avatar {
   width: 32px; height: 32px;
@@ -602,17 +636,40 @@ p  { line-height: 1.6; }
 .stat-card--disabled:hover { border-color: var(--color-border); box-shadow: none; }
 
 .stat-icon { font-size: 1.5rem; color: var(--color-primary); }
-.stat-label { font-size: 0.875rem; color: var(--color-text-muted); font-weight: 500; }
-.stat-value { font-size: 1.75rem; font-weight: 700; color: var(--color-text); }
+.stat-value {
+  font-size: 2.5rem;
+  font-weight: 800;
+  line-height: 1.1;
+  color: var(--color-text);
+}
+.stat-value--primary   { color: var(--color-primary); }
+.stat-value--secondary { color: var(--color-secondary); }
+.stat-value--warning   { color: var(--color-warning); }
+.stat-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
 .stat-note { font-size: 0.75rem; color: var(--color-text-light); }
 
 /* ── Responsive ─────────────────────────────────────────────── */
 @media (max-width: 640px) {
   .login-card { padding: 28px 20px; }
-  .main-content { padding: 20px 16px; }
+  /* Extra bottom padding clears the fixed .bottom-nav bar so the last
+     bit of page content doesn't render underneath it. */
+  .main-content { padding: 20px 16px calc(76px + env(safe-area-inset-bottom)); }
   .topbar { padding: 0 16px; gap: 10px; }
   .topbar-appname { display: none; }
   .user-name-short { display: none; }
+  /* The topbar's own nav links get cramped/cut off at phone widths —
+     .bottom-nav replaces them with a fixed tab bar instead. */
+  .topbar-nav { display: none; }
+  .bottom-nav { display: flex; }
   .stat-grid { grid-template-columns: 1fr 1fr; }
   .panel { padding: 16px; }
   .modal-box { padding: 18px; }

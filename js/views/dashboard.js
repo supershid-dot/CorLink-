@@ -19,27 +19,25 @@ const DashboardView = {
 
           <div class="stat-grid" id="stat-grid">
             <a href="#requests" class="stat-card" id="stat-inbox">
-              <div class="stat-icon"><i class="ti ti-inbox"></i></div>
-              <div class="stat-label">Inbox</div>
-              <div class="stat-value"><span class="spinner spinner--dark"></span></div>
+              <div class="stat-value stat-value--primary"><span class="spinner spinner--dark"></span></div>
+              <div class="stat-label"><i class="ti ti-inbox"></i> Inbox</div>
             </a>
             <a href="#requests?tab=sent" class="stat-card" id="stat-sent">
-              <div class="stat-icon"><i class="ti ti-send"></i></div>
-              <div class="stat-label">Sent Requests</div>
-              <div class="stat-value"><span class="spinner spinner--dark"></span></div>
+              <div class="stat-value stat-value--secondary"><span class="spinner spinner--dark"></span></div>
+              <div class="stat-label"><i class="ti ti-send"></i> Sent Requests</div>
             </a>
             <a href="#requests" class="stat-card" id="stat-overdue">
-              <div class="stat-icon"><i class="ti ti-alert-triangle" style="color:#E8850A"></i></div>
-              <div class="stat-label">Overdue</div>
-              <div class="stat-value"><span class="spinner spinner--dark"></span></div>
+              <div class="stat-value stat-value--warning"><span class="spinner spinner--dark"></span></div>
+              <div class="stat-label"><i class="ti ti-alert-triangle"></i> Overdue</div>
             </a>
             <a href="#prisoner-letters" class="stat-card" id="stat-letters">
-              <div class="stat-icon"><i class="ti ti-mail"></i></div>
-              <div class="stat-label">Prisoner Letters</div>
-              <div class="stat-value"><span class="spinner spinner--dark"></span></div>
+              <div class="stat-value stat-value--primary"><span class="spinner spinner--dark"></span></div>
+              <div class="stat-label"><i class="ti ti-mail"></i> Prisoner Letters</div>
             </a>
           </div>
         </main>
+
+        ${AppShell.bottomNavHtml(user, 'dashboard')}
       </div>
     `;
 

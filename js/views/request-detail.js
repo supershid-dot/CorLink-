@@ -19,6 +19,8 @@ const RequestDetailView = {
         <main class="main-content" id="detail-main">
           <div class="tab-loading"><span class="spinner spinner--dark"></span> Loading…</div>
         </main>
+
+        ${AppShell.bottomNavHtml(user, 'requests')}
       </div>
       <div id="modal-root"></div>
     `;
