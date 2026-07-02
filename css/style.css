@@ -53,6 +53,14 @@
     --color-bg:         #111827;
     --color-surface:    #1F2937;
   }
+
+  /* The logo's navy wordmark/tagline pixels are close in value to the
+     dark surface color behind them now that the logo's own white
+     background has been keyed out to transparent — a faint light
+     halo keeps them legible without touching the source asset. */
+  .login-logo-img, .topbar-logo-crop img {
+    filter: drop-shadow(0 0 1px rgba(255,255,255,.5)) drop-shadow(0 0 5px rgba(255,255,255,.15));
+  }
 }
 
 /* ── Reset ─────────────────────────────────────────────────── */
@@ -389,6 +397,10 @@ p  { line-height: 1.6; }
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+  /* Pushes actions flush right on its own — .topbar-nav supplies the
+     same push via flex: 1 on desktop, but that stops working the
+     moment .topbar-nav is display: none at the mobile breakpoint. */
+  margin-left: auto;
 }
 
 /* ── Bottom Tab Bar (mobile) ─────────────────────────────────── */

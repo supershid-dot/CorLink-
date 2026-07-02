@@ -60,7 +60,7 @@ const AppShell = {
     return `
       <header class="topbar">
         <div class="topbar-brand">
-          <div class="topbar-logo-crop"><img src="assets/logo.jpg" alt="${APP_NAME} logo" /></div>
+          <div class="topbar-logo-crop"><img src="assets/logo.png" alt="${APP_NAME} logo" /></div>
           <span class="topbar-appname">${APP_NAME}</span>
         </div>
         <nav class="topbar-nav" id="topbar-nav">
