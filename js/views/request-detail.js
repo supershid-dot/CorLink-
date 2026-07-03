@@ -83,7 +83,7 @@ const RequestDetailView = {
       <div class="detail-header">
         <a href="#requests" class="btn btn-secondary btn-sm"><i class="ti ti-arrow-left"></i> Back</a>
         <div class="detail-header-title">
-          <h2 class="page-title">${root.subject}</h2>
+          <h2 class="page-title${root.subject_language === 'dv' ? ' field-divehi' : ''}">${root.subject}</h2>
           ${multiRound ? `<span class="badge badge-outline">${this._conversation.length} round-trips</span>` : ''}
         </div>
       </div>
@@ -200,9 +200,10 @@ const RequestDetailView = {
         </div>
         <div class="thread-message-body${resp.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(resp.body)}</div>
         ${this._renderReceipt(resp)}
-        ${resp.status === 'draft' && resp.created_by === this._user.id ? `
+        ${['draft', 'pending_approval'].includes(resp.status) && resp.created_by === this._user.id ? `
           <div class="thread-message-actions">
-            <button class="btn btn-primary btn-xs" data-submit-response="${resp.id}">Submit for Approval</button>
+            <button class="btn btn-secondary btn-xs" data-edit-response="${resp.id}">Edit Draft</button>
+            ${resp.status === 'draft' ? `<button class="btn btn-primary btn-xs" data-submit-response="${resp.id}">Submit for Approval</button>` : ''}
           </div>
         ` : ''}
       </div>
@@ -283,7 +284,7 @@ const RequestDetailView = {
     return `
       <div class="internal-request-row" data-internal-request="${ir.id}">
         <div class="thread-message-header">
-          <strong>${ir.subject}</strong>
+          <strong class="${ir.subject_language === 'dv' ? 'field-divehi' : ''}">${ir.subject}</strong>
           <span class="structure-empty">${ir.from_section?.name || ''} → ${ir.to_section?.name || ''}</span>
           <span class="badge badge-outline">${ir.status}</span>
         </div>
@@ -309,7 +310,12 @@ const RequestDetailView = {
   _renderActions(r, ctx, entry) {
     const blocks = [];
 
-    // Requester drafting/submitting.
+    // Requester drafting/submitting — editable through pending_approval
+    // (not just before submitting), matching requests_update RLS: a
+    // draft only becomes locked once a supervisor actually approves it.
+    if (['draft', 'pending_approval'].includes(r.status) && ctx.isCreator) {
+      blocks.push(`<button class="btn btn-secondary btn-sm" data-edit-request="${r.id}">Edit Draft</button>`);
+    }
     if (r.status === 'draft' && ctx.isCreator) {
       blocks.push(`<button class="btn btn-primary btn-sm" data-submit-request="${r.id}">Submit for Approval</button>`);
     }
@@ -387,7 +393,7 @@ const RequestDetailView = {
     main.querySelectorAll('.response-form').forEach(form => {
       const requestId = form.dataset.responseForm;
       const editor = RichEditor.create(form.querySelector('.response-body'), { language: 'en' });
-      RichEditor.bindLangToggle(form, (lang) => editor.setLanguage(lang));
+      RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
         const fd = new FormData(form);
@@ -406,6 +412,10 @@ const RequestDetailView = {
           errEl.classList.remove('hidden');
         }
       });
+    });
+
+    main.querySelectorAll('[data-edit-request]').forEach(btn => {
+      btn.addEventListener('click', () => this._openEditRequestModal(btn.dataset.editRequest));
     });
 
     main.querySelectorAll('[data-submit-request]').forEach(btn => {
@@ -443,6 +453,10 @@ const RequestDetailView = {
 
     main.querySelectorAll('[data-send-followup]').forEach(btn => {
       btn.addEventListener('click', () => this._openFollowupModal(btn.dataset.sendFollowup));
+    });
+
+    main.querySelectorAll('[data-edit-response]').forEach(btn => {
+      btn.addEventListener('click', () => this._openEditResponseModal(btn.dataset.editResponse));
     });
 
     main.querySelectorAll('[data-submit-response]').forEach(btn => {
@@ -531,7 +545,7 @@ const RequestDetailView = {
     `);
     const form = document.getElementById('comment-form');
     const commentTextarea = document.getElementById('comment-textarea');
-    RichEditor.bindLangToggle(form, (lang) => commentTextarea.classList.toggle('field-divehi', lang === 'dv'));
+    RichEditor.bindLangToggle(form, 'language', (lang) => commentTextarea.classList.toggle('field-divehi', lang === 'dv'));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
@@ -638,6 +652,123 @@ const RequestDetailView = {
     });
   },
 
+  // Available while status is draft or pending_approval (requests_update
+  // RLS cuts off access the moment a supervisor actually approves it —
+  // see patch-independent-lang-edit.sql). Reuses updateRequestDraft
+  // rather than a dedicated "submit" call, so this never changes status.
+  _openEditRequestModal(requestId) {
+    const entry = this._conversation.find(e => e.request.id === requestId);
+    const r = entry.request;
+    this._openModal(`
+      <h3>Edit Draft</h3>
+      <form id="edit-request-form" class="modal-form">
+        <div class="field-group">
+          <div class="field-group-row">
+            <label class="field-label">Subject</label>
+            ${RichEditor.langToggleHtml('subjectLanguage', r.subject_language || 'en')}
+          </div>
+          <input class="field-input-plain" name="subject" id="edit-request-subject" required value="${this._escapeHtml(r.subject)}" />
+        </div>
+        <div class="field-group">
+          <div class="field-group-row">
+            <label class="field-label">Message</label>
+            ${RichEditor.langToggleHtml('language', r.language || 'en')}
+          </div>
+          <div id="edit-request-body"></div>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Deadline (optional)</label>
+          <input class="field-input-plain" type="date" name="deadline" value="${r.deadline || ''}" />
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Changes</button>
+        </div>
+      </form>
+    `);
+    const form = document.getElementById('edit-request-form');
+    const editor = RichEditor.create(document.getElementById('edit-request-body'), { language: r.language || 'en' });
+    editor.setHTML(r.body);
+    const editSubject = document.getElementById('edit-request-subject');
+    if (r.subject_language === 'dv') editSubject.classList.add('field-divehi');
+    RichEditor.bindLangToggle(form, 'subjectLanguage', (lang) => editSubject.classList.toggle('field-divehi', lang === 'dv'));
+    RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const errEl = form.querySelector('.modal-error');
+      const body = editor.getHTML();
+      if (!body || body === '<p><br></p>') {
+        errEl.textContent = 'Message cannot be empty.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      try {
+        await RequestsAPI.updateRequestDraft(requestId, {
+          subject: fd.get('subject'), subject_language: fd.get('subjectLanguage'),
+          body, language: fd.get('language'),
+          deadline: fd.get('deadline') || null,
+        });
+        this._closeModal();
+        await this._load();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
+  // Symmetric to _openEditRequestModal, for a response draft (no subject
+  // field on responses — see supabase/schema.sql).
+  _openEditResponseModal(responseId) {
+    let resp = null;
+    for (const entry of this._conversation) {
+      const found = entry.responseDetails.find(rd => rd.response.id === responseId);
+      if (found) { resp = found.response; break; }
+    }
+    if (!resp) return;
+    this._openModal(`
+      <h3>Edit Response Draft</h3>
+      <form id="edit-response-form" class="modal-form">
+        <div class="field-group">
+          <div class="field-group-row">
+            <label class="field-label">Message</label>
+            ${RichEditor.langToggleHtml('language', resp.language || 'en')}
+          </div>
+          <div id="edit-response-body"></div>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Changes</button>
+        </div>
+      </form>
+    `);
+    const form = document.getElementById('edit-response-form');
+    const editor = RichEditor.create(document.getElementById('edit-response-body'), { language: resp.language || 'en' });
+    editor.setHTML(resp.body);
+    RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errEl = form.querySelector('.modal-error');
+      const body = editor.getHTML();
+      if (!body || body === '<p><br></p>') {
+        errEl.textContent = 'Response cannot be empty.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      try {
+        await RequestsAPI.updateResponseDraft(responseId, { body, language: new FormData(form).get('language') });
+        this._closeModal();
+        await this._load();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
   async _openFollowupModal(requestId) {
     const entry = this._conversation.find(e => e.request.id === requestId);
     const r = entry.request;
@@ -660,16 +791,18 @@ const RequestDetailView = {
             ${sections.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
           </select>
         </div>` : `<input type="hidden" name="fromSectionId" value="${sections[0].id}" />`}
-        <div class="field-group field-group-row">
-          <label class="field-label">Language</label>
-          ${RichEditor.langToggleHtml('language', 'en')}
-        </div>
         <div class="field-group">
-          <label class="field-label">Subject</label>
+          <div class="field-group-row">
+            <label class="field-label">Subject</label>
+            ${RichEditor.langToggleHtml('subjectLanguage', 'en')}
+          </div>
           <input class="field-input-plain" name="subject" id="followup-subject" required value="Re: ${r.subject}" />
         </div>
         <div class="field-group">
-          <label class="field-label">Message</label>
+          <div class="field-group-row">
+            <label class="field-label">Message</label>
+            ${RichEditor.langToggleHtml('language', 'en')}
+          </div>
           <div id="followup-body"></div>
         </div>
         <div class="field-group">
@@ -686,10 +819,8 @@ const RequestDetailView = {
     const form = document.getElementById('followup-form');
     const editor = RichEditor.create(document.getElementById('followup-body'), { language: 'en' });
     const followupSubject = document.getElementById('followup-subject');
-    RichEditor.bindLangToggle(form, (lang) => {
-      editor.setLanguage(lang);
-      followupSubject.classList.toggle('field-divehi', lang === 'dv');
-    });
+    RichEditor.bindLangToggle(form, 'subjectLanguage', (lang) => followupSubject.classList.toggle('field-divehi', lang === 'dv'));
+    RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
@@ -703,7 +834,8 @@ const RequestDetailView = {
       try {
         const result = await RequestsAPI.createRequest({
           fromOrgId: r.from_org_id, fromSectionId: fd.get('fromSectionId'), toOrgId: r.to_org_id,
-          subject: fd.get('subject'), body, language: fd.get('language'),
+          subject: fd.get('subject'), subjectLanguage: fd.get('subjectLanguage'),
+          body, language: fd.get('language'),
           deadline: fd.get('deadline') || null, parentRequestId: r.id,
         });
         this._closeModal();
@@ -743,16 +875,18 @@ const RequestDetailView = {
             ${sections.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
           </select>
         </div>
-        <div class="field-group field-group-row">
-          <label class="field-label">Language</label>
-          ${RichEditor.langToggleHtml('language', 'en')}
-        </div>
         <div class="field-group">
-          <label class="field-label">Subject</label>
+          <div class="field-group-row">
+            <label class="field-label">Subject</label>
+            ${RichEditor.langToggleHtml('subjectLanguage', 'en')}
+          </div>
           <input class="field-input-plain" name="subject" id="internal-subject" required />
         </div>
         <div class="field-group">
-          <label class="field-label">Message</label>
+          <div class="field-group-row">
+            <label class="field-label">Message</label>
+            ${RichEditor.langToggleHtml('language', 'en')}
+          </div>
           <div id="internal-body"></div>
         </div>
         <div class="modal-error alert alert-error hidden"></div>
@@ -765,10 +899,8 @@ const RequestDetailView = {
     const form = document.getElementById('internal-form');
     const editor = RichEditor.create(document.getElementById('internal-body'), { language: 'en' });
     const internalSubject = document.getElementById('internal-subject');
-    RichEditor.bindLangToggle(form, (lang) => {
-      editor.setLanguage(lang);
-      internalSubject.classList.toggle('field-divehi', lang === 'dv');
-    });
+    RichEditor.bindLangToggle(form, 'subjectLanguage', (lang) => internalSubject.classList.toggle('field-divehi', lang === 'dv'));
+    RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
@@ -782,7 +914,8 @@ const RequestDetailView = {
       try {
         await InternalRequestsAPI.create({
           parentRequestId, fromSectionId, toSectionId: fd.get('toSectionId'),
-          subject: fd.get('subject'), body, language: fd.get('language'),
+          subject: fd.get('subject'), subjectLanguage: fd.get('subjectLanguage'),
+          body, language: fd.get('language'),
         });
         this._closeModal();
         await this._load();

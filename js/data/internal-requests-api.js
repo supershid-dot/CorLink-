@@ -47,12 +47,13 @@ const InternalRequestsAPI = (() => {
       return data;
     },
 
-    async create({ parentRequestId, fromSectionId, toSectionId, subject, body, language }) {
+    async create({ parentRequestId, fromSectionId, toSectionId, subject, subjectLanguage, body, language }) {
       const db = getSupabase();
       const session = await Auth.getSession();
       const { data, error } = await db.from('internal_requests').insert({
         parent_request_id: parentRequestId, from_section_id: fromSectionId, to_section_id: toSectionId,
-        created_by: session.user.id, subject, body: RichEditor.sanitize(body), language: language || 'en',
+        created_by: session.user.id, subject, subject_language: subjectLanguage || 'en',
+        body: RichEditor.sanitize(body), language: language || 'en',
       }).select().single();
       if (error) throw error;
       await logAudit('created', data.id, `Created internal request "${subject}"`);

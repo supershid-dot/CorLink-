@@ -398,12 +398,31 @@ CREATE POLICY "requests_insert" ON requests
     AND from_section_id IN (SELECT my_section_ids())
   );
 
--- Only the creator can edit their own draft (not locked).
+-- Only the creator can edit their own draft (not locked), any time before
+-- a supervisor actually approves it — draft AND pending_approval both
+-- count, since "submitted for approval" isn't "approved" yet and staff
+-- routinely need to fix a typo or attachment while it's still waiting in
+-- someone's queue. Once approved, status becomes 'sent' (approveRequest
+-- sets is_locked = TRUE too), which no longer matches this USING clause
+-- at all, so edit access is cut off automatically at that point.
+-- WITH CHECK is explicit (not omitted) on purpose: submitRequest() is the
+-- one legitimate transition this policy must allow (draft -> pending_
+-- approval) — without an explicit WITH CHECK, Postgres reuses the USING
+-- expression, whose "status = 'draft'" would reject that exact update
+-- (the post-update row has status = 'pending_approval'), permanently
+-- breaking "Submit for Approval" for every non-supervisor creator. The
+-- WITH CHECK below still excludes 'sent'/'received'/etc, so this can
+-- never be used to self-approve by skipping requests_update_supervisor.
 CREATE POLICY "requests_update" ON requests
   FOR UPDATE USING (
     created_by = auth.uid()
     AND is_locked = FALSE
-    AND status   = 'draft'
+    AND status   IN ('draft', 'pending_approval')
+  )
+  WITH CHECK (
+    created_by = auth.uid()
+    AND is_locked = FALSE
+    AND status   IN ('draft', 'pending_approval')
   );
 
 -- Supervisors can update status + lock (approval workflow); admins can route.
@@ -531,11 +550,19 @@ CREATE POLICY "responses_insert" ON responses
     )
   );
 
+-- Symmetric to requests_update above — same reasoning for the widened
+-- status range and the explicit WITH CHECK (submitResponse() needs the
+-- same draft -> pending_approval transition to actually succeed).
 CREATE POLICY "responses_update" ON responses
   FOR UPDATE USING (
     created_by = auth.uid()
     AND is_locked = FALSE
-    AND status = 'draft'
+    AND status IN ('draft', 'pending_approval')
+  )
+  WITH CHECK (
+    created_by = auth.uid()
+    AND is_locked = FALSE
+    AND status IN ('draft', 'pending_approval')
   );
 
 CREATE POLICY "responses_update_supervisor" ON responses
