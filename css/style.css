@@ -1222,11 +1222,7 @@ p  { line-height: 1.6; }
 .detail-actions form.modal-form { width: 100%; }
 
 /* ── Conversation (multi-round-trip requests) ────────────────── */
-.conversation-divider {
-  border: none;
-  border-top: 1px dashed var(--color-border);
-  margin: 24px 0;
-}
+.followup-row { display: flex; }
 
 /* ── Rich Text Editor ─────────────────────────────────────────── */
 .rich-editor {
@@ -1339,8 +1335,97 @@ p  { line-height: 1.6; }
 .attachment-chip:hover { background: var(--color-primary-light); border-color: var(--color-primary); }
 .attachment-upload-btn { cursor: pointer; }
 
+/* ── Round sections (multi-round conversation grouping) ──────── */
+/* Each request/response round-trip renders inside one bordered
+   container so it's visually obvious where one round ends and the
+   next begins, instead of every round's panels stacking flat and
+   looking identical to each other. */
+.round-section {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg);
+  margin-bottom: 28px;
+  overflow: hidden;
+}
+.round-section:last-child { margin-bottom: 20px; }
+
+.round-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 20px;
+  background: var(--color-primary-light);
+  border-bottom: 1px solid var(--color-border);
+}
+.round-badge {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-primary);
+  background: var(--color-surface);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+}
+.round-header-meta { font-size: 0.8125rem; color: var(--color-text-muted); }
+
+.round-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  padding: 10px 20px;
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.round-section > .thread { margin: 16px 20px; }
+.round-section > .detail-actions-panel { margin: 0 20px 16px; }
+.round-section > .internal-collab-panel { margin: 0 20px 16px; }
+.round-section > .followup-row { margin: 0 20px 16px; }
+
 /* ── Internal Collaboration (org-only) ───────────────────────── */
-.internal-collab-panel { background: var(--color-bg); }
+/* A native <details>/<summary> disclosure — deliberately styled to
+   look nothing like the surrounding .thread-message/.panel boxes
+   (dashed border, muted background, lock icon) so it can never be
+   mistaken for part of the actual external request/response
+   conversation above it. */
+.internal-collab-panel {
+  background: var(--color-surface);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+}
+.internal-collab-panel summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 14px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.9375rem;
+  color: var(--color-text-muted);
+  list-style: none;
+}
+.internal-collab-panel summary::-webkit-details-marker { display: none; }
+.internal-collab-panel summary::before {
+  content: '';
+  width: 0; height: 0;
+  border-left: 5px solid var(--color-text-muted);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform var(--transition);
+  flex-shrink: 0;
+}
+.internal-collab-panel[open] summary::before { transform: rotate(90deg); }
+.internal-collab-body {
+  padding: 12px 14px 14px;
+  border-top: 1px dashed var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
 .internal-request-row {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
