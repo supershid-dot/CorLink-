@@ -7,6 +7,9 @@ const ChangePasswordView = {
 
     container.innerHTML = `
       <div class="login-bg">
+        <button class="icon-btn login-theme-toggle" id="theme-toggle-btn" data-theme-toggle title="Switch to dark theme" aria-label="Switch to dark theme">
+          <i class="ti ti-moon" data-theme-icon></i>
+        </button>
         <div class="login-card">
           <div class="login-brand">
             <img src="assets/logo.png" alt="${APP_NAME} logo" class="login-logo-img" />
@@ -86,6 +89,8 @@ const ChangePasswordView = {
   },
 
   bind() {
+    Theme.bindToggleButtons();
+
     const newPwInput  = document.getElementById('new-password');
     const confirmInput = document.getElementById('confirm-password');
     const form        = document.getElementById('change-pw-form');

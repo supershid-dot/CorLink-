@@ -75,6 +75,12 @@
   <script src="js/auth.js" defer></script>
   <script src="js/router.js" defer></script>
 
+  <!-- Lib — light/dark theme toggle. Self-initializes on load (sets
+       data-theme on <html> before the first real view renders) — see
+       js/lib/theme.js for why this doesn't need a separate inline
+       head script to avoid a flash of the wrong theme. -->
+  <script src="js/lib/theme.js" defer></script>
+
   <!-- Lib — dependency-free rich text editor + sanitizer (no CDN; a
        library would need a build step or a script tag this static
        site has no way to verify unattended). Loaded before the data
