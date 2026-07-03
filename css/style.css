@@ -669,6 +669,40 @@ p  { line-height: 1.6; }
 }
 .stat-note { font-size: 0.75rem; color: var(--color-text-light); }
 
+/* ── Action List (dashboard "Action Needed") ────────────────── */
+/* A denser row-per-item list rather than another grid of big square
+   stat-card tiles — reads better once there are 5-6 targeted counts
+   (Not Assigned, Response Not Started, Response Not Received, etc.)
+   than the stat-grid's tile format would at that quantity. */
+.action-list { display: flex; flex-direction: column; }
+.action-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 4px;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+  transition: background var(--transition);
+}
+.action-row:last-child { border-bottom: none; }
+.action-row:hover { background: var(--color-bg); }
+.action-row-icon {
+  font-size: 1.125rem;
+  color: var(--color-primary);
+  flex-shrink: 0;
+  width: 24px;
+  text-align: center;
+}
+.action-row-label { flex: 1; font-size: 0.9375rem; font-weight: 500; min-width: 0; }
+.action-row-count { flex-shrink: 0; }
+.action-row-chevron { color: var(--color-text-light); flex-shrink: 0; }
+.action-list-empty {
+  padding: 20px 4px;
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  text-align: center;
+}
+
 /* ── Responsive ─────────────────────────────────────────────── */
 @media (max-width: 640px) {
   .login-card { padding: 28px 20px; }
