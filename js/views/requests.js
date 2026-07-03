@@ -5,7 +5,10 @@
 // section's rows even though the same code path runs for everyone.
 
 const RequestsView = {
-  _state: { tab: 'inbox', inboxFilter: 'all', sentFilter: 'all' },
+  _state: {
+    tab: 'inbox', inboxFilter: 'all', sentFilter: 'all',
+    inboxSearch: '', sentSearch: '', approvalsSearch: '', infoSearch: '',
+  },
 
   async render(container, params = {}) {
     const user = Auth.getCachedProfile();
@@ -175,50 +178,120 @@ const RequestsView = {
     `;
   },
 
-  async _renderInbox(content) {
-    this._inboxItems = await RequestsAPI.listInbox(this._user.org_id);
-    this._renderInboxFiltered(content);
+  // ── Search (Inbox / Sent / Approvals / Info Requests) ────────────
+  // Plain case-insensitive substring match against subject + a
+  // tag-stripped copy of the body — works for Divehi search terms as
+  // well as English with no special-casing needed, since Thaana script
+  // has no case to fold and JS string methods are already Unicode-
+  // aware. Client-side over the tab's already-fetched list, same as
+  // the quick-filter chips, so typing never hits the network.
+  _stripHtml(html) {
+    return (html || '').replace(/<[^>]+>/g, ' ');
   },
 
-  _renderInboxFiltered(content) {
+  _matchesQuery(subject, body, query) {
+    if (!query) return true;
+    return `${subject || ''} ${this._stripHtml(body)}`.toLowerCase().includes(query);
+  },
+
+  // dir="auto" lets the browser flow the field RTL for a Divehi search
+  // term (first strong-directional character decides), with no JS and
+  // no language toggle needed — a search box has to accept either
+  // script in the same field, unlike compose forms.
+  _searchBoxHtml(name, placeholder, value = '') {
+    return `
+      <div class="search-box">
+        <i class="ti ti-search search-box-icon"></i>
+        <input type="search" class="search-box-input" data-search="${name}" placeholder="${placeholder}" value="${this._escapeHtml(value)}" dir="auto" />
+      </div>
+    `;
+  },
+
+  _bindSearchBox(container, stateKey, onChange) {
+    const input = container.querySelector(`[data-search="${stateKey}"]`);
+    if (!input) return;
+    let debounceTimer;
+    input.addEventListener('input', () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        this._state[stateKey] = input.value;
+        onChange();
+      }, 150);
+    });
+  },
+
+  _escapeHtml(value) {
+    const div = document.createElement('div');
+    div.textContent = value == null ? '' : String(value);
+    return div.innerHTML;
+  },
+
+  // The search box is rendered once per tab load (not on every
+  // chip-click/keystroke re-render) so typing never loses focus or
+  // cursor position — only the #inbox-results sub-container beneath
+  // it gets replaced when the search term or active chip changes.
+  async _renderInbox(content) {
+    this._inboxItems = await RequestsAPI.listInbox(this._user.org_id);
+    content.innerHTML = `
+      ${this._searchBoxHtml('inboxSearch', 'Search subject or message…', this._state.inboxSearch)}
+      <div id="inbox-results"></div>
+    `;
+    this._bindSearchBox(content, 'inboxSearch', () => this._renderInboxFiltered());
+    this._renderInboxFiltered();
+  },
+
+  _renderInboxFiltered() {
+    const resultsEl = document.getElementById('inbox-results');
+    if (!resultsEl) return;
     const items = this._inboxItems || [];
+    const query = (this._state.inboxSearch || '').trim().toLowerCase();
+    const searched = items.filter(r => this._matchesQuery(r.subject, r.body, query));
     const filters = this._inboxFilters();
     const active = filters.find(f => f.key === this._state.inboxFilter) || filters[0];
-    const filtered = items.filter(active.test);
-    content.innerHTML = `
-      ${this._filterChipsHtml(filters, items, active.key)}
+    const filtered = searched.filter(active.test);
+    resultsEl.innerHTML = `
+      ${this._filterChipsHtml(filters, searched, active.key)}
       ${this._listPanel(null, filtered, { orgCol: 'From', orgKey: 'from_org', allowReceive: this._canReceive })}
     `;
-    content.querySelectorAll('[data-filter]').forEach(btn => {
+    resultsEl.querySelectorAll('[data-filter]').forEach(btn => {
       btn.addEventListener('click', () => {
         this._state.inboxFilter = btn.dataset.filter;
-        this._renderInboxFiltered(content);
+        this._renderInboxFiltered();
       });
     });
-    this._bindListActions(content, filtered);
+    this._bindListActions(resultsEl, filtered);
   },
 
   async _renderSent(content) {
     this._sentItems = await RequestsAPI.listSent(this._user.org_id);
-    this._renderSentFiltered(content);
+    content.innerHTML = `
+      ${this._searchBoxHtml('sentSearch', 'Search subject or message…', this._state.sentSearch)}
+      <div id="sent-results"></div>
+    `;
+    this._bindSearchBox(content, 'sentSearch', () => this._renderSentFiltered());
+    this._renderSentFiltered();
   },
 
-  _renderSentFiltered(content) {
+  _renderSentFiltered() {
+    const resultsEl = document.getElementById('sent-results');
+    if (!resultsEl) return;
     const items = this._sentItems || [];
+    const query = (this._state.sentSearch || '').trim().toLowerCase();
+    const searched = items.filter(r => this._matchesQuery(r.subject, r.body, query));
     const filters = this._sentFilters();
     const active = filters.find(f => f.key === this._state.sentFilter) || filters[0];
-    const filtered = items.filter(active.test);
-    content.innerHTML = `
-      ${this._filterChipsHtml(filters, items, active.key)}
+    const filtered = searched.filter(active.test);
+    resultsEl.innerHTML = `
+      ${this._filterChipsHtml(filters, searched, active.key)}
       ${this._listPanel(null, filtered, { orgCol: 'To', orgKey: 'to_org' })}
     `;
-    content.querySelectorAll('[data-filter]').forEach(btn => {
+    resultsEl.querySelectorAll('[data-filter]').forEach(btn => {
       btn.addEventListener('click', () => {
         this._state.sentFilter = btn.dataset.filter;
-        this._renderSentFiltered(content);
+        this._renderSentFiltered();
       });
     });
-    this._bindListActions(content, filtered);
+    this._bindListActions(resultsEl, filtered);
   },
 
   // Two independent queues: requests I created that need MY org's
@@ -231,17 +304,33 @@ const RequestsView = {
       RequestsAPI.listPendingApprovals(this._user.org_id),
       RequestsAPI.listPendingResponseApprovals(this._user.org_id),
     ]);
+    this._approvalsData = { requestApprovals, responseApprovals };
     content.innerHTML = `
+      ${this._searchBoxHtml('approvalsSearch', 'Search subject or message…', this._state.approvalsSearch)}
+      <div id="approvals-results"></div>
+    `;
+    this._bindSearchBox(content, 'approvalsSearch', () => this._renderApprovalsFiltered());
+    this._renderApprovalsFiltered();
+  },
+
+  _renderApprovalsFiltered() {
+    const resultsEl = document.getElementById('approvals-results');
+    if (!resultsEl) return;
+    const { requestApprovals = [], responseApprovals = [] } = this._approvalsData || {};
+    const query = (this._state.approvalsSearch || '').trim().toLowerCase();
+    const filteredRequests = requestApprovals.filter(r => this._matchesQuery(r.subject, r.body, query));
+    const filteredResponses = responseApprovals.filter(resp => this._matchesQuery(resp.request?.subject, resp.body, query));
+    resultsEl.innerHTML = `
       <div class="queue-group">
-        <div class="queue-group-title"><i class="ti ti-file-check"></i> Requests Awaiting Your Approval <span class="badge badge-outline">${requestApprovals.length}</span></div>
-        ${this._listPanel(null, requestApprovals, { orgCol: 'To', orgKey: 'to_org' })}
+        <div class="queue-group-title"><i class="ti ti-file-check"></i> Requests Awaiting Your Approval <span class="badge badge-outline">${filteredRequests.length}</span></div>
+        ${this._listPanel(null, filteredRequests, { orgCol: 'To', orgKey: 'to_org' })}
       </div>
       <div class="queue-group">
-        <div class="queue-group-title"><i class="ti ti-message-check"></i> Responses Awaiting Your Approval <span class="badge badge-outline">${responseApprovals.length}</span></div>
-        ${this._responseApprovalPanel(responseApprovals)}
+        <div class="queue-group-title"><i class="ti ti-message-check"></i> Responses Awaiting Your Approval <span class="badge badge-outline">${filteredResponses.length}</span></div>
+        ${this._responseApprovalPanel(filteredResponses)}
       </div>
     `;
-    this._bindListActions(content, requestApprovals);
+    this._bindListActions(resultsEl, filteredRequests);
   },
 
   _responseApprovalPanel(items) {
@@ -275,11 +364,26 @@ const RequestsView = {
   // open (see InternalRequestsAPI.listOutstandingForSections).
   async _renderInfoRequests(content) {
     const sectionIds = (this._mySections || []).map(s => s.id);
-    const items = await InternalRequestsAPI.listOutstandingForSections(sectionIds);
-    const mySet = new Set(sectionIds);
-    const awaitingMyReply = items.filter(ir => mySet.has(ir.to_section_id));
-    const awaitingTheirReply = items.filter(ir => mySet.has(ir.from_section_id) && !mySet.has(ir.to_section_id));
+    this._infoRequestItems = await InternalRequestsAPI.listOutstandingForSections(sectionIds);
     content.innerHTML = `
+      ${this._searchBoxHtml('infoSearch', 'Search subject or message…', this._state.infoSearch)}
+      <div id="info-results"></div>
+    `;
+    this._bindSearchBox(content, 'infoSearch', () => this._renderInfoRequestsFiltered());
+    this._renderInfoRequestsFiltered();
+  },
+
+  _renderInfoRequestsFiltered() {
+    const resultsEl = document.getElementById('info-results');
+    if (!resultsEl) return;
+    const items = this._infoRequestItems || [];
+    const sectionIds = (this._mySections || []).map(s => s.id);
+    const mySet = new Set(sectionIds);
+    const query = (this._state.infoSearch || '').trim().toLowerCase();
+    const searched = items.filter(ir => this._matchesQuery(ir.subject, ir.body, query));
+    const awaitingMyReply = searched.filter(ir => mySet.has(ir.to_section_id));
+    const awaitingTheirReply = searched.filter(ir => mySet.has(ir.from_section_id) && !mySet.has(ir.to_section_id));
+    resultsEl.innerHTML = `
       <div class="queue-group">
         <div class="queue-group-title"><i class="ti ti-message-question"></i> Awaiting Your Section's Reply <span class="badge badge-outline">${awaitingMyReply.length}</span></div>
         ${this._infoRequestPanel(awaitingMyReply)}
