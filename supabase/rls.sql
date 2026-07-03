@@ -255,6 +255,57 @@ CREATE POLICY "users_select_own" ON users
 CREATE POLICY "users_select_same_org" ON users
   FOR SELECT USING (org_id = get_my_org_id());
 
+-- Cross-org: correspondence UI (Requests, Prisoner Letters) shows WHO
+-- on the OTHER side submitted/approved/received/was assigned something
+-- — e.g. "Received by [Name], [Designation]" already assumes this
+-- works. Without it, PostgREST's embedded resource join silently
+-- returns null for a cross-org user (RLS applies to embedded resources
+-- too, not just the top-level query), which is what showed as
+-- "Unknown"/blank names even though the parent request/response/
+-- approval row itself was correctly visible. Scoped narrowly: only a
+-- user who is genuinely named on a record the viewer can already see
+-- via that record's own SELECT policy, not general cross-org directory
+-- access — mirrors the same from_org_id/to_org_id membership check
+-- requests_select/responses_select/prisoner_letters_select already use.
+CREATE POLICY "users_select_correspondence" ON users
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM requests r
+      WHERE (r.created_by = users.id OR r.assigned_to = users.id OR r.received_by = users.id)
+        AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
+    )
+    OR EXISTS (
+      SELECT 1 FROM responses resp JOIN requests r ON r.id = resp.request_id
+      WHERE (resp.created_by = users.id OR resp.received_by = users.id)
+        AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
+    )
+    OR EXISTS (
+      SELECT 1 FROM approvals a
+      WHERE a.reviewed_by = users.id
+        AND (
+          (a.record_type = 'request' AND EXISTS (
+            SELECT 1 FROM requests r2 WHERE r2.id = a.record_id
+              AND (r2.from_org_id = get_my_org_id() OR r2.to_org_id = get_my_org_id())
+          ))
+          OR (a.record_type = 'response' AND EXISTS (
+            SELECT 1 FROM responses resp2 JOIN requests r3 ON r3.id = resp2.request_id
+            WHERE resp2.id = a.record_id
+              AND (r3.from_org_id = get_my_org_id() OR r3.to_org_id = get_my_org_id())
+          ))
+        )
+    )
+    OR EXISTS (
+      SELECT 1 FROM prisoner_letters pl
+      WHERE (pl.submitted_by = users.id OR pl.assigned_to = users.id)
+        AND (pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
+    )
+    OR EXISTS (
+      SELECT 1 FROM prisoner_replies pr JOIN prisoner_letters pl2 ON pl2.id = pr.letter_id
+      WHERE pr.replied_by = users.id
+        AND (pl2.from_prison_id = get_my_org_id() OR pl2.to_org_id = get_my_org_id())
+    )
+  );
+
 CREATE POLICY "users_insert" ON users
   FOR INSERT WITH CHECK (
     is_super_admin() OR
