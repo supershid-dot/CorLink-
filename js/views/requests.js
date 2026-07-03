@@ -35,6 +35,20 @@ const RequestsView = {
     if (this._state.tab === 'approvals' && !this._isSupervisor) this._state.tab = 'inbox';
     if (this._state.tab === 'info' && this._mySections.length === 0) this._state.tab = 'inbox';
 
+    // Deep-links from the dashboard's Action Needed cards, e.g.
+    // #requests?tab=inbox&filter=not_assigned — validated against the
+    // actual filter keys for whichever tab we landed on so a stale/
+    // garbage query param can't silently select a chip that isn't
+    // there (falls back to 'all', same as an unrecognized filter key
+    // already does in _renderInboxFiltered/_renderSentFiltered).
+    if (params.filter) {
+      if (this._state.tab === 'inbox' && this._inboxFilters().some(f => f.key === params.filter)) {
+        this._state.inboxFilter = params.filter;
+      } else if (this._state.tab === 'sent' && this._sentFilters().some(f => f.key === params.filter)) {
+        this._state.sentFilter = params.filter;
+      }
+    }
+
     container.innerHTML = this._shell();
     this._bindShell();
     await this._renderTab();
