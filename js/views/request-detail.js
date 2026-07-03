@@ -367,12 +367,9 @@ const RequestDetailView = {
   _composeResponseHtml(requestId) {
     return `
       <form class="modal-form response-form" data-response-form="${requestId}">
-        <div class="field-group">
+        <div class="field-group field-group-row">
           <label class="field-label">Draft a Response</label>
-          <select class="field-select response-language" name="language">
-            <option value="en">English</option>
-            <option value="dv">Dhivehi</option>
-          </select>
+          ${RichEditor.langToggleHtml('language', 'en')}
         </div>
         <div class="field-group">
           <div class="response-body"></div>
@@ -390,7 +387,7 @@ const RequestDetailView = {
     main.querySelectorAll('.response-form').forEach(form => {
       const requestId = form.dataset.responseForm;
       const editor = RichEditor.create(form.querySelector('.response-body'), { language: 'en' });
-      form.querySelector('.response-language').addEventListener('change', (e) => editor.setLanguage(e.target.value));
+      RichEditor.bindLangToggle(form, (lang) => editor.setLanguage(lang));
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
         const fd = new FormData(form);
@@ -518,9 +515,12 @@ const RequestDetailView = {
     this._openModal(`
       <h3>${title}</h3>
       <form id="comment-form" class="modal-form">
-        <div class="field-group">
+        <div class="field-group field-group-row">
           <label class="field-label">Comment${required ? '' : ' (optional)'}</label>
-          <textarea class="field-input-plain" name="comment" rows="4" ${required ? 'required placeholder="Explain what needs to change"' : ''}></textarea>
+          ${RichEditor.langToggleHtml('language', 'en')}
+        </div>
+        <div class="field-group">
+          <textarea class="field-input-plain" name="comment" id="comment-textarea" rows="4" ${required ? 'required placeholder="Explain what needs to change"' : ''}></textarea>
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
@@ -530,6 +530,8 @@ const RequestDetailView = {
       </form>
     `);
     const form = document.getElementById('comment-form');
+    const commentTextarea = document.getElementById('comment-textarea');
+    RichEditor.bindLangToggle(form, (lang) => commentTextarea.classList.toggle('field-divehi', lang === 'dv'));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
@@ -658,16 +660,13 @@ const RequestDetailView = {
             ${sections.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
           </select>
         </div>` : `<input type="hidden" name="fromSectionId" value="${sections[0].id}" />`}
-        <div class="field-group">
-          <label class="field-label">Subject</label>
-          <input class="field-input-plain" name="subject" required value="Re: ${r.subject}" />
+        <div class="field-group field-group-row">
+          <label class="field-label">Language</label>
+          ${RichEditor.langToggleHtml('language', 'en')}
         </div>
         <div class="field-group">
-          <label class="field-label">Language</label>
-          <select class="field-select" name="language" id="followup-language">
-            <option value="en">English</option>
-            <option value="dv">Dhivehi</option>
-          </select>
+          <label class="field-label">Subject</label>
+          <input class="field-input-plain" name="subject" id="followup-subject" required value="Re: ${r.subject}" />
         </div>
         <div class="field-group">
           <label class="field-label">Message</label>
@@ -684,9 +683,13 @@ const RequestDetailView = {
         </div>
       </form>
     `);
-    const editor = RichEditor.create(document.getElementById('followup-body'), { language: 'en' });
-    document.getElementById('followup-language').addEventListener('change', (e) => editor.setLanguage(e.target.value));
     const form = document.getElementById('followup-form');
+    const editor = RichEditor.create(document.getElementById('followup-body'), { language: 'en' });
+    const followupSubject = document.getElementById('followup-subject');
+    RichEditor.bindLangToggle(form, (lang) => {
+      editor.setLanguage(lang);
+      followupSubject.classList.toggle('field-divehi', lang === 'dv');
+    });
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
@@ -740,9 +743,13 @@ const RequestDetailView = {
             ${sections.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
           </select>
         </div>
+        <div class="field-group field-group-row">
+          <label class="field-label">Language</label>
+          ${RichEditor.langToggleHtml('language', 'en')}
+        </div>
         <div class="field-group">
           <label class="field-label">Subject</label>
-          <input class="field-input-plain" name="subject" required />
+          <input class="field-input-plain" name="subject" id="internal-subject" required />
         </div>
         <div class="field-group">
           <label class="field-label">Message</label>
@@ -755,8 +762,13 @@ const RequestDetailView = {
         </div>
       </form>
     `);
-    const editor = RichEditor.create(document.getElementById('internal-body'), { language: 'en' });
     const form = document.getElementById('internal-form');
+    const editor = RichEditor.create(document.getElementById('internal-body'), { language: 'en' });
+    const internalSubject = document.getElementById('internal-subject');
+    RichEditor.bindLangToggle(form, (lang) => {
+      editor.setLanguage(lang);
+      internalSubject.classList.toggle('field-divehi', lang === 'dv');
+    });
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
@@ -770,7 +782,7 @@ const RequestDetailView = {
       try {
         await InternalRequestsAPI.create({
           parentRequestId, fromSectionId, toSectionId: fd.get('toSectionId'),
-          subject: fd.get('subject'), body, language: 'en',
+          subject: fd.get('subject'), body, language: fd.get('language'),
         });
         this._closeModal();
         await this._load();

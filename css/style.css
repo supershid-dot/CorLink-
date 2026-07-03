@@ -825,6 +825,47 @@ p  { line-height: 1.6; }
   width: 100%;
 }
 .field-input-plain:focus { border-color: var(--color-border-focus); box-shadow: 0 0 0 3px rgba(26,122,110,.15); }
+/* Multi-line fields only — a single-line <input> sharing this class
+   (e.g. Subject) has no meaningful way to resize. Vertical-only so
+   dragging can't widen a field past its form and break the layout. */
+textarea.field-input-plain { resize: vertical; min-height: 90px; }
+
+/* Label + toggle on one row, e.g. "Language" ... EN | ދިވެހި — mirrors
+   field-group's own gap so it drops into the same form layouts. */
+.field-group-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.field-group-row .field-label { margin: 0; }
+
+/* Segmented pill toggle — replaces a <select> for the common two-option
+   case (EN / Dhivehi). A hidden input keeps the selected value under
+   the same `name` a plain <select> would have used, so existing
+   FormData-based submit handlers don't need to change. */
+.lang-toggle {
+  display: inline-flex;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  padding: 3px;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.lang-toggle-btn {
+  padding: 5px 14px;
+  border-radius: var(--radius-full);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  transition: background var(--transition), color var(--transition);
+}
+.lang-toggle-btn--active {
+  background: var(--color-primary);
+  color: #fff;
+}
 
 /* ── Panel ───────────────────────────────────────────────────── */
 .panel {
@@ -1286,13 +1327,16 @@ p  { line-height: 1.6; }
 }
 .rich-editor-body {
   min-height: 140px;
-  max-height: 420px;
+  max-height: 640px;
   overflow-y: auto;
   padding: 10px 12px;
   font-size: 0.9375rem;
   line-height: 1.6;
   color: var(--color-text);
   outline: none;
+  /* `resize` isn't exclusive to <textarea> — any block box with
+     overflow other than visible gets the native drag handle. */
+  resize: vertical;
 }
 .rich-editor-body:focus { background: var(--color-surface); }
 .rich-editor-body p, .rich-editor-body ul, .rich-editor-body ol, .rich-editor-body table { margin-bottom: 10px; }

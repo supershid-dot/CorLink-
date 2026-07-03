@@ -242,16 +242,13 @@ const RequestsView = {
             ${sections.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
           </select>
         </div>` : `<input type="hidden" name="fromSectionId" value="${sections[0].id}" />`}
-        <div class="field-group">
-          <label class="field-label">Subject</label>
-          <input class="field-input-plain" name="subject" required />
+        <div class="field-group field-group-row">
+          <label class="field-label">Language</label>
+          ${RichEditor.langToggleHtml('language', 'en')}
         </div>
         <div class="field-group">
-          <label class="field-label">Language</label>
-          <select class="field-select" name="language" id="compose-language">
-            <option value="en">English</option>
-            <option value="dv">Dhivehi</option>
-          </select>
+          <label class="field-label">Subject</label>
+          <input class="field-input-plain" name="subject" id="compose-subject" required />
         </div>
         <div class="field-group">
           <label class="field-label">Message</label>
@@ -269,12 +266,14 @@ const RequestsView = {
       </form>
     `);
 
+    const form = document.getElementById('compose-form');
     const editor = RichEditor.create(document.getElementById('compose-body'), { language: 'en' });
-    document.getElementById('compose-language').addEventListener('change', (e) => {
-      editor.setLanguage(e.target.value);
+    const subjectInput = document.getElementById('compose-subject');
+    RichEditor.bindLangToggle(form, (lang) => {
+      editor.setLanguage(lang);
+      subjectInput.classList.toggle('field-divehi', lang === 'dv');
     });
 
-    const form = document.getElementById('compose-form');
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
