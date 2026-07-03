@@ -31,6 +31,9 @@ match what changed since, instead of re-running the full files:
   section-to-section collaboration, conversation threading, assigned_receiver
   permissions — run this AND re-run `supabase/storage-policies.sql` (it now also
   covers the `attachments` bucket, which needs creating first — see step 5 below)
+- `supabase/patch-cross-org-names.sql` — lets a user resolve the name/designation of
+  someone in the OTHER organization on a request/response/approval/prisoner letter
+  they can already see (fixes names showing as "Unknown")
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 
