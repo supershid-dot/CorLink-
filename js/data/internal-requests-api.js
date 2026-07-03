@@ -37,6 +37,32 @@ const InternalRequestsAPI = (() => {
       return data;
     },
 
+    // Every open internal request touching one of my sections, across
+    // ALL parent requests — the "Information Requests" quick-filter
+    // queue, so a section doesn't have to remember which case it asked
+    // (or was asked) for supporting info and go re-open each one to
+    // check. list()/listReplies() above are scoped to one parent
+    // request at a time (the conversation view); this is the flat,
+    // cross-case version. 'sent'/'received' are the two not-yet-
+    // answered states (see the status flow note at the top of this
+    // file) — 'responded'/'closed' are excluded since those are done.
+    async listOutstandingForSections(sectionIds) {
+      if (!sectionIds || sectionIds.length === 0) return [];
+      const db = getSupabase();
+      const { data, error } = await db.from('internal_requests')
+        .select(`
+          *,
+          from_section:sections!internal_requests_from_section_id_fkey(name, code),
+          to_section:sections!internal_requests_to_section_id_fkey(name, code),
+          parent_request:requests!internal_requests_parent_request_id_fkey(id, subject, reference_number)
+        `)
+        .or(`from_section_id.in.(${sectionIds.join(',')}),to_section_id.in.(${sectionIds.join(',')})`)
+        .in('status', ['sent', 'received'])
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      return data;
+    },
+
     async listReplies(internalRequestId) {
       const db = getSupabase();
       const { data, error } = await db.from('internal_request_replies')
