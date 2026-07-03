@@ -78,19 +78,36 @@ const RequestDetailView = {
 
   _renderContent() {
     const root = this._conversation[0].request;
+    const multiRound = this._conversation.length > 1;
     return `
       <div class="detail-header">
         <a href="#requests" class="btn btn-secondary btn-sm"><i class="ti ti-arrow-left"></i> Back</a>
         <div class="detail-header-title">
           <h2 class="page-title">${root.subject}</h2>
-          ${this._conversation.length > 1 ? `<span class="badge badge-outline">${this._conversation.length} round-trips</span>` : ''}
+          ${multiRound ? `<span class="badge badge-outline">${this._conversation.length} round-trips</span>` : ''}
         </div>
       </div>
-      ${this._conversation.map((entry, i) => this._renderRequestBlock(entry, i)).join('<hr class="conversation-divider" />')}
+
+      <div class="panel detail-meta-panel">
+        <div class="detail-meta">
+          <div><span class="detail-meta-label">From</span><span>${root.from_org?.name || ''}${root.from_section ? ' — ' + root.from_section.name : ''}</span></div>
+          <div><span class="detail-meta-label">To</span><span>${root.to_org?.name || ''}</span></div>
+          <div><span class="detail-meta-label">Submitted by</span><span>${root.created_by_user?.full_name || ''}</span></div>
+          <div><span class="detail-meta-label">Started</span><span>${new Date(root.created_at).toLocaleString()}</span></div>
+        </div>
+      </div>
+
+      ${this._conversation.map((entry, i) => this._renderRequestBlock(entry, i, multiRound)).join('')}
     `;
   },
 
-  _renderRequestBlock(entry, index) {
+  // Each round-trip renders inside ONE bordered .round-section wrapper —
+  // previously every round's meta/thread/actions/internal-collab panel
+  // looked identical and just stacked flat, one after another, which is
+  // exactly what made a multi-round conversation hard to read: nothing
+  // signaled where one round ended and the next began, or which
+  // Actions/Internal Collaboration panel belonged to which round.
+  _renderRequestBlock(entry, index, multiRound) {
     const r = entry.request;
     const user = this._user;
     const isFromOrgMember = user.org_id === r.from_org_id;
@@ -101,47 +118,52 @@ const RequestDetailView = {
     const isLast = index === this._conversation.length - 1;
 
     return `
-      <div class="panel detail-meta-panel">
-        ${index > 0 ? `<div class="field-hint">Follow-up request</div>` : ''}
-        <div class="detail-meta">
-          <div><span class="detail-meta-label">Reference</span><span>${r.reference_number || '<span class="structure-empty">Not yet assigned</span>'}</span></div>
-          <div><span class="detail-meta-label">Status</span><span>${RequestsView._statusBadge(r.status, r.deadline)}</span></div>
-          <div><span class="detail-meta-label">From</span><span>${r.from_org?.name || ''}${r.from_section ? ' — ' + r.from_section.name : ''}</span></div>
-          <div><span class="detail-meta-label">To</span><span>${r.to_org?.name || ''}${r.to_section ? ' — ' + r.to_section.name : '<span class="structure-empty"> Not yet routed</span>'}</span></div>
-          <div><span class="detail-meta-label">Assigned to</span><span>${r.assigned_to_user?.full_name || '<span class="structure-empty">Unassigned</span>'}</span></div>
-          <div><span class="detail-meta-label">Deadline</span><span>${r.deadline || '—'}</span></div>
-          <div><span class="detail-meta-label">Submitted by</span><span>${r.created_by_user?.full_name || ''}</span></div>
-          <div><span class="detail-meta-label">Created</span><span>${new Date(r.created_at).toLocaleString()}</span></div>
-        </div>
-      </div>
-
-      <div class="thread">
-        <div class="thread-message thread-message--request">
-          <div class="thread-message-header">
-            <strong>${r.created_by_user?.full_name || 'Unknown'}</strong>
-            <span class="structure-empty">${new Date(r.created_at).toLocaleString()}</span>
+      <div class="round-section">
+        ${multiRound ? `
+          <div class="round-header">
+            <span class="round-badge">Round ${index + 1}</span>
+            ${RequestsView._statusBadge(r.status, r.deadline)}
+            ${r.reference_number ? `<span class="round-header-meta">${r.reference_number}</span>` : ''}
+            ${r.deadline ? `<span class="round-header-meta">Due ${r.deadline}</span>` : ''}
           </div>
-          <div class="thread-message-body${r.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(r.body)}</div>
-          ${this._renderReceipt(r)}
+        ` : ''}
+
+        <div class="round-meta-row">
+          ${!multiRound ? `<span>${RequestsView._statusBadge(r.status, r.deadline)}</span>` : ''}
+          ${!multiRound && r.reference_number ? `<span class="structure-empty">${r.reference_number}</span>` : ''}
+          <span class="structure-empty">${r.to_section ? 'Routed to ' + r.to_section.name : 'Not yet routed'}</span>
+          <span class="structure-empty">Assigned: ${r.assigned_to_user?.full_name || 'Unassigned'}</span>
+          ${!multiRound && r.deadline ? `<span class="structure-empty">Due ${r.deadline}</span>` : ''}
         </div>
 
-        ${this._renderApprovalHistory(entry.approvals)}
-        ${this._renderAttachments('request', r.id, entry.attachments, ctx.isFromOrgMember || ctx.isToOrgMember)}
+        <div class="thread">
+          <div class="thread-message thread-message--request">
+            <div class="thread-message-header">
+              <strong>${r.created_by_user?.full_name || 'Unknown'}</strong>
+              <span class="structure-empty">${new Date(r.created_at).toLocaleString()}</span>
+            </div>
+            <div class="thread-message-body${r.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(r.body)}</div>
+            ${this._renderReceipt(r)}
+          </div>
 
-        ${entry.responseDetails.map(rd => this._renderResponse(rd, r)).join('')}
-      </div>
+          ${this._renderApprovalHistory(entry.approvals)}
+          ${this._renderAttachments('request', r.id, entry.attachments, ctx.isFromOrgMember || ctx.isToOrgMember)}
 
-      <div class="detail-actions-panel" data-request-block="${r.id}">
-        ${this._renderActions(r, ctx, entry)}
-      </div>
-
-      ${this._renderInternalCollab(entry)}
-
-      ${isLast && ['responded', 'closed'].includes(r.status) && isFromOrgMember ? `
-        <div class="panel">
-          <button class="btn btn-secondary btn-sm" data-send-followup="${r.id}"><i class="ti ti-message-plus"></i> Send Further Information</button>
+          ${entry.responseDetails.map(rd => this._renderResponse(rd, r)).join('')}
         </div>
-      ` : ''}
+
+        <div class="detail-actions-panel" data-request-block="${r.id}">
+          ${this._renderActions(r, ctx, entry)}
+        </div>
+
+        ${this._renderInternalCollab(entry)}
+
+        ${isLast && ['responded', 'closed'].includes(r.status) && isFromOrgMember ? `
+          <div class="followup-row">
+            <button class="btn btn-secondary btn-sm" data-send-followup="${r.id}"><i class="ti ti-message-plus"></i> Send Further Information</button>
+          </div>
+        ` : ''}
+      </div>
     `;
   },
 
@@ -228,15 +250,24 @@ const RequestDetailView = {
     const canStart = isToOrgMember && (inMySections || this._isSupervisor);
     if (entry.internalRequestDetails.length === 0 && !canStart) return '';
 
+    // Deliberately visually distinct from the external thread above it
+    // (muted background, dashed border, lock badge) so it never reads
+    // as part of the actual request/response conversation — and
+    // collapsed by default when there's nothing to catch up on yet, so
+    // an empty "Internal Collaboration" panel doesn't compete for
+    // attention with the real thread on every single round.
     return `
-      <div class="panel internal-collab-panel">
-        <div class="panel-header">
-          <h3><i class="ti ti-users-group"></i> Internal Collaboration</h3>
+      <details class="internal-collab-panel" ${entry.internalRequestDetails.length > 0 ? 'open' : ''}>
+        <summary>
+          <i class="ti ti-lock"></i> Internal Collaboration
+          <span class="badge badge-muted">Not visible to ${r.from_org?.name || 'the other organization'}</span>
+          ${entry.internalRequestDetails.length > 0 ? `<span class="badge badge-outline">${entry.internalRequestDetails.length}</span>` : ''}
+        </summary>
+        <div class="internal-collab-body">
           ${canStart ? `<button class="btn btn-secondary btn-sm" data-new-internal="${r.id}">Loop in a Section</button>` : ''}
+          ${entry.internalRequestDetails.map(ird => this._renderInternalRequestRow(ird)).join('') || '<p class="structure-empty">Nothing here yet.</p>'}
         </div>
-        <div class="field-hint">Org-only — the other organization in this conversation never sees this.</div>
-        ${entry.internalRequestDetails.map(ird => this._renderInternalRequestRow(ird)).join('') || '<p class="structure-empty">Nothing here yet.</p>'}
-      </div>
+      </details>
     `;
   },
 
