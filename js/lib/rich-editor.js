@@ -217,5 +217,38 @@ const RichEditor = (() => {
         destroy() { containerEl.innerHTML = ''; },
       };
     },
+
+    // A segmented EN/Dhivehi pill, replacing a plain <select> for the
+    // language choice everywhere it appears (compose/reply forms,
+    // comment modals). Ships a hidden input under `name` so existing
+    // `new FormData(form).get(name)` submit handlers don't need to
+    // change at all — only the control surface changed.
+    langToggleHtml(name = 'language', current = 'en') {
+      return `
+        <div class="lang-toggle" data-lang-toggle="${name}">
+          <input type="hidden" name="${name}" value="${current}" />
+          <button type="button" class="lang-toggle-btn${current === 'en' ? ' lang-toggle-btn--active' : ''}" data-value="en">EN</button>
+          <button type="button" class="lang-toggle-btn${current === 'dv' ? ' lang-toggle-btn--active' : ''}" data-value="dv">ދިވެހި</button>
+        </div>
+      `;
+    },
+
+    // Wires a langToggleHtml() instance found within `container`.
+    // onChange(lang) fires on every click — callers use it to flip
+    // .field-divehi on plain inputs/textareas and/or call a
+    // RichEditor instance's own setLanguage().
+    bindLangToggle(container, onChange) {
+      const toggle = container.querySelector('[data-lang-toggle]');
+      if (!toggle) return;
+      const hidden = toggle.querySelector('input[type="hidden"]');
+      toggle.querySelectorAll('.lang-toggle-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const value = btn.dataset.value;
+          hidden.value = value;
+          toggle.querySelectorAll('.lang-toggle-btn').forEach(b => b.classList.toggle('lang-toggle-btn--active', b === btn));
+          onChange(value);
+        });
+      });
+    },
   };
 })();
