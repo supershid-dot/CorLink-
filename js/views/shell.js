@@ -79,6 +79,9 @@ const AppShell = {
           ${admin ? link('admin', 'Admin') : ''}
         </nav>
         <div class="topbar-actions">
+          <button class="icon-btn" id="theme-toggle-btn" data-theme-toggle title="Switch to dark theme" aria-label="Switch to dark theme">
+            <i class="ti ti-moon" data-theme-icon></i>
+          </button>
           <div class="notif-wrap">
             <button class="icon-btn notif-btn" id="notif-btn" title="Notifications">
               <i class="ti ti-bell"></i>
@@ -143,6 +146,8 @@ const AppShell = {
   },
 
   bindTopbar() {
+    Theme.bindToggleButtons();
+
     const menuBtn = document.getElementById('user-menu-btn');
 
     // menuBtn/sign-out-btn are recreated (and their old listeners

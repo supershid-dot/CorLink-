@@ -11,6 +11,9 @@ const LoginView = {
 
     container.innerHTML = `
       <div class="login-bg">
+        <button class="icon-btn login-theme-toggle" id="theme-toggle-btn" data-theme-toggle title="Switch to dark theme" aria-label="Switch to dark theme">
+          <i class="ti ti-moon" data-theme-icon></i>
+        </button>
         <div class="login-card">
           <div class="login-brand">
             <img src="assets/logo.png" alt="${APP_NAME} logo" class="login-logo-img" />
@@ -75,6 +78,8 @@ const LoginView = {
   },
 
   bind(params = {}) {
+    Theme.bindToggleButtons();
+
     const form       = document.getElementById('login-form');
     const snInput    = document.getElementById('service-number');
     const pwInput    = document.getElementById('password');

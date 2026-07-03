@@ -44,7 +44,9 @@
   --transition: 150ms ease;
 }
 
-/* Dark mode */
+/* Dark mode — OS-level default for anyone who hasn't picked a theme
+   explicitly (js/lib/theme.js hasn't written to localStorage yet, so
+   it re-derives from this media query on every load). */
 @media (prefers-color-scheme: dark) {
   :root {
     --color-text:       #F9FAFB;
@@ -61,6 +63,31 @@
   .login-logo-img, .topbar-logo-crop img {
     filter: drop-shadow(0 0 1px rgba(255,255,255,.5)) drop-shadow(0 0 5px rgba(255,255,255,.15));
   }
+}
+
+/* Explicit theme choice via the toggle button (js/lib/theme.js sets
+   data-theme on <html>, persisted in localStorage). An attribute
+   selector is more specific than the plain `:root` inside the media
+   query above, so these win either direction regardless of source
+   order — picking Light while the OS is set to dark works correctly,
+   and vice versa. */
+:root[data-theme="dark"] {
+  --color-text:       #F9FAFB;
+  --color-text-muted: #9CA3AF;
+  --color-border:     #374151;
+  --color-bg:         #111827;
+  --color-surface:    #1F2937;
+}
+:root[data-theme="dark"] .login-logo-img,
+:root[data-theme="dark"] .topbar-logo-crop img {
+  filter: drop-shadow(0 0 1px rgba(255,255,255,.5)) drop-shadow(0 0 5px rgba(255,255,255,.15));
+}
+:root[data-theme="light"] {
+  --color-text:          #111827;
+  --color-text-muted:    #6B7280;
+  --color-border:        #E5E7EB;
+  --color-bg:            #F9FAFB;
+  --color-surface:       #FFFFFF;
 }
 
 /* ── Reset ─────────────────────────────────────────────────── */
@@ -274,12 +301,32 @@ p  { line-height: 1.6; }
 
 /* ── Login Layout ────────────────────────────────────────────── */
 .login-bg {
+  position: relative;
   min-height: 100vh;
   background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-secondary) 100%);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 24px 16px;
+}
+
+/* Sits on the gradient, not the white card — .icon-btn's default
+   muted-gray coloring would be nearly invisible there, so this
+   overrides to a translucent white pill instead. A subtle border adds
+   edge definition independent of the underlying gradient color, since
+   the fill alone hovers close to WCAG's 3:1 floor for UI components
+   at the teal end of the gradient. */
+.login-theme-toggle {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.22);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+}
+.login-theme-toggle:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.35);
+  color: #fff;
 }
 
 .login-card {
