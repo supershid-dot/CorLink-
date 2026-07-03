@@ -5,7 +5,7 @@
 // section's rows even though the same code path runs for everyone.
 
 const RequestsView = {
-  _state: { tab: 'inbox' },
+  _state: { tab: 'inbox', inboxFilter: 'all', sentFilter: 'all' },
 
   async render(container, params = {}) {
     const user = Auth.getCachedProfile();
@@ -17,14 +17,23 @@ const RequestsView = {
     // inbox — mirrors requests_select_assigned_receiver/
     // requests_update_assigned_receiver in supabase/rls.sql.
     this._canReceive = this._isSupervisor || AppShell.hasRole(user, 'assigned_receiver');
+    // Gates the Info Requests tab — someone with no section assignment
+    // yet has never been able to send/receive an internal request.
+    try {
+      this._mySections = await RequestsAPI.mySections();
+    } catch (err) {
+      console.error('CorLink: failed to load my sections', err);
+      this._mySections = [];
+    }
 
-    const validTabs = ['inbox', 'sent', 'approvals'];
+    const validTabs = ['inbox', 'sent', 'approvals', 'info'];
     if (params.tab && validTabs.includes(params.tab)) {
       this._state.tab = params.tab;
     } else if (!this._state.tab) {
       this._state.tab = 'inbox';
     }
     if (this._state.tab === 'approvals' && !this._isSupervisor) this._state.tab = 'inbox';
+    if (this._state.tab === 'info' && this._mySections.length === 0) this._state.tab = 'inbox';
 
     container.innerHTML = this._shell();
     this._bindShell();
@@ -53,6 +62,7 @@ const RequestsView = {
             <button class="tab-btn" data-tab="inbox">Inbox</button>
             <button class="tab-btn" data-tab="sent">Sent</button>
             ${this._isSupervisor ? `<button class="tab-btn" data-tab="approvals">Approvals</button>` : ''}
+            ${this._mySections.length > 0 ? `<button class="tab-btn" data-tab="info">Info Requests</button>` : ''}
           </div>
 
           <div id="requests-tab-content"></div>
@@ -93,34 +103,208 @@ const RequestsView = {
       if (this._state.tab === 'inbox') await this._renderInbox(content);
       else if (this._state.tab === 'sent') await this._renderSent(content);
       else if (this._state.tab === 'approvals') await this._renderApprovals(content);
+      else if (this._state.tab === 'info') await this._renderInfoRequests(content);
     } catch (err) {
       console.error('CorLink: failed to load requests tab', err);
       content.innerHTML = `<div class="alert alert-error"><i class="ti ti-alert-triangle"></i> Couldn't load this tab: ${err.message || 'unknown error'}. Check the browser console for details.</div>`;
     }
   },
 
+  // ── Quick-filter category definitions ───────────────────────────
+  // Every predicate runs client-side over the tab's already-fetched
+  // item list (see _renderInbox/_renderSent) rather than issuing a
+  // fresh query per chip — the counts and the filtered table both
+  // derive from one fetch, so clicking a chip is instant and never
+  // hits the network again.
+  _inboxFilters() {
+    const today = new Date().toISOString().slice(0, 10);
+    return [
+      { key: 'all', label: 'All', test: () => true },
+      // Unrouted rows are only ever visible to supervisors/assigned_receiver
+      // in the first place (requests_select_assigned_receiver RLS) — for
+      // anyone else this chip would always read 0, so it's omitted rather
+      // than shown as dead clutter.
+      ...(this._canReceive ? [{ key: 'unrouted', label: 'Unrouted', test: r => !r.to_section_id && ['sent', 'received'].includes(r.status) }] : []),
+      { key: 'not_assigned', label: 'Not Assigned', test: r => !!r.to_section_id && !r.assigned_to && r.status === 'in_progress' },
+      { key: 'response_not_started', label: 'Response Not Started', test: r => r.status === 'in_progress' && (r.responses || []).length === 0 },
+      { key: 'response_drafted', label: 'Response Drafted', test: r => (r.responses || []).some(resp => ['draft', 'pending_approval'].includes(resp.status)) },
+      { key: 'response_sent', label: 'Response Sent', test: r => (r.responses || []).some(resp => resp.status === 'sent') },
+      { key: 'overdue', label: 'Overdue', test: r => !!r.deadline && r.deadline < today && !['closed', 'responded'].includes(r.status) },
+    ];
+  },
+
+  _sentFilters() {
+    const today = new Date().toISOString().slice(0, 10);
+    return [
+      { key: 'all', label: 'All', test: () => true },
+      { key: 'drafts', label: 'My Drafts', test: r => r.status === 'draft' && r.created_by === this._user.id },
+      { key: 'pending_approval', label: 'Pending Approval', test: r => r.status === 'pending_approval' },
+      { key: 'awaiting_response', label: 'Awaiting Response', test: r => !['draft', 'pending_approval'].includes(r.status) && (r.responses || []).length === 0 },
+      // "Responses not received from other organizations" — the other
+      // org already sent their reply, but our own receiving org hasn't
+      // acknowledged it yet (see markResponseReceived in requests-api.js).
+      { key: 'response_not_received', label: 'Response Not Received', test: r => (r.responses || []).some(resp => resp.status === 'sent' && !resp.received_at) },
+      { key: 'response_received', label: 'Response Received', test: r => (r.responses || []).some(resp => !!resp.received_at) },
+      { key: 'overdue', label: 'Overdue', test: r => !!r.deadline && r.deadline < today && !['closed', 'responded'].includes(r.status) },
+    ];
+  },
+
+  _filterChipsHtml(filters, items, activeKey) {
+    return `
+      <div class="filter-chips">
+        ${filters.map(f => `
+          <button type="button" class="filter-chip${f.key === activeKey ? ' filter-chip--active' : ''}" data-filter="${f.key}">
+            ${f.label} <span class="filter-chip-count">${items.filter(f.test).length}</span>
+          </button>
+        `).join('')}
+      </div>
+    `;
+  },
+
   async _renderInbox(content) {
-    const items = await RequestsAPI.listInbox(this._user.org_id);
-    content.innerHTML = this._listPanel('Inbox', items, { orgCol: 'From', orgKey: 'from_org', allowReceive: this._canReceive });
-    this._bindListActions(content, items);
+    this._inboxItems = await RequestsAPI.listInbox(this._user.org_id);
+    this._renderInboxFiltered(content);
+  },
+
+  _renderInboxFiltered(content) {
+    const items = this._inboxItems || [];
+    const filters = this._inboxFilters();
+    const active = filters.find(f => f.key === this._state.inboxFilter) || filters[0];
+    const filtered = items.filter(active.test);
+    content.innerHTML = `
+      ${this._filterChipsHtml(filters, items, active.key)}
+      ${this._listPanel(null, filtered, { orgCol: 'From', orgKey: 'from_org', allowReceive: this._canReceive })}
+    `;
+    content.querySelectorAll('[data-filter]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this._state.inboxFilter = btn.dataset.filter;
+        this._renderInboxFiltered(content);
+      });
+    });
+    this._bindListActions(content, filtered);
   },
 
   async _renderSent(content) {
-    const items = await RequestsAPI.listSent(this._user.org_id);
-    content.innerHTML = this._listPanel('Sent', items, { orgCol: 'To', orgKey: 'to_org' });
-    this._bindListActions(content, items);
+    this._sentItems = await RequestsAPI.listSent(this._user.org_id);
+    this._renderSentFiltered(content);
   },
 
+  _renderSentFiltered(content) {
+    const items = this._sentItems || [];
+    const filters = this._sentFilters();
+    const active = filters.find(f => f.key === this._state.sentFilter) || filters[0];
+    const filtered = items.filter(active.test);
+    content.innerHTML = `
+      ${this._filterChipsHtml(filters, items, active.key)}
+      ${this._listPanel(null, filtered, { orgCol: 'To', orgKey: 'to_org' })}
+    `;
+    content.querySelectorAll('[data-filter]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this._state.sentFilter = btn.dataset.filter;
+        this._renderSentFiltered(content);
+      });
+    });
+    this._bindListActions(content, filtered);
+  },
+
+  // Two independent queues: requests I created that need MY org's
+  // supervisor approval (existing), and responses my section drafted
+  // that need MY org's supervisor approval (new — previously the only
+  // way to discover a drafted response awaiting approval was opening
+  // the request it belonged to and noticing it there).
   async _renderApprovals(content) {
-    const items = await RequestsAPI.listPendingApprovals(this._user.org_id);
-    content.innerHTML = this._listPanel('Pending Approval', items, { orgCol: 'To', orgKey: 'to_org' });
-    this._bindListActions(content, items);
+    const [requestApprovals, responseApprovals] = await Promise.all([
+      RequestsAPI.listPendingApprovals(this._user.org_id),
+      RequestsAPI.listPendingResponseApprovals(this._user.org_id),
+    ]);
+    content.innerHTML = `
+      <div class="queue-group">
+        <div class="queue-group-title"><i class="ti ti-file-check"></i> Requests Awaiting Your Approval <span class="badge badge-outline">${requestApprovals.length}</span></div>
+        ${this._listPanel(null, requestApprovals, { orgCol: 'To', orgKey: 'to_org' })}
+      </div>
+      <div class="queue-group">
+        <div class="queue-group-title"><i class="ti ti-message-check"></i> Responses Awaiting Your Approval <span class="badge badge-outline">${responseApprovals.length}</span></div>
+        ${this._responseApprovalPanel(responseApprovals)}
+      </div>
+    `;
+    this._bindListActions(content, requestApprovals);
+  },
+
+  _responseApprovalPanel(items) {
+    return `
+      <div class="panel">
+        <table class="data-table">
+          <thead>
+            <tr><th>Reference</th><th>Request Subject</th><th>From</th><th>Submitted</th><th></th></tr>
+          </thead>
+          <tbody>
+            ${items.map(resp => `
+              <tr>
+                <td data-label="Reference">${resp.request?.reference_number || '—'}</td>
+                <td data-label="Request Subject"><span class="${resp.request?.subject_language === 'dv' ? 'field-divehi' : ''}">${resp.request?.subject || ''}</span></td>
+                <td data-label="From">${resp.request?.from_org?.name || ''}</td>
+                <td data-label="Submitted">${new Date(resp.created_at).toLocaleDateString()}</td>
+                <td data-label="Actions"><a class="btn btn-secondary btn-xs" href="#request-detail?id=${resp.request?.id}">View</a></td>
+              </tr>
+            `).join('') || `<tr><td colspan="5" class="structure-empty">Nothing here yet.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    `;
+  },
+
+  // Two independent queues: internal ("information") requests where
+  // my section is the one that needs to reply, and ones where I asked
+  // ANOTHER section and I'm still waiting on them — the latter is
+  // exactly "information requested and not received" from across every
+  // case my sections are party to, not just the one you happen to have
+  // open (see InternalRequestsAPI.listOutstandingForSections).
+  async _renderInfoRequests(content) {
+    const sectionIds = (this._mySections || []).map(s => s.id);
+    const items = await InternalRequestsAPI.listOutstandingForSections(sectionIds);
+    const mySet = new Set(sectionIds);
+    const awaitingMyReply = items.filter(ir => mySet.has(ir.to_section_id));
+    const awaitingTheirReply = items.filter(ir => mySet.has(ir.from_section_id) && !mySet.has(ir.to_section_id));
+    content.innerHTML = `
+      <div class="queue-group">
+        <div class="queue-group-title"><i class="ti ti-message-question"></i> Awaiting Your Section's Reply <span class="badge badge-outline">${awaitingMyReply.length}</span></div>
+        ${this._infoRequestPanel(awaitingMyReply)}
+      </div>
+      <div class="queue-group">
+        <div class="queue-group-title"><i class="ti ti-clock"></i> Information Requested — Awaiting Their Reply <span class="badge badge-outline">${awaitingTheirReply.length}</span></div>
+        ${this._infoRequestPanel(awaitingTheirReply)}
+      </div>
+    `;
+  },
+
+  _infoRequestPanel(items) {
+    return `
+      <div class="panel">
+        <table class="data-table">
+          <thead>
+            <tr><th>Case</th><th>Subject</th><th>From → To</th><th>Status</th><th>Sent</th><th></th></tr>
+          </thead>
+          <tbody>
+            ${items.map(ir => `
+              <tr>
+                <td data-label="Case">${ir.parent_request?.reference_number || ir.parent_request?.subject || '—'}</td>
+                <td data-label="Subject"><span class="${ir.subject_language === 'dv' ? 'field-divehi' : ''}">${ir.subject}</span></td>
+                <td data-label="From → To">${ir.from_section?.name || ''} → ${ir.to_section?.name || ''}</td>
+                <td data-label="Status"><span class="badge badge-outline">${ir.status}</span></td>
+                <td data-label="Sent">${new Date(ir.created_at).toLocaleDateString()}</td>
+                <td data-label="Actions"><a class="btn btn-secondary btn-xs" href="#request-detail?id=${ir.parent_request?.id}">View</a></td>
+              </tr>
+            `).join('') || `<tr><td colspan="6" class="structure-empty">Nothing here yet.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    `;
   },
 
   _listPanel(title, items, opts) {
     return `
       <div class="panel">
-        <div class="panel-header"><h3>${title}</h3></div>
+        ${title ? `<div class="panel-header"><h3>${title}</h3></div>` : ''}
         <table class="data-table">
           <thead>
             <tr>

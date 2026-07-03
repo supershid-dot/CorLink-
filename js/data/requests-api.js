@@ -65,10 +65,19 @@ const RequestsAPI = (() => {
     },
 
     // ── Lists ────────────────────────────────────────────────────
+    // Both embed responses(status, received_at) — a lightweight nested
+    // select, not a full join — so the view can derive "response not
+    // started / drafted / sent" and "response not received" quick
+    // filters client-side without a second round trip per request. RLS
+    // on `responses` still applies to the embedded rows independently
+    // (same mechanic already relied on elsewhere, e.g. received_by_user
+    // in getRequest below); a viewer who can't see a request's
+    // responses just gets an empty array, which degrades to "no
+    // response" in the filters rather than leaking anything.
     async listInbox(orgId) {
       const db = getSupabase();
       const { data, error } = await db.from('requests')
-        .select('*, from_org:organizations!requests_from_org_id_fkey(name, code)')
+        .select('*, from_org:organizations!requests_from_org_id_fkey(name, code), responses(status, received_at)')
         .eq('to_org_id', orgId)
         .order('created_at', { ascending: false });
       if (error) throw wrapRowError(error);
@@ -78,7 +87,7 @@ const RequestsAPI = (() => {
     async listSent(orgId) {
       const db = getSupabase();
       const { data, error } = await db.from('requests')
-        .select('*, to_org:organizations!requests_to_org_id_fkey(name, code)')
+        .select('*, to_org:organizations!requests_to_org_id_fkey(name, code), responses(status, received_at)')
         .eq('from_org_id', orgId)
         .order('created_at', { ascending: false });
       if (error) throw wrapRowError(error);
@@ -96,6 +105,30 @@ const RequestsAPI = (() => {
         .order('created_at', { ascending: true });
       if (error) throw wrapRowError(error);
       return data;
+    },
+
+    // Responses waiting on a supervisor's approve/return — the mirror
+    // queue to listPendingApprovals above, but for outbound REPLIES
+    // instead of outbound requests. There was previously no list view
+    // for this at all; a supervisor could only discover a drafted
+    // response needing approval by opening the request it belongs to.
+    // responses_update_supervisor's RLS lets a supervisor on EITHER
+    // side of the request update a response's status (broader than the
+    // UI ever uses it for), so this filters to the responding org
+    // (request.to_org_id) client-side to match request-detail.js's own
+    // isToOrgMember gating — approving a response is only ever this
+    // org's supervisor's action in the UI.
+    async listPendingResponseApprovals(orgId) {
+      const db = getSupabase();
+      const { data, error } = await db.from('responses')
+        .select(`
+          *,
+          request:requests!responses_request_id_fkey(id, subject, subject_language, reference_number, to_org_id, from_org:organizations!requests_from_org_id_fkey(name, code))
+        `)
+        .eq('status', 'pending_approval')
+        .order('created_at', { ascending: true });
+      if (error) throw wrapRowError(error);
+      return (data || []).filter(resp => resp.request?.to_org_id === orgId);
     },
 
     // Incoming mail that's arrived but hasn't been routed to a section

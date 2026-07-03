@@ -788,6 +788,71 @@ p  { line-height: 1.6; }
   padding: 24px 0;
 }
 
+/* ── Filter Chips ────────────────────────────────────────────── */
+/* Quick-filter row under a tab (e.g. Inbox: All / Unrouted / Not
+   Assigned / Overdue…) — same horizontal-scroll treatment as .tabs
+   since the full set won't always fit on mobile, but visually a step
+   down (pill buttons, not underlined) so it reads as "narrowing the
+   current tab" rather than a second row of tabs. */
+.filter-chips {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.filter-chips::-webkit-scrollbar { display: none; }
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border);
+  background: #fff;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+  white-space: nowrap;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+}
+.filter-chip:hover { color: var(--color-text); border-color: var(--color-text-muted); }
+.filter-chip--active {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+}
+.filter-chip-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 0.6875rem;
+  font-weight: 600;
+}
+.filter-chip--active .filter-chip-count { background: rgba(255, 255, 255, 0.25); color: #fff; }
+
+/* Two side-by-side queues within one tab (Approvals: Requests /
+   Responses; Info Requests: Awaiting My Reply / Awaiting Their Reply) —
+   stacks on mobile since two full-width tables side by side never fit. */
+.queue-group { margin-bottom: 24px; }
+.queue-group:last-child { margin-bottom: 0; }
+.queue-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
 /* ── Org Selector ────────────────────────────────────────────── */
 .org-selector-row {
   display: flex;
