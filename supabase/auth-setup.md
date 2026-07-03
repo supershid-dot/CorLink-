@@ -34,6 +34,11 @@ match what changed since, instead of re-running the full files:
 - `supabase/patch-cross-org-names.sql` — lets a user resolve the name/designation of
   someone in the OTHER organization on a request/response/approval/prisoner letter
   they can already see (fixes names showing as "Unknown")
+- `supabase/patch-independent-lang-edit.sql` — adds `subject_language` (subject and
+  body can now be written in different languages) and fixes `requests_update`/
+  `responses_update` RLS so a draft stays editable through `pending_approval`, not
+  just before submitting (also fixes a pre-existing bug where "Submit for Approval"
+  always failed RLS)
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

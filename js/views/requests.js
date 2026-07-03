@@ -149,7 +149,7 @@ const RequestsView = {
     return `
       <tr>
         <td data-label="Reference">${r.reference_number || '<span class="structure-empty">Draft</span>'}</td>
-        <td data-label="Subject">${r.subject}</td>
+        <td data-label="Subject"><span class="${r.subject_language === 'dv' ? 'field-divehi' : ''}">${r.subject}</span></td>
         <td data-label="${opts.orgCol}">${orgName}</td>
         <td data-label="Status">${this._statusBadge(r.status, r.deadline)}</td>
         <td data-label="Deadline">${r.deadline || '—'}</td>
@@ -242,16 +242,18 @@ const RequestsView = {
             ${sections.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
           </select>
         </div>` : `<input type="hidden" name="fromSectionId" value="${sections[0].id}" />`}
-        <div class="field-group field-group-row">
-          <label class="field-label">Language</label>
-          ${RichEditor.langToggleHtml('language', 'en')}
-        </div>
         <div class="field-group">
-          <label class="field-label">Subject</label>
+          <div class="field-group-row">
+            <label class="field-label">Subject</label>
+            ${RichEditor.langToggleHtml('subjectLanguage', 'en')}
+          </div>
           <input class="field-input-plain" name="subject" id="compose-subject" required />
         </div>
         <div class="field-group">
-          <label class="field-label">Message</label>
+          <div class="field-group-row">
+            <label class="field-label">Message</label>
+            ${RichEditor.langToggleHtml('language', 'en')}
+          </div>
           <div id="compose-body"></div>
         </div>
         <div class="field-group">
@@ -269,10 +271,8 @@ const RequestsView = {
     const form = document.getElementById('compose-form');
     const editor = RichEditor.create(document.getElementById('compose-body'), { language: 'en' });
     const subjectInput = document.getElementById('compose-subject');
-    RichEditor.bindLangToggle(form, (lang) => {
-      editor.setLanguage(lang);
-      subjectInput.classList.toggle('field-divehi', lang === 'dv');
-    });
+    RichEditor.bindLangToggle(form, 'subjectLanguage', (lang) => subjectInput.classList.toggle('field-divehi', lang === 'dv'));
+    RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -290,6 +290,7 @@ const RequestsView = {
           fromSectionId: fd.get('fromSectionId'),
           toOrgId: fd.get('toOrgId'),
           subject: fd.get('subject'),
+          subjectLanguage: fd.get('subjectLanguage'),
           body,
           language: fd.get('language'),
           deadline: fd.get('deadline') || null,

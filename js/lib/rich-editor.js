@@ -233,12 +233,15 @@ const RichEditor = (() => {
       `;
     },
 
-    // Wires a langToggleHtml() instance found within `container`.
-    // onChange(lang) fires on every click — callers use it to flip
-    // .field-divehi on plain inputs/textareas and/or call a
-    // RichEditor instance's own setLanguage().
-    bindLangToggle(container, onChange) {
-      const toggle = container.querySelector('[data-lang-toggle]');
+    // Wires the langToggleHtml(name, ...) instance found within
+    // `container` matching `name` — a form can hold more than one
+    // independent toggle (e.g. Subject and Message each get their own),
+    // so this targets one by its `name` rather than grabbing the first
+    // [data-lang-toggle] in the container. onChange(lang) fires on every
+    // click — callers use it to flip .field-divehi on plain inputs/
+    // textareas and/or call a RichEditor instance's own setLanguage().
+    bindLangToggle(container, name, onChange) {
+      const toggle = container.querySelector(`[data-lang-toggle="${name}"]`);
       if (!toggle) return;
       const hidden = toggle.querySelector('input[type="hidden"]');
       toggle.querySelectorAll('.lang-toggle-btn').forEach(btn => {

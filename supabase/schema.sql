@@ -179,6 +179,10 @@ CREATE TABLE requests (
   assigned_to       UUID    REFERENCES users(id),   -- Staff in to_section_id preparing the reply
   created_by        UUID    NOT NULL REFERENCES users(id),
   subject           TEXT    NOT NULL,
+  -- Subject and body can each be written in a different language — the
+  -- compose form gives them independent EN/Dhivehi toggles — so their
+  -- display language is tracked separately rather than sharing `language`.
+  subject_language  TEXT    NOT NULL DEFAULT 'en' CHECK (subject_language IN ('en', 'dv')),
   body              TEXT    NOT NULL,
   language          TEXT    NOT NULL DEFAULT 'en' CHECK (language IN ('en', 'dv')),
   status            TEXT    NOT NULL DEFAULT 'draft' CHECK (status IN (
@@ -236,6 +240,7 @@ CREATE TABLE internal_requests (
   to_section_id     UUID        NOT NULL REFERENCES sections(id),
   created_by        UUID        NOT NULL REFERENCES users(id),
   subject           TEXT        NOT NULL,
+  subject_language  TEXT        NOT NULL DEFAULT 'en' CHECK (subject_language IN ('en', 'dv')),
   body              TEXT        NOT NULL,
   language          TEXT        NOT NULL DEFAULT 'en' CHECK (language IN ('en', 'dv')),
   status            TEXT        NOT NULL DEFAULT 'sent' CHECK (status IN (

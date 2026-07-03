@@ -216,12 +216,13 @@ const RequestsAPI = (() => {
     // parentRequestId links a follow-up request to the same "case" —
     // conversation_request_ids() walks this chain both directions so
     // getConversation() can render every round-trip as one thread.
-    async createRequest({ fromOrgId, fromSectionId, toOrgId, subject, body, language, deadline, parentRequestId }) {
+    async createRequest({ fromOrgId, fromSectionId, toOrgId, subject, subjectLanguage, body, language, deadline, parentRequestId }) {
       const db = getSupabase();
       const session = await Auth.getSession();
       const { data, error } = await db.from('requests').insert({
         from_org_id: fromOrgId, to_org_id: toOrgId, from_section_id: fromSectionId,
-        created_by: session.user.id, subject, body: RichEditor.sanitize(body), language: language || 'en',
+        created_by: session.user.id, subject, subject_language: subjectLanguage || 'en',
+        body: RichEditor.sanitize(body), language: language || 'en',
         deadline: deadline || null, status: 'draft',
         parent_request_id: parentRequestId || null,
       }).select().single();
