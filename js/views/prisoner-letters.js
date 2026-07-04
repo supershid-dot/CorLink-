@@ -23,6 +23,10 @@ const PrisonerLettersView = {
     container.innerHTML = this._shell();
     this._bindShell();
     await this._renderTab();
+
+    // Deep-link from the dashboard's "New Prisoner Letter" quick action,
+    // e.g. #prisoner-letters?action=compose.
+    if (params.action === 'compose' && this._isMcs) this._openComposeModal();
   },
 
   bind() {

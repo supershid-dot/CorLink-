@@ -70,6 +70,10 @@ const RequestsView = {
     container.innerHTML = this._shell();
     this._bindShell();
     await this._renderTab();
+
+    // Deep-link from the dashboard's "New Request" quick action, e.g.
+    // #requests?action=compose — same modal the compose-btn opens.
+    if (params.action === 'compose') this._openComposeModal();
   },
 
   bind() {
