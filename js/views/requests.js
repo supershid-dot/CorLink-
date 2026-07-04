@@ -156,6 +156,12 @@ const RequestsView = {
       { key: 'all', label: 'All', test: () => true },
       { key: 'drafts', label: 'My Drafts', test: r => r.status === 'draft' && r.created_by === this._user.id },
       { key: 'pending_approval', label: 'Pending Approval', test: r => r.status === 'pending_approval' },
+      // Whether the destination org's front desk has logged the request
+      // itself as received yet (requests.received_at, set by
+      // markRequestReceived — distinct from to_section_id/routing, and
+      // from the response-side chips below, which track their REPLY).
+      { key: 'request_not_received', label: 'Not Received Yet', test: r => r.status === 'sent' },
+      { key: 'request_received', label: 'Received by Them', test: r => !!r.received_at },
       { key: 'awaiting_response', label: 'Awaiting Response', test: r => !['draft', 'pending_approval'].includes(r.status) && (r.responses || []).length === 0 },
       // "Responses not received from other organizations" — the other
       // org already sent their reply, but our own receiving org hasn't
