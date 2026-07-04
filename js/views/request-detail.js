@@ -38,6 +38,14 @@ const RequestDetailView = {
     } catch {
       this._mySections = [];
     }
+    // Scopes the Assign/Reassign action to actual supervisors of the
+    // specific section a request was routed to — this._isSupervisor
+    // alone (any supervisor/admin ANYWHERE) is too broad for that button.
+    try {
+      this._mySupervisedSections = await RequestsAPI.mySupervisedSections();
+    } catch {
+      this._mySupervisedSections = [];
+    }
 
     await this._load();
   },
@@ -148,13 +156,12 @@ const RequestDetailView = {
             </div>
             <div class="thread-message-body${r.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(r.body)}</div>
             ${this._renderReceipt(r)}
+            ${this._renderPendingApprovalNote(r)}
             ${this._renderProcessEvents(r.id)}
           </div>
 
           ${this._renderApprovalHistory(entry.approvals)}
-          ${this._renderAttachments('request', r.id, entry.attachments, ctx.isFromOrgMember || ctx.isToOrgMember)}
-
-          ${entry.responseDetails.map(rd => this._renderResponse(rd, r)).join('')}
+          ${this._renderAttachments('request', r.id, entry.attachments, ctx.isFromOrgMember || ctx.isToOrgMember, r.is_locked)}
         </div>
 
         <div class="detail-actions-panel" data-request-block="${r.id}">
@@ -162,6 +169,12 @@ const RequestDetailView = {
         </div>
 
         ${this._renderInternalCollab(entry)}
+
+        ${entry.responseDetails.length > 0 ? `
+          <div class="thread">
+            ${entry.responseDetails.map(rd => this._renderResponse(rd, r)).join('')}
+          </div>
+        ` : ''}
 
         ${isLast && ['responded', 'closed'].includes(r.status) && isFromOrgMember ? `
           <div class="followup-row">
@@ -180,6 +193,21 @@ const RequestDetailView = {
       <div class="thread-receipt">
         <i class="ti ti-circle-check"></i>
         <span>Received by <strong>${name}</strong>${designation ? `, ${this._escapeHtml(designation)}` : ''} — ${new Date(record.received_at).toLocaleString()}</span>
+      </div>
+    `;
+  },
+
+  // Shows who a draft was explicitly routed to on submit — informational
+  // only (see submitRequest/submitResponse's approverId comment: any
+  // qualifying supervisor can still act, not just this one).
+  _renderPendingApprovalNote(record) {
+    if (record.status !== 'pending_approval' || !record.pending_approval_by_user) return '';
+    const name = this._escapeHtml(record.pending_approval_by_user.full_name || 'Unknown');
+    const designation = record.pending_approval_by_user.designations?.name;
+    return `
+      <div class="thread-receipt">
+        <i class="ti ti-send"></i>
+        <span>Sent for approval to <strong>${name}</strong>${designation ? `, ${this._escapeHtml(designation)}` : ''}</span>
       </div>
     `;
   },
@@ -224,15 +252,16 @@ const RequestDetailView = {
         </div>
         <div class="thread-message-body${resp.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(resp.body)}</div>
         ${this._renderReceipt(resp)}
+        ${this._renderPendingApprovalNote(resp)}
         ${['draft', 'pending_approval'].includes(resp.status) && resp.created_by === this._user.id ? `
           <div class="thread-message-actions">
             <button class="btn btn-secondary btn-xs" data-edit-response="${resp.id}">Edit Draft</button>
-            ${resp.status === 'draft' ? `<button class="btn btn-primary btn-xs" data-submit-response="${resp.id}">Submit for Approval</button>` : ''}
+            ${resp.status === 'draft' ? `<button class="btn btn-primary btn-xs" data-submit-response="${resp.id}" data-section="${request.to_section_id}">Submit for Approval</button>` : ''}
           </div>
         ` : ''}
       </div>
       ${this._renderApprovalHistory(rd.approvals)}
-      ${this._renderAttachments('response', resp.id, rd.attachments, true)}
+      ${this._renderAttachments('response', resp.id, rd.attachments, true, resp.is_locked)}
       ${resp.status === 'sent' && !resp.received_at && request.from_org_id === this._user.org_id && this._canReceive ? `
         <div class="thread-message-actions">
           <button class="btn btn-secondary btn-xs" data-mark-response-received="${resp.id}">Mark Received</button>
@@ -241,7 +270,12 @@ const RequestDetailView = {
     `;
   },
 
-  _renderAttachments(recordType, recordId, attachments, canView) {
+  // locked suppresses the upload dropzone once a request/response has
+  // been approved (is_locked = TRUE) — existing attachments stay
+  // visible/downloadable, but the case for that record is closed for
+  // further evidence once a supervisor has signed off on it. Internal
+  // requests have no approval step, so their call site never passes this.
+  _renderAttachments(recordType, recordId, attachments, canView, locked = false) {
     if (!canView) return '';
     return `
       <div class="attachments-panel" data-attachments="${recordType}:${recordId}">
@@ -253,11 +287,13 @@ const RequestDetailView = {
             </span>
           `).join('') || ''}
         </div>
-        <label class="attachment-dropzone" data-dropzone="${recordType}:${recordId}">
-          <i class="ti ti-cloud-upload"></i>
-          <span>Drag files here, or <span class="attachment-browse-link">browse</span></span>
-          <input type="file" multiple class="hidden" data-upload="${recordType}:${recordId}" />
-        </label>
+        ${locked ? '' : `
+          <label class="attachment-dropzone" data-dropzone="${recordType}:${recordId}">
+            <i class="ti ti-cloud-upload"></i>
+            <span>Drag files here, or <span class="attachment-browse-link">browse</span></span>
+            <input type="file" multiple class="hidden" data-upload="${recordType}:${recordId}" />
+          </label>
+        `}
       </div>
     `;
   },
@@ -343,7 +379,7 @@ const RequestDetailView = {
       blocks.push(`<button class="btn btn-secondary btn-sm" data-edit-request="${r.id}">Edit Draft</button>`);
     }
     if (r.status === 'draft' && ctx.isCreator) {
-      blocks.push(`<button class="btn btn-primary btn-sm" data-submit-request="${r.id}">Submit for Approval</button>`);
+      blocks.push(`<button class="btn btn-primary btn-sm" data-submit-request="${r.id}" data-section="${r.from_section_id}">Submit for Approval</button>`);
     }
 
     // Requester-side supervisor approving/returning.
@@ -364,8 +400,15 @@ const RequestDetailView = {
       blocks.push(`<button class="btn btn-primary btn-sm" data-route-request="${r.id}">Route to Section</button>`);
     }
 
-    // Section-level assigning to a specific staff member to draft the reply.
-    if (r.to_section_id && ctx.isToOrgMember && ['in_progress'].includes(r.status)) {
+    // Section-level assigning to a specific staff member to draft the
+    // reply — restricted to actual supervisors of THIS section (or an
+    // org admin), not any member of the to-org. this._isSupervisor
+    // alone is too broad here (true for a supervisor of a totally
+    // unrelated section); AppShell.isAdmin() bypasses section scoping
+    // entirely, matching how admins already work everywhere else.
+    const canAssign = r.to_section_id
+      && (AppShell.isAdmin(this._user) || this._mySupervisedSections.some(s => s.id === r.to_section_id));
+    if (r.to_section_id && ctx.isToOrgMember && ['in_progress'].includes(r.status) && canAssign) {
       blocks.push(`<button class="btn btn-secondary btn-sm" data-assign-request="${r.id}">${r.assigned_to ? 'Reassign' : 'Assign to Staff'}</button>`);
     }
 
@@ -445,7 +488,7 @@ const RequestDetailView = {
     });
 
     main.querySelectorAll('[data-submit-request]').forEach(btn => {
-      btn.addEventListener('click', () => this._runAction(() => RequestsAPI.submitRequest(btn.dataset.submitRequest)));
+      btn.addEventListener('click', () => this._openSubmitForApprovalModal('request', btn.dataset.submitRequest, btn.dataset.section));
     });
 
     main.querySelectorAll('[data-approve-request]').forEach(btn => {
@@ -486,7 +529,7 @@ const RequestDetailView = {
     });
 
     main.querySelectorAll('[data-submit-response]').forEach(btn => {
-      btn.addEventListener('click', () => this._runAction(() => RequestsAPI.submitResponse(btn.dataset.submitResponse)));
+      btn.addEventListener('click', () => this._openSubmitForApprovalModal('response', btn.dataset.submitResponse, btn.dataset.section));
     });
 
     main.querySelectorAll('[data-approve-response]').forEach(btn => {
@@ -705,6 +748,59 @@ const RequestDetailView = {
       const errEl = form.querySelector('.modal-error');
       try {
         await RequestsAPI.assignRequest(requestId, fd.get('userId') || null);
+        this._closeModal();
+        await this._load();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
+  // kind is 'request' or 'response' — sectionId is the section whose
+  // supervisors/admins are eligible (from_section_id for a request,
+  // the responding to_section_id for a response). The chosen supervisor
+  // is stored for routing/display only — RLS still lets any qualifying
+  // supervisor of that section approve/return it, see submitRequest/
+  // submitResponse in js/data/requests-api.js.
+  async _openSubmitForApprovalModal(kind, recordId, sectionId) {
+    let approvers;
+    try {
+      approvers = await RequestsAPI.listEligibleApprovers(sectionId);
+    } catch (err) {
+      console.error('CorLink: failed to load eligible approvers', err);
+      approvers = [];
+    }
+    this._openModal(`
+      <h3>Submit for Approval</h3>
+      <form id="submit-approval-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Send to Supervisor</label>
+          <select class="field-select" name="approverId" ${approvers.length === 0 ? 'disabled' : ''}>
+            ${approvers.length === 0
+              ? '<option value="">No supervisors found for this section</option>'
+              : approvers.map(u => `<option value="${u.id}">${this._escapeHtml(u.full_name)}${u.designations?.name ? ' — ' + this._escapeHtml(u.designations.name) : ''}</option>`).join('')}
+          </select>
+          <div class="field-hint">Includes supervisors at the section, department, and command level.</div>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Submit</button>
+        </div>
+      </form>
+    `);
+    const form = document.getElementById('submit-approval-form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const errEl = form.querySelector('.modal-error');
+      try {
+        if (kind === 'request') {
+          await RequestsAPI.submitRequest(recordId, fd.get('approverId') || null);
+        } else {
+          await RequestsAPI.submitResponse(recordId, fd.get('approverId') || null);
+        }
         this._closeModal();
         await this._load();
       } catch (err) {

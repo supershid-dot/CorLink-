@@ -190,7 +190,8 @@ const RequestsAPI = (() => {
           to_section:sections!requests_to_section_id_fkey(name, code),
           created_by_user:users!requests_created_by_fkey(full_name, service_number),
           assigned_to_user:users!requests_assigned_to_fkey(full_name, service_number),
-          received_by_user:users!requests_received_by_fkey(full_name, designations(name))
+          received_by_user:users!requests_received_by_fkey(full_name, designations(name)),
+          pending_approval_by_user:users!requests_pending_approval_by_fkey(full_name, designations(name))
         `)
         .eq('id', id).single();
       if (error) throw wrapRowError(error);
@@ -203,7 +204,8 @@ const RequestsAPI = (() => {
         .select(`
           *,
           created_by_user:users!responses_created_by_fkey(full_name, service_number),
-          received_by_user:users!responses_received_by_fkey(full_name, designations(name))
+          received_by_user:users!responses_received_by_fkey(full_name, designations(name)),
+          pending_approval_by_user:users!responses_pending_approval_by_fkey(full_name, designations(name))
         `)
         .eq('request_id', requestId)
         .order('created_at', { ascending: true });
@@ -227,7 +229,8 @@ const RequestsAPI = (() => {
           to_section:sections!requests_to_section_id_fkey(name, code),
           created_by_user:users!requests_created_by_fkey(full_name, service_number),
           assigned_to_user:users!requests_assigned_to_fkey(full_name, service_number),
-          received_by_user:users!requests_received_by_fkey(full_name, designations(name))
+          received_by_user:users!requests_received_by_fkey(full_name, designations(name)),
+          pending_approval_by_user:users!requests_pending_approval_by_fkey(full_name, designations(name))
         `)
         .in('id', flatIds)
         .order('created_at', { ascending: true });
@@ -273,13 +276,23 @@ const RequestsAPI = (() => {
       return data;
     },
 
-    async submitRequest(id) {
+    // approverId is the specific supervisor the creator chose to send
+    // this to (js/views/request-detail.js's Submit for Approval modal)
+    // — informational routing/notification target only, not an
+    // exclusivity gate: any qualifying supervisor of from_section_id
+    // can still approve/return it regardless (requests_update_supervisor
+    // RLS is unchanged), same as assigned_to never gating who can act.
+    // Falls back to notifying the whole eligible pool if no specific
+    // approver was chosen (e.g. none exist for that section yet).
+    async submitRequest(id, approverId) {
       const db = getSupabase();
       const { data, error } = await db.from('requests')
-        .update({ status: 'pending_approval' }).eq('id', id).select().single();
+        .update({ status: 'pending_approval', pending_approval_by: approverId || null }).eq('id', id).select().single();
       if (error) throw wrapRowError(error);
       await logAudit('submitted', 'request', id, 'Submitted request for approval');
-      const recipients = await NotificationsAPI.sectionUserIds(data.from_section_id, ['mcs_admin', 'authority_admin', 'supervisor']);
+      const recipients = approverId
+        ? [approverId]
+        : await NotificationsAPI.sectionUserIds(data.from_section_id, ['mcs_admin', 'authority_admin', 'supervisor']);
       await NotificationsAPI.notify(recipients, {
         type: 'approval_requested', recordType: 'request', recordId: id,
         message: `"${data.subject}" needs your approval`,
@@ -434,14 +447,19 @@ const RequestsAPI = (() => {
       return data;
     },
 
-    async submitResponse(id) {
+    // approverId — same informational-routing-only semantics as
+    // submitRequest's approverId, chosen from the RESPONDING section's
+    // (request.to_section_id) eligible supervisors.
+    async submitResponse(id, approverId) {
       const db = getSupabase();
       const { data, error } = await db.from('responses')
-        .update({ status: 'pending_approval' }).eq('id', id)
+        .update({ status: 'pending_approval', pending_approval_by: approverId || null }).eq('id', id)
         .select('*, request:requests(subject, to_section_id)').single();
       if (error) throw wrapRowError(error);
       await logAudit('submitted', 'response', id, 'Submitted response for approval');
-      const recipients = await NotificationsAPI.sectionUserIds(data.request?.to_section_id, ['mcs_admin', 'authority_admin', 'supervisor']);
+      const recipients = approverId
+        ? [approverId]
+        : await NotificationsAPI.sectionUserIds(data.request?.to_section_id, ['mcs_admin', 'authority_admin', 'supervisor']);
       await NotificationsAPI.notify(recipients, {
         type: 'approval_requested', recordType: 'request', recordId: data.request_id,
         message: `A response to "${data.request?.subject}" needs your approval`,
@@ -563,6 +581,21 @@ const RequestsAPI = (() => {
         .select('*, from_org:organizations!requests_from_org_id_fkey(name, code), responses(status, received_at)')
         .eq('assigned_to', userId)
         .order('created_at', { ascending: false });
+      if (error) throw wrapRowError(error);
+      return data;
+    },
+
+    // Supervisors/admins covering sectionId — via section_user_ids'
+    // existing section/department/command hierarchy expansion — for
+    // the Submit for Approval modal's "send to" picker.
+    async listEligibleApprovers(sectionId) {
+      if (!sectionId) return [];
+      const userIds = await NotificationsAPI.sectionUserIds(sectionId, ['mcs_admin', 'authority_admin', 'supervisor']);
+      if (userIds.length === 0) return [];
+      const db = getSupabase();
+      const { data, error } = await db.from('users')
+        .select('id, full_name, designations(name)')
+        .in('id', userIds).eq('is_active', true).order('full_name');
       if (error) throw wrapRowError(error);
       return data;
     },
