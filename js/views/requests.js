@@ -6,8 +6,9 @@
 
 const RequestsView = {
   _state: {
-    tab: 'inbox', inboxFilter: 'all', sentFilter: 'all',
-    inboxSearch: '', sentSearch: '', approvalsSearch: '', infoSearch: '',
+    tab: 'inbox', inboxFilter: 'all', sentFilter: 'all', teamFilter: 'all',
+    inboxSearch: '', sentSearch: '', approvalsSearch: '', infoSearch: '', teamSearch: '',
+    teamStaffId: null,
   },
 
   async render(container, params = {}) {
@@ -28,8 +29,21 @@ const RequestsView = {
       console.error('CorLink: failed to load my sections', err);
       this._mySections = [];
     }
+    // Gates the Team tab — a supervisor with no supervised section
+    // (shouldn't happen in practice, but a fresh admin with no
+    // assignment yet is possible) has no one's individual workload to show.
+    if (this._isSupervisor) {
+      try {
+        this._mySupervisedSections = await RequestsAPI.mySupervisedSections();
+      } catch (err) {
+        console.error('CorLink: failed to load supervised sections', err);
+        this._mySupervisedSections = [];
+      }
+    } else {
+      this._mySupervisedSections = [];
+    }
 
-    const validTabs = ['inbox', 'sent', 'approvals', 'info'];
+    const validTabs = ['inbox', 'sent', 'approvals', 'info', 'team'];
     if (params.tab && validTabs.includes(params.tab)) {
       this._state.tab = params.tab;
     } else if (!this._state.tab) {
@@ -37,6 +51,7 @@ const RequestsView = {
     }
     if (this._state.tab === 'approvals' && !this._isSupervisor) this._state.tab = 'inbox';
     if (this._state.tab === 'info' && this._mySections.length === 0) this._state.tab = 'inbox';
+    if (this._state.tab === 'team' && this._mySupervisedSections.length === 0) this._state.tab = 'inbox';
 
     // Deep-links from the dashboard's Action Needed cards, e.g.
     // #requests?tab=inbox&filter=not_assigned — validated against the
@@ -80,6 +95,7 @@ const RequestsView = {
             <button class="tab-btn" data-tab="sent">Sent</button>
             ${this._isSupervisor ? `<button class="tab-btn" data-tab="approvals">Approvals</button>` : ''}
             ${this._mySections.length > 0 ? `<button class="tab-btn" data-tab="info">Info Requests</button>` : ''}
+            ${this._mySupervisedSections.length > 0 ? `<button class="tab-btn" data-tab="team">Team</button>` : ''}
           </div>
 
           <div id="requests-tab-content"></div>
@@ -121,6 +137,7 @@ const RequestsView = {
       else if (this._state.tab === 'sent') await this._renderSent(content);
       else if (this._state.tab === 'approvals') await this._renderApprovals(content);
       else if (this._state.tab === 'info') await this._renderInfoRequests(content);
+      else if (this._state.tab === 'team') await this._renderTeam(content);
     } catch (err) {
       console.error('CorLink: failed to load requests tab', err);
       content.innerHTML = `<div class="alert alert-error"><i class="ti ti-alert-triangle"></i> Couldn't load this tab: ${err.message || 'unknown error'}. Check the browser console for details.</div>`;
@@ -169,6 +186,22 @@ const RequestsView = {
       { key: 'response_not_received', label: 'Response Not Received', test: r => (r.responses || []).some(resp => resp.status === 'sent' && !resp.received_at) },
       { key: 'response_received', label: 'Response Received', test: r => (r.responses || []).some(resp => !!resp.received_at) },
       { key: 'overdue', label: 'Overdue', test: r => !!r.deadline && r.deadline < today && !['closed', 'responded'].includes(r.status) },
+    ];
+  },
+
+  // The Team tab's per-staff breakdown — same shape as _inboxFilters,
+  // scoped down to just the request's own reply-drafting workflow since
+  // everything here is, by definition, already routed and assigned to
+  // this one person (no unrouted/not-assigned chips needed).
+  _teamFilters() {
+    const today = new Date().toISOString().slice(0, 10);
+    return [
+      { key: 'all', label: 'All', test: () => true },
+      { key: 'response_not_started', label: 'Not Started', test: r => (r.responses || []).length === 0 },
+      { key: 'response_drafted', label: 'Drafted', test: r => (r.responses || []).some(resp => ['draft', 'pending_approval'].includes(resp.status)) },
+      { key: 'response_sent', label: 'Sent', test: r => (r.responses || []).some(resp => resp.status === 'sent') },
+      { key: 'overdue', label: 'Overdue', test: r => !!r.deadline && r.deadline < today && !['closed', 'responded'].includes(r.status) },
+      { key: 'closed', label: 'Closed', test: r => ['responded', 'closed'].includes(r.status) },
     ];
   },
 
@@ -298,6 +331,71 @@ const RequestsView = {
       btn.addEventListener('click', () => {
         this._state.sentFilter = btn.dataset.filter;
         this._renderSentFiltered();
+      });
+    });
+    this._bindListActions(resultsEl, filtered);
+  },
+
+  // Lets a supervisor see one staff member's individual workload at a
+  // time, rather than only ever seeing their section in aggregate —
+  // the staff picker is scoped to mySupervisedSections (not the whole
+  // org), same reasoning as why this tab itself is gated on that list
+  // being non-empty above.
+  async _renderTeam(content) {
+    const sectionIds = this._mySupervisedSections.map(s => s.id);
+    this._teamStaff = await RequestsAPI.listStaffInSections(sectionIds);
+    if (!this._teamStaff.some(u => u.id === this._state.teamStaffId)) {
+      this._state.teamStaffId = this._teamStaff[0]?.id || null;
+    }
+    content.innerHTML = `
+      <div class="field-group">
+        <label class="field-label">Staff Member</label>
+        <select class="field-select" id="team-staff-select" ${this._teamStaff.length === 0 ? 'disabled' : ''}>
+          ${this._teamStaff.length === 0
+            ? '<option>No staff in your section(s) yet</option>'
+            : this._teamStaff.map(u => `<option value="${u.id}" ${u.id === this._state.teamStaffId ? 'selected' : ''}>${this._escapeHtml(u.full_name)}${u.designations?.name ? ' — ' + this._escapeHtml(u.designations.name) : ''}</option>`).join('')}
+        </select>
+      </div>
+      ${this._searchBoxHtml('teamSearch', 'Search subject or message…', this._state.teamSearch)}
+      <div id="team-results"></div>
+    `;
+    document.getElementById('team-staff-select')?.addEventListener('change', async (e) => {
+      this._state.teamStaffId = e.target.value;
+      await this._loadTeamResults();
+    });
+    this._bindSearchBox(content, 'teamSearch', () => this._renderTeamFiltered());
+    await this._loadTeamResults();
+  },
+
+  async _loadTeamResults() {
+    const resultsEl = document.getElementById('team-results');
+    if (!resultsEl) return;
+    if (!this._state.teamStaffId) {
+      resultsEl.innerHTML = `<div class="panel"><p class="structure-empty">No staff assigned to your section(s) yet.</p></div>`;
+      return;
+    }
+    resultsEl.innerHTML = `<div class="tab-loading"><span class="spinner spinner--dark"></span> Loading…</div>`;
+    this._teamItems = await RequestsAPI.listAssignedTo(this._state.teamStaffId);
+    this._renderTeamFiltered();
+  },
+
+  _renderTeamFiltered() {
+    const resultsEl = document.getElementById('team-results');
+    if (!resultsEl) return;
+    const items = this._teamItems || [];
+    const query = (this._state.teamSearch || '').trim().toLowerCase();
+    const searched = items.filter(r => this._matchesQuery(r.subject, r.body, query, r.reference_number));
+    const filters = this._teamFilters();
+    const active = filters.find(f => f.key === this._state.teamFilter) || filters[0];
+    const filtered = searched.filter(active.test);
+    resultsEl.innerHTML = `
+      ${this._filterChipsHtml(filters, searched, active.key)}
+      ${this._listPanel(null, filtered, { orgCol: 'From', orgKey: 'from_org' })}
+    `;
+    resultsEl.querySelectorAll('[data-filter]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this._state.teamFilter = btn.dataset.filter;
+        this._renderTeamFiltered();
       });
     });
     this._bindListActions(resultsEl, filtered);

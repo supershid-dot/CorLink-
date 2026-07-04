@@ -363,7 +363,9 @@ const RequestsAPI = (() => {
       const { data, error } = await db.from('requests')
         .update({ to_section_id: toSectionId, status: 'in_progress' }).eq('id', id).select().single();
       if (error) throw wrapRowError(error);
-      await logAudit('routed', 'request', id, 'Routed request to section');
+      const { data: section, error: sectionErr } = await db.from('sections').select('name').eq('id', toSectionId).single();
+      if (sectionErr) console.warn('CorLink: failed to look up section name for routing audit log:', sectionErr.message);
+      await logAudit('routed', 'request', id, `Routed to ${section?.name || 'a section'}`);
       const recipients = await NotificationsAPI.sectionUserIds(toSectionId);
       await NotificationsAPI.notify(recipients, {
         type: 'new_request', recordType: 'request', recordId: id,
@@ -380,7 +382,13 @@ const RequestsAPI = (() => {
       const { data, error } = await db.from('requests')
         .update({ assigned_to: userId }).eq('id', id).select().single();
       if (error) throw wrapRowError(error);
-      await logAudit('assigned', 'request', id, 'Assigned request to staff');
+      let note = 'Unassigned';
+      if (userId) {
+        const { data: staff, error: staffErr } = await db.from('users').select('full_name').eq('id', userId).single();
+        if (staffErr) console.warn('CorLink: failed to look up staff name for assignment audit log:', staffErr.message);
+        note = `Assigned to ${staff?.full_name || 'a staff member'}`;
+      }
+      await logAudit('assigned', 'request', id, note);
       if (userId) {
         await NotificationsAPI.notify([userId], {
           type: 'new_request', recordType: 'request', recordId: id,
@@ -501,6 +509,61 @@ const RequestsAPI = (() => {
         .update({ status: 'closed' }).eq('id', id).select().single();
       if (error) throw wrapRowError(error);
       await logAudit('edited', 'request', id, 'Closed request');
+      return data;
+    },
+
+    // ── Case timeline ────────────────────────────────────────────
+    // Every logAudit() entry against this conversation's requests/
+    // responses — request-detail.js uses this to show "Routed to X by
+    // Y — [time]" / "Assigned to X by Y — [time]" inline in the thread,
+    // alongside the receipt/approval timestamps that already exist.
+    // audit_select_own_records RLS (supabase/rls.sql) is what makes this
+    // visible to plain staff/supervisors, not just org admins.
+    async listCaseAuditTrail(requestIds, responseIds) {
+      const db = getSupabase();
+      const queries = [];
+      if (requestIds.length) {
+        queries.push(db.from('audit_logs').select('*, user:users(full_name)')
+          .eq('record_type', 'request').in('record_id', requestIds));
+      }
+      if (responseIds.length) {
+        queries.push(db.from('audit_logs').select('*, user:users(full_name)')
+          .eq('record_type', 'response').in('record_id', responseIds));
+      }
+      if (!queries.length) return [];
+      const results = await Promise.all(queries);
+      for (const { error } of results) if (error) throw wrapRowError(error);
+      return results.flatMap(r => r.data)
+        .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    },
+
+    // ── Team workload (supervisor view) ──────────────────────────
+    // Every active staff member across the given sections — used by
+    // the Requests view's Team tab so a supervisor can pick one person
+    // and see their individual assigned workload, rather than only
+    // ever seeing the section in aggregate.
+    async listStaffInSections(sectionIds) {
+      if (!sectionIds || sectionIds.length === 0) return [];
+      const idSets = await Promise.all(sectionIds.map(id => NotificationsAPI.sectionUserIds(id)));
+      const userIds = [...new Set(idSets.flat())];
+      if (userIds.length === 0) return [];
+      const db = getSupabase();
+      const { data, error } = await db.from('users')
+        .select('id, full_name, designations(name)')
+        .in('id', userIds).eq('is_active', true).order('full_name');
+      if (error) throw wrapRowError(error);
+      return data;
+    },
+
+    // Every request currently assigned to this one staff member,
+    // regardless of which section routed it to them.
+    async listAssignedTo(userId) {
+      const db = getSupabase();
+      const { data, error } = await db.from('requests')
+        .select('*, from_org:organizations!requests_from_org_id_fkey(name, code), responses(status, received_at)')
+        .eq('assigned_to', userId)
+        .order('created_at', { ascending: false });
+      if (error) throw wrapRowError(error);
       return data;
     },
   };
