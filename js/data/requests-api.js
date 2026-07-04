@@ -291,7 +291,7 @@ const RequestsAPI = (() => {
     async approveRequest(id, fromSectionId, comment) {
       const db = getSupabase();
       const session = await Auth.getSession();
-      const { data: refNumber, error: rpcErr } = await db.rpc('generate_reference_number', { p_section_id: fromSectionId });
+      const { data: refNumber, error: rpcErr } = await db.rpc('generate_reference_number', { p_section_id: fromSectionId, p_record_type: 'request' });
       if (rpcErr) throw rpcErr;
       const { data, error } = await db.from('requests')
         .update({ status: 'sent', is_locked: true, reference_number: refNumber })
@@ -346,6 +346,18 @@ const RequestsAPI = (() => {
     },
 
     // ── Routing (receiving org, supervisor/admin/assigned_receiver) ────
+    // Only reachable once status = 'received' (see requests.js's
+    // needsRouting check), i.e. after markRequestReceived() has already
+    // set received_by = the acting user — which is exactly what keeps
+    // this .select() working: Postgres requires an UPDATE's resulting
+    // row to remain visible under the table's SELECT policy for every
+    // UPDATE (not only when RETURNING is used), so a default-section
+    // assigned_receiver routing to a DIFFERENT section they hold no
+    // assignment in would otherwise lose requests_select visibility the
+    // instant to_section_id changes. requests_select's `received_by =
+    // auth.uid()` clause (rls.sql) is what keeps them able to see (and
+    // thus this UPDATE...RETURNING able to return) a row they formally
+    // received, regardless of where it gets routed afterward.
     async routeRequest(id, toSectionId) {
       const db = getSupabase();
       const { data, error } = await db.from('requests')
@@ -433,8 +445,19 @@ const RequestsAPI = (() => {
     async approveResponse(id, requestId, comment) {
       const db = getSupabase();
       const session = await Auth.getSession();
+      // Reference number keyed off the RESPONDING section (the request's
+      // own to_section_id — the section actually drafting/sending this
+      // reply), symmetric to approveRequest() keying off the sender's
+      // from_section_id. Always "RES-" prefixed by the RPC itself, and
+      // tracked on its own per-section-per-year sequence, so it never
+      // collides with (or looks like) the request's own reference number.
+      const { data: reqRow, error: reqErr } = await db.from('requests')
+        .select('to_section_id').eq('id', requestId).single();
+      if (reqErr) throw wrapRowError(reqErr);
+      const { data: refNumber, error: rpcErr } = await db.rpc('generate_reference_number', { p_section_id: reqRow.to_section_id, p_record_type: 'response' });
+      if (rpcErr) throw rpcErr;
       const { data, error } = await db.from('responses')
-        .update({ status: 'sent', is_locked: true }).eq('id', id)
+        .update({ status: 'sent', is_locked: true, reference_number: refNumber }).eq('id', id)
         .select('*, request:requests(subject, created_by)').single();
       if (error) throw wrapRowError(error);
       await db.from('approvals').insert({

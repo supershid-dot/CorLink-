@@ -189,9 +189,12 @@ const RequestsView = {
     return (html || '').replace(/<[^>]+>/g, ' ');
   },
 
-  _matchesQuery(subject, body, query) {
+  // referenceNumber is optional — internal_requests have no reference
+  // number column at all (only requests/responses do), so call sites
+  // for that tab simply omit it.
+  _matchesQuery(subject, body, query, referenceNumber) {
     if (!query) return true;
-    return `${subject || ''} ${this._stripHtml(body)}`.toLowerCase().includes(query);
+    return `${subject || ''} ${this._stripHtml(body)} ${referenceNumber || ''}`.toLowerCase().includes(query);
   },
 
   // dir="auto" lets the browser flow the field RTL for a Divehi search
@@ -245,7 +248,7 @@ const RequestsView = {
     if (!resultsEl) return;
     const items = this._inboxItems || [];
     const query = (this._state.inboxSearch || '').trim().toLowerCase();
-    const searched = items.filter(r => this._matchesQuery(r.subject, r.body, query));
+    const searched = items.filter(r => this._matchesQuery(r.subject, r.body, query, r.reference_number));
     const filters = this._inboxFilters();
     const active = filters.find(f => f.key === this._state.inboxFilter) || filters[0];
     const filtered = searched.filter(active.test);
@@ -277,7 +280,7 @@ const RequestsView = {
     if (!resultsEl) return;
     const items = this._sentItems || [];
     const query = (this._state.sentSearch || '').trim().toLowerCase();
-    const searched = items.filter(r => this._matchesQuery(r.subject, r.body, query));
+    const searched = items.filter(r => this._matchesQuery(r.subject, r.body, query, r.reference_number));
     const filters = this._sentFilters();
     const active = filters.find(f => f.key === this._state.sentFilter) || filters[0];
     const filtered = searched.filter(active.test);
@@ -318,8 +321,8 @@ const RequestsView = {
     if (!resultsEl) return;
     const { requestApprovals = [], responseApprovals = [] } = this._approvalsData || {};
     const query = (this._state.approvalsSearch || '').trim().toLowerCase();
-    const filteredRequests = requestApprovals.filter(r => this._matchesQuery(r.subject, r.body, query));
-    const filteredResponses = responseApprovals.filter(resp => this._matchesQuery(resp.request?.subject, resp.body, query));
+    const filteredRequests = requestApprovals.filter(r => this._matchesQuery(r.subject, r.body, query, r.reference_number));
+    const filteredResponses = responseApprovals.filter(resp => this._matchesQuery(resp.request?.subject, resp.body, query, resp.reference_number));
     resultsEl.innerHTML = `
       <div class="queue-group">
         <div class="queue-group-title"><i class="ti ti-file-check"></i> Requests Awaiting Your Approval <span class="badge badge-outline">${filteredRequests.length}</span></div>
