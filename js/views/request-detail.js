@@ -65,6 +65,7 @@ const RequestDetailView = {
         const internalRequestDetails = await Promise.all(internalRequests.map(async (ir) => ({
           internalRequest: ir,
           replies: await InternalRequestsAPI.listReplies(ir.id),
+          attachments: await AttachmentsAPI.list('internal_request', ir.id),
         })));
         return { request, responseDetails, approvals, internalRequestDetails, attachments };
       }));
@@ -229,9 +230,10 @@ const RequestDetailView = {
             </span>
           `).join('') || ''}
         </div>
-        <label class="btn btn-secondary btn-xs attachment-upload-btn">
-          <i class="ti ti-upload"></i> Attach File
-          <input type="file" class="hidden" data-upload="${recordType}:${recordId}" />
+        <label class="attachment-dropzone" data-dropzone="${recordType}:${recordId}">
+          <i class="ti ti-cloud-upload"></i>
+          <span>Drag files here, or <span class="attachment-browse-link">browse</span></span>
+          <input type="file" multiple class="hidden" data-upload="${recordType}:${recordId}" />
         </label>
       </div>
     `;
@@ -290,6 +292,7 @@ const RequestDetailView = {
         </div>
         <div class="thread-message-body${ir.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(ir.body)}</div>
         ${this._renderReceipt(ir)}
+        ${this._renderAttachments('internal_request', ir.id, ird.attachments, true)}
         <div class="internal-request-replies">
           ${ird.replies.map(reply => `
             <div class="thread-message thread-message--response">
@@ -490,18 +493,41 @@ const RequestDetailView = {
       btn.addEventListener('click', () => this._openInternalReplyModal(btn.dataset.replyInternal));
     });
 
-    // Attachments
+    // Attachments — upload one at a time (sequential, not Promise.all)
+    // so one bad file's error doesn't cancel the ones already queued
+    // behind it, and so the alert (if any) can name exactly which
+    // file(s) failed rather than a generic "something went wrong".
     main.querySelectorAll('[data-upload]').forEach(input => {
       input.addEventListener('change', async () => {
-        const file = input.files[0];
-        if (!file) return;
+        const files = Array.from(input.files || []);
+        input.value = ''; // allow re-selecting the same file(s) later
+        if (files.length === 0) return;
         const [recordType, recordId] = input.dataset.upload.split(':');
-        try {
-          await AttachmentsAPI.upload(recordType, recordId, file);
-          await this._load();
-        } catch (err) {
-          alert(err.message || 'Upload failed.');
-        }
+        await this._uploadAttachments(recordType, recordId, files);
+      });
+    });
+    main.querySelectorAll('[data-dropzone]').forEach(zone => {
+      const [recordType, recordId] = zone.dataset.dropzone.split(':');
+      // dragenter/dragleave fire on every child element too as the
+      // pointer moves across them, which would otherwise flicker the
+      // active state on/off while dragging over the icon/text inside —
+      // dragover (not dragenter) is what actually needs preventDefault
+      // to allow a drop at all, and checking relatedTarget on dragleave
+      // (via contains) is the standard way to ignore internal moves.
+      zone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        zone.classList.add('attachment-dropzone--active');
+      });
+      zone.addEventListener('dragleave', (e) => {
+        if (e.relatedTarget && zone.contains(e.relatedTarget)) return;
+        zone.classList.remove('attachment-dropzone--active');
+      });
+      zone.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        zone.classList.remove('attachment-dropzone--active');
+        const files = Array.from(e.dataTransfer?.files || []);
+        if (files.length === 0) return;
+        await this._uploadAttachments(recordType, recordId, files);
       });
     });
     main.querySelectorAll('[data-download]').forEach(chip => {
@@ -514,6 +540,19 @@ const RequestDetailView = {
         }
       });
     });
+  },
+
+  async _uploadAttachments(recordType, recordId, files) {
+    const failures = [];
+    for (const file of files) {
+      try {
+        await AttachmentsAPI.upload(recordType, recordId, file);
+      } catch (err) {
+        failures.push(`${file.name}: ${err.message || 'upload failed'}`);
+      }
+    }
+    await this._load();
+    if (failures.length > 0) alert(failures.join('\n'));
   },
 
   async _runAction(fn) {

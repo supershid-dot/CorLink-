@@ -14,9 +14,20 @@ CREATE TABLE organizations (
   type         TEXT        NOT NULL CHECK (type IN ('mcs', 'authority')),
   code         TEXT        NOT NULL UNIQUE, -- e.g. 'MCS', 'HRCM'
   logo_path    TEXT,                        -- Supabase Storage path
+  -- Tokens: {ORG}, {SECTION}, {YEAR}, {SEQ} — substituted in
+  -- generate_reference_number() below. Responses always get an extra
+  -- "RES-" prefix on top of this org-chosen format, regardless of
+  -- whether the format itself mentions record type, so a request and
+  -- its response can never read as the same document even though each
+  -- keeps its own independent per-section-per-year sequence.
+  reference_number_format TEXT NOT NULL DEFAULT '{ORG}-{SECTION}-{YEAR}-{SEQ}',
   is_active    BOOLEAN     NOT NULL DEFAULT TRUE,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  -- default_receiving_section_id is added further down via ALTER TABLE,
+  -- once sections exists — it references sections(id), and sections is
+  -- defined later in this file (a section belongs to an organization,
+  -- not the other way around).
 );
 
 -- ─── MCS Structure ──────────────────────────────────────────
@@ -65,6 +76,20 @@ CREATE TABLE sections (
   ),
   UNIQUE (org_id, code)
 );
+
+-- Incoming external requests land here first (requests.to_section_id
+-- stays NULL until routed, exactly as before this column existed) —
+-- only staff holding assigned_receiver IN THIS SPECIFIC SECTION can
+-- see/act on that unrouted mail once set (see
+-- is_default_section_receiver() in rls.sql). NULL means "not
+-- configured yet", which falls back to the original org-wide behavior
+-- (any assigned_receiver anywhere in the org), so this is opt-in and
+-- never breaks an org that hasn't set it. Not a same-org CHECK
+-- constraint (Postgres CHECK can't reference another table) — the
+-- admin UI only ever offers the org's own sections, same convention
+-- as internal_requests' same-org invariant elsewhere in this file.
+ALTER TABLE organizations
+  ADD COLUMN default_receiving_section_id UUID REFERENCES sections(id);
 
 -- ─── Designations (job titles / positions within an organization) ──
 -- Org-specific picklist (e.g. "Legal Officer", "Case Manager") — the
@@ -155,15 +180,20 @@ CREATE TABLE user_password_history (
 );
 
 -- ─── Reference Number Sequences ─────────────────────────────
--- Tracks per-section, per-year auto-incrementing sequence for reference numbers.
--- Format: [ORG_CODE]-[SECTION_CODE]-[YEAR]-[ZERO_PADDED_SEQUENCE]
--- Example: HRCM-LGL-2026-0042
+-- Tracks per-section, per-year, per-record-type auto-incrementing
+-- sequence for reference numbers — record_type keeps requests and
+-- responses on independent counters (a section's first request and
+-- first response in a year both get sequence 1, not fighting over the
+-- same counter) even though both are ultimately formatted by the same
+-- org-configurable template (organizations.reference_number_format).
+-- Default format: {ORG}-{SECTION}-{YEAR}-{SEQ}, e.g. HRCM-LGL-2026-0042.
 CREATE TABLE reference_sequences (
   id            UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
   section_id    UUID    NOT NULL REFERENCES sections(id),
   year          INTEGER NOT NULL,
+  record_type   TEXT    NOT NULL DEFAULT 'request' CHECK (record_type IN ('request', 'response')),
   next_sequence INTEGER NOT NULL DEFAULT 1,
-  UNIQUE (section_id, year)
+  UNIQUE (section_id, year, record_type)
 );
 
 -- ─── Requests ───────────────────────────────────────────────
@@ -213,6 +243,10 @@ CREATE TABLE responses (
   status      TEXT    NOT NULL DEFAULT 'draft' CHECK (status IN (
                 'draft', 'pending_approval', 'sent', 'received'
               )),
+  -- Generated on supervisor approval + send, same as requests.reference_number
+  -- — always "RES-" prefixed (see generate_reference_number()) so it never
+  -- reads as the same document as the request it answers.
+  reference_number TEXT UNIQUE,
   is_locked   BOOLEAN NOT NULL DEFAULT FALSE,
   -- Read-receipt symmetric to requests.received_by/received_at — the
   -- originating org's staff member who formally received this response.
@@ -427,29 +461,62 @@ CREATE TRIGGER set_updated_at BEFORE UPDATE ON deadline_extensions
   FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
 
 -- ─── Reference Number Generator ──────────────────────────────
--- Called when a supervisor approves and sends a request.
--- Returns: ORG_CODE-SECTION_CODE-YEAR-NNNN (e.g. HRCM-LGL-2026-0042)
-CREATE OR REPLACE FUNCTION generate_reference_number(p_section_id UUID)
+-- Called when a supervisor approves and sends a request (p_record_type
+-- 'request') or a response (p_record_type 'response'). Each org picks
+-- its own format via organizations.reference_number_format — tokens
+-- {ORG}, {SECTION}, {YEAR}, {SEQ} — defaulting to the original
+-- hardcoded shape (ORG-SECTION-YEAR-NNNN, e.g. HRCM-LGL-2026-0042) so
+-- an org that never touches the setting sees no change. Responses
+-- always get an extra "RES-" prefix on top of whatever the resolved
+-- format produces, regardless of the template, so a request and its
+-- response can never look like the same document — each still has its
+-- own independent per-section-per-year sequence (reference_sequences
+-- .record_type), so this is guaranteed even if the org's template
+-- happens to not reference record type at all.
+--
+-- Explicitly DROP + CREATE rather than CREATE OR REPLACE: the old
+-- single-argument signature generate_reference_number(uuid) and this
+-- new generate_reference_number(uuid, text) are different overloads to
+-- Postgres (parameter lists differ), so CREATE OR REPLACE would add a
+-- second overload alongside the old one instead of replacing it —
+-- every existing db.rpc('generate_reference_number', { p_section_id })
+-- call would then fail with "function ... is not unique" once both
+-- exist. Dropping the old one first avoids that ambiguity outright.
+DROP FUNCTION IF EXISTS generate_reference_number(UUID);
+
+CREATE OR REPLACE FUNCTION generate_reference_number(p_section_id UUID, p_record_type TEXT DEFAULT 'request')
 RETURNS TEXT AS $$
 DECLARE
   v_year     INTEGER := EXTRACT(YEAR FROM NOW());
   v_seq      INTEGER;
   v_org_code TEXT;
   v_sec_code TEXT;
+  v_format   TEXT;
+  v_result   TEXT;
 BEGIN
-  -- Upsert sequence row and grab the next value atomically
-  INSERT INTO reference_sequences (section_id, year, next_sequence)
-  VALUES (p_section_id, v_year, 2)
-  ON CONFLICT (section_id, year)
+  -- Upsert sequence row and grab the next value atomically — keyed by
+  -- record_type too, so requests and responses never share a counter.
+  INSERT INTO reference_sequences (section_id, year, record_type, next_sequence)
+  VALUES (p_section_id, v_year, p_record_type, 2)
+  ON CONFLICT (section_id, year, record_type)
   DO UPDATE SET next_sequence = reference_sequences.next_sequence + 1
   RETURNING next_sequence - 1 INTO v_seq;
 
-  SELECT o.code, s.code
-  INTO v_org_code, v_sec_code
+  SELECT o.code, s.code, o.reference_number_format
+  INTO v_org_code, v_sec_code, v_format
   FROM sections s
   JOIN organizations o ON o.id = s.org_id
   WHERE s.id = p_section_id;
 
-  RETURN v_org_code || '-' || v_sec_code || '-' || v_year || '-' || LPAD(v_seq::TEXT, 4, '0');
+  v_result := replace(v_format, '{ORG}', v_org_code);
+  v_result := replace(v_result, '{SECTION}', v_sec_code);
+  v_result := replace(v_result, '{YEAR}', v_year::TEXT);
+  v_result := replace(v_result, '{SEQ}', LPAD(v_seq::TEXT, 4, '0'));
+
+  IF p_record_type = 'response' THEN
+    v_result := 'RES-' || v_result;
+  END IF;
+
+  RETURN v_result;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;

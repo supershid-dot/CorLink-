@@ -114,6 +114,21 @@ RETURNS BOOLEAN AS $$
   );
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
+-- True if the user is the org's designated "front desk" for incoming
+-- mail: an assigned_receiver in the org's configured
+-- default_receiving_section_id if one is set, or (unchanged legacy
+-- behavior) ANY assigned_receiver in the org at all if it isn't. Never
+-- breaks an org that hasn't configured a default section — it just
+-- keeps doing what it always did until an admin opts in.
+CREATE OR REPLACE FUNCTION is_default_section_receiver(p_org_id UUID)
+RETURNS BOOLEAN AS $$
+  SELECT CASE
+    WHEN (SELECT default_receiving_section_id FROM organizations WHERE id = p_org_id) IS NOT NULL
+      THEN has_role_in_section((SELECT default_receiving_section_id FROM organizations WHERE id = p_org_id), 'assigned_receiver')
+    ELSE has_role('assigned_receiver')
+  END;
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+
 -- Set of section_ids implied by ANY of the user's active assignments,
 -- expanding command/department/division-level assignments down to
 -- every currently-active section underneath them.
@@ -148,7 +163,18 @@ $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
 -- ─── organizations ────────────────────────────────────────────
 -- All authenticated users can read all orgs (needed for routing/display).
--- Only super_admin can create/update.
+-- Only super_admin can create; super_admin OR that org's own admin
+-- (mcs_admin/authority_admin) can update — widened from super_admin-
+-- only so an org's own admin can set default_receiving_section_id /
+-- reference_number_format on their own org (js/views/admin.js). RLS
+-- gates rows, not columns (same convention as requests_update_supervisor
+-- elsewhere in this file) — trusting the app to only ever send those
+-- two columns from that UI, not name/type/code/is_active, is the app's
+-- job, not this policy's. WITH CHECK matches USING: neither condition
+-- depends on any column this update path actually changes (id/org
+-- membership aren't being modified), so reusing the same expression
+-- post-update is safe, unlike the missing-WITH-CHECK bug pattern this
+-- file has hit before on status-dependent policies.
 CREATE POLICY "orgs_select" ON organizations
   FOR SELECT USING (auth.uid() IS NOT NULL);
 
@@ -156,7 +182,8 @@ CREATE POLICY "orgs_insert" ON organizations
   FOR INSERT WITH CHECK (is_super_admin());
 
 CREATE POLICY "orgs_update" ON organizations
-  FOR UPDATE USING (is_super_admin());
+  FOR UPDATE USING (is_super_admin() OR (is_admin() AND id = get_my_org_id()))
+  WITH CHECK (is_super_admin() OR (is_admin() AND id = get_my_org_id()));
 
 -- ─── commands ─────────────────────────────────────────────────
 CREATE POLICY "commands_select" ON commands
@@ -380,6 +407,23 @@ CREATE POLICY "refseq_select" ON reference_sequences
 -- Visibility: users see requests their org is party to.
 -- Within the org, section members see their section's requests.
 -- Supervisors and admins see all requests in their org.
+--
+-- received_by = auth.uid() is load-bearing, not just a nice-to-have:
+-- Postgres enforces that an UPDATE's resulting row remain visible
+-- under the table's SELECT policy for the acting role, for every
+-- UPDATE — not only when the client chains .select()/RETURNING.
+-- Confirmed empirically against a real Postgres instance. A default-
+-- section assigned_receiver (organizations.default_receiving_section_id
+-- — see is_default_section_receiver() below) who marks a request
+-- received and then routes it to a DIFFERENT section they hold no
+-- assignment in would otherwise have every such routeRequest() call
+-- fail with "new row violates row-level security policy", since
+-- to_section_id no longer matches their my_section_ids() and they may
+-- not be a supervisor. Without this clause the receiver could still
+-- SEE the request right up until the moment they route it away, then
+-- permanently lose access to something they formally received — this
+-- restores that visibility permanently once received, mirroring the
+-- "Received by [Name]" read-receipt already shown in the UI.
 CREATE POLICY "requests_select" ON requests
   FOR SELECT USING (
     (from_org_id = get_my_org_id() OR to_org_id = get_my_org_id())
@@ -388,6 +432,7 @@ CREATE POLICY "requests_select" ON requests
       OR from_section_id IN (SELECT my_section_ids())
       OR to_section_id   IN (SELECT my_section_ids())
       OR created_by      = auth.uid()
+      OR received_by      = auth.uid()
     )
   );
 
@@ -446,9 +491,15 @@ CREATE POLICY "requests_update_supervisor" ON requests
 -- rather than editing requests_select/requests_update_supervisor in
 -- place — Postgres ORs together all PERMISSIVE policies on the same
 -- command, so this is strictly additive.
+--
+-- is_default_section_receiver() (not a bare has_role('assigned_receiver'))
+-- scopes this to specifically the org's configured "front desk" section
+-- once one is set — so an assigned_receiver in some unrelated section
+-- no longer sees every other section's incoming mail too, which the
+-- plain org-wide has_role() check used to allow.
 CREATE POLICY "requests_select_assigned_receiver" ON requests
   FOR SELECT USING (
-    to_org_id = get_my_org_id() AND to_section_id IS NULL AND has_role('assigned_receiver')
+    to_org_id = get_my_org_id() AND to_section_id IS NULL AND is_default_section_receiver(to_org_id)
   );
 
 -- USING alone gates which rows are targetable (the org's still-unrouted
@@ -462,10 +513,10 @@ CREATE POLICY "requests_select_assigned_receiver" ON requests
 -- letting to_section_id become non-null.
 CREATE POLICY "requests_update_assigned_receiver" ON requests
   FOR UPDATE USING (
-    to_org_id = get_my_org_id() AND to_section_id IS NULL AND has_role('assigned_receiver')
+    to_org_id = get_my_org_id() AND to_section_id IS NULL AND is_default_section_receiver(to_org_id)
   )
   WITH CHECK (
-    to_org_id = get_my_org_id() AND has_role('assigned_receiver')
+    to_org_id = get_my_org_id() AND is_default_section_receiver(to_org_id)
   );
 
 -- RLS gates rows, not columns (same convention as requests_update_supervisor

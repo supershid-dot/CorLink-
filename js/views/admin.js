@@ -335,6 +335,7 @@ const AdminView = {
     const sections = await AdminAPI.listSectionsByOrg(org.id);
     const designations = await AdminAPI.listDesignations(org.id);
     const designationsPanelHtml = this._designationsPanelHtml(designations);
+    const orgSettingsPanelHtml = this._orgSettingsPanelHtml(org, sections);
 
     if (org.type === 'mcs') {
       const commands = await AdminAPI.listCommands(org.id);
@@ -391,6 +392,7 @@ const AdminView = {
           `).join('') || '<p class="structure-empty">No commands yet.</p>'}
         </div>
         ${designationsPanelHtml}
+        ${orgSettingsPanelHtml}
       `;
 
       document.getElementById('new-command-btn').addEventListener('click', () => {
@@ -489,6 +491,7 @@ const AdminView = {
           `).join('') || '<p class="structure-empty">No divisions yet.</p>'}
         </div>
         ${designationsPanelHtml}
+        ${orgSettingsPanelHtml}
       `;
 
       document.getElementById('new-division-btn').addEventListener('click', () => {
@@ -530,6 +533,7 @@ const AdminView = {
     }
 
     this._bindDesignationsPanel(content, org);
+    this._bindOrgSettingsPanel(content, org);
   },
 
   // Designations are a simple org-wide picklist (no hierarchy, unlike
@@ -577,6 +581,58 @@ const AdminView = {
         await AdminAPI.updateDesignation(btn.dataset.toggleDesignation, { is_active: btn.dataset.active !== 'true' });
         await this._renderTab();
       });
+    });
+  },
+
+  // Org-wide settings, one small panel appended after the structure
+  // tree/designations for both org types — mirrors that same "not
+  // hierarchical, doesn't belong to a single command/division" shape.
+  // Only ever touches default_receiving_section_id/reference_number_format
+  // (orgs_update RLS is row-level, not column-level — trusting this UI
+  // to only ever send these two fields, same convention documented on
+  // that policy in supabase/rls.sql).
+  _orgSettingsPanelHtml(org, sections) {
+    const activeSections = sections.filter(s => s.is_active);
+    return `
+      <div class="panel">
+        <div class="panel-header"><h3>Request Routing &amp; Reference Numbers</h3></div>
+        <form id="org-settings-form" class="modal-form">
+          <div class="field-group">
+            <label class="field-label">Default Receiving Section</label>
+            <select class="field-select" name="defaultReceivingSectionId">
+              <option value="">— None (any Assigned Receiver in the org) —</option>
+              ${activeSections.map(s => `<option value="${s.id}" ${s.id === org.default_receiving_section_id ? 'selected' : ''}>${this._escapeHtml(s.name)}</option>`).join('')}
+            </select>
+            <div class="field-hint">Incoming requests are received here first — only staff assigned as "Assigned Receiver" in this section can mark mail received and route it to whichever section should actually reply. Leave unset to let any org-wide Assigned Receiver handle incoming mail (the original behavior).</div>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Reference Number Format</label>
+            <input class="field-input-plain" name="referenceNumberFormat" required value="${this._escapeHtml(org.reference_number_format || '{ORG}-{SECTION}-{YEAR}-{SEQ}')}" />
+            <div class="field-hint">Tokens: {ORG}, {SECTION}, {YEAR}, {SEQ}. Responses are automatically prefixed with "RES-" on top of this format. Example: HRCM-LGL-2026-0042</div>
+          </div>
+          <div class="org-settings-error alert alert-error hidden"></div>
+          <button type="submit" class="btn btn-primary btn-sm">Save</button>
+        </form>
+      </div>
+    `;
+  },
+
+  _bindOrgSettingsPanel(content, org) {
+    const form = document.getElementById('org-settings-form');
+    form?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const errEl = form.querySelector('.org-settings-error');
+      try {
+        await AdminAPI.updateOrganization(org.id, {
+          default_receiving_section_id: fd.get('defaultReceivingSectionId') || null,
+          reference_number_format: fd.get('referenceNumberFormat'),
+        });
+        await this._renderTab();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
     });
   },
 
