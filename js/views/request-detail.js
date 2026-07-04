@@ -224,9 +224,9 @@ const RequestDetailView = {
       <div class="attachments-panel" data-attachments="${recordType}:${recordId}">
         <div class="attachments-list">
           ${attachments.map(a => `
-            <span class="attachment-chip" data-download="${a.id}" data-path="${a.storage_path}">
-              <i class="ti ti-paperclip"></i> ${a.filename}
-              <span class="structure-empty">(${a.uploaded_by_user?.full_name || 'Unknown'})</span>
+            <span class="attachment-chip" data-download="${a.id}" data-path="${this._escapeHtml(a.storage_path)}">
+              <i class="ti ti-paperclip"></i> ${this._escapeHtml(a.filename)}
+              <span class="structure-empty">(${this._escapeHtml(a.uploaded_by_user?.full_name || 'Unknown')})</span>
             </span>
           `).join('') || ''}
         </div>

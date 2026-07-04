@@ -163,18 +163,17 @@ $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
 -- ─── organizations ────────────────────────────────────────────
 -- All authenticated users can read all orgs (needed for routing/display).
--- Only super_admin can create; super_admin OR that org's own admin
--- (mcs_admin/authority_admin) can update — widened from super_admin-
--- only so an org's own admin can set default_receiving_section_id /
--- reference_number_format on their own org (js/views/admin.js). RLS
--- gates rows, not columns (same convention as requests_update_supervisor
--- elsewhere in this file) — trusting the app to only ever send those
--- two columns from that UI, not name/type/code/is_active, is the app's
--- job, not this policy's. WITH CHECK matches USING: neither condition
--- depends on any column this update path actually changes (id/org
--- membership aren't being modified), so reusing the same expression
--- post-update is safe, unlike the missing-WITH-CHECK bug pattern this
--- file has hit before on status-dependent policies.
+-- Only super_admin can create or update rows directly. An org's own
+-- admin (mcs_admin/authority_admin) needs to set
+-- default_receiving_section_id / reference_number_format on their own
+-- org (js/views/admin.js) — that intentionally does NOT go through a
+-- row-level UPDATE grant here, because RLS gates rows, not columns:
+-- a blanket "org admin can update their own org" USING/WITH CHECK would
+-- let that same admin also flip is_active/code/name/logo_path on their
+-- own org via a direct API call, bypassing the super-admin-only UI that
+-- exposes those fields today. Instead, org admins go through the
+-- update_org_workflow_settings() SECURITY DEFINER RPC below, which is
+-- hard-scoped to exactly those two columns plus input validation.
 CREATE POLICY "orgs_select" ON organizations
   FOR SELECT USING (auth.uid() IS NOT NULL);
 
@@ -182,8 +181,44 @@ CREATE POLICY "orgs_insert" ON organizations
   FOR INSERT WITH CHECK (is_super_admin());
 
 CREATE POLICY "orgs_update" ON organizations
-  FOR UPDATE USING (is_super_admin() OR (is_admin() AND id = get_my_org_id()))
-  WITH CHECK (is_super_admin() OR (is_admin() AND id = get_my_org_id()));
+  FOR UPDATE USING (is_super_admin())
+  WITH CHECK (is_super_admin());
+
+-- Lets an org's own admin set exactly default_receiving_section_id /
+-- reference_number_format on their own org, without the blanket
+-- row-level UPDATE grant that would also expose is_active/code/name/
+-- logo_path to a direct API call (see the comment on orgs_update
+-- above). SECURITY DEFINER so it can write to organizations despite
+-- orgs_update now being super-admin-only; the permission check inside
+-- the function body is what actually gates this, not RLS.
+CREATE OR REPLACE FUNCTION update_org_workflow_settings(
+  p_org_id UUID,
+  p_default_receiving_section_id UUID,
+  p_reference_number_format TEXT
+)
+RETURNS VOID AS $$
+BEGIN
+  IF NOT (is_super_admin() OR (is_admin() AND p_org_id = get_my_org_id())) THEN
+    RAISE EXCEPTION 'Not authorized to update this organization';
+  END IF;
+
+  IF p_default_receiving_section_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM sections WHERE id = p_default_receiving_section_id AND org_id = p_org_id
+  ) THEN
+    RAISE EXCEPTION 'default_receiving_section_id must belong to the target organization';
+  END IF;
+
+  IF p_reference_number_format IS NULL OR trim(p_reference_number_format) = ''
+     OR p_reference_number_format NOT LIKE '%{SEQ}%' THEN
+    RAISE EXCEPTION 'reference_number_format must be non-empty and include the {SEQ} token';
+  END IF;
+
+  UPDATE organizations
+  SET default_receiving_section_id = p_default_receiving_section_id,
+      reference_number_format = p_reference_number_format
+  WHERE id = p_org_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- ─── commands ─────────────────────────────────────────────────
 CREATE POLICY "commands_select" ON commands
@@ -575,6 +610,16 @@ $$ LANGUAGE sql STABLE;
 -- on it, unlike requests_select's section/supervisor/creator scoping.
 -- Tightened to match requests_select's shape now that receipt-tracking
 -- UI sits on top of this.
+--
+-- OR received_by = auth.uid() mirrors the identical fix on requests_select
+-- above, for the identical reason: Postgres requires an UPDATE's
+-- post-update row to remain visible under this SELECT policy for the
+-- acting role, for every UPDATE (not just ones chaining .select()) —
+-- markResponseReceived() sets received_by, and an org-wide
+-- assigned_receiver marking a response received isn't necessarily in
+-- the parent request's from/to section, so without this clause that
+-- exact call would self-reject post-update, the same bug class the
+-- requests_select fix addressed.
 CREATE POLICY "responses_select" ON responses
   FOR SELECT USING (
     EXISTS (
@@ -589,6 +634,7 @@ CREATE POLICY "responses_select" ON responses
           OR created_by        = auth.uid()
         )
     )
+    OR received_by = auth.uid()
   );
 
 CREATE POLICY "responses_insert" ON responses
@@ -628,19 +674,29 @@ CREATE POLICY "responses_update_supervisor" ON responses
 
 -- Symmetric to requests_update_assigned_receiver, on the response side:
 -- the ORIGINATING org's assigned_receiver can mark a sent response as
--- received.
+-- received. Uses is_default_section_receiver(r.from_org_id) rather than
+-- a bare has_role('assigned_receiver') for the same reason as the
+-- requests-side policy: a response is incoming mail to the originating
+-- org too, so it should triage through that org's configured default
+-- receiving section exactly like an external request does (falling
+-- back to the old org-wide behavior when no default section is set).
 -- Same USING-without-WITH-CHECK trap as requests_update_assigned_receiver
 -- above: markResponseReceived() sets received_by, which would make a
 -- reused-as-WITH-CHECK USING clause (received_by IS NULL) reject every
 -- real call. WITH CHECK only reasserts role/org, not received_by's value.
 CREATE POLICY "responses_update_assigned_receiver" ON responses
   FOR UPDATE USING (
-    has_role('assigned_receiver') AND status = 'sent' AND received_by IS NULL
-    AND EXISTS (SELECT 1 FROM requests r WHERE r.id = request_id AND r.from_org_id = get_my_org_id())
+    status = 'sent' AND received_by IS NULL
+    AND EXISTS (
+      SELECT 1 FROM requests r WHERE r.id = request_id
+        AND r.from_org_id = get_my_org_id() AND is_default_section_receiver(r.from_org_id)
+    )
   )
   WITH CHECK (
-    has_role('assigned_receiver')
-    AND EXISTS (SELECT 1 FROM requests r WHERE r.id = request_id AND r.from_org_id = get_my_org_id())
+    EXISTS (
+      SELECT 1 FROM requests r WHERE r.id = request_id
+        AND r.from_org_id = get_my_org_id() AND is_default_section_receiver(r.from_org_id)
+    )
   );
 
 -- ─── internal_requests / internal_request_replies ──────────────

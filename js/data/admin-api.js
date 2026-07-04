@@ -57,6 +57,21 @@ const AdminAPI = (() => {
       return data;
     },
 
+    // Goes through the update_org_workflow_settings() RPC rather than a
+    // plain table update — orgs_update RLS is super-admin-only so an org
+    // admin can set these two fields on their own org without also
+    // getting row-level write access to is_active/code/name/logo_path.
+    async updateOrgWorkflowSettings(id, { defaultReceivingSectionId, referenceNumberFormat }) {
+      const db = getSupabase();
+      const { error } = await db.rpc('update_org_workflow_settings', {
+        p_org_id: id,
+        p_default_receiving_section_id: defaultReceivingSectionId,
+        p_reference_number_format: referenceNumberFormat,
+      });
+      if (error) throw error;
+      await logAudit('edited', 'organization', id, `Updated request routing & reference number settings`);
+    },
+
     // Uploads a logo file to the (public) org-logos bucket and points
     // the organization row at it. Storage RLS restricts writes to
     // super admins — see supabase/storage-policies.sql.

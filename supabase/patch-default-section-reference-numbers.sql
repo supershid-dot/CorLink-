@@ -31,10 +31,18 @@
 -- both would exist afterward and every existing call would fail with
 -- "function ... is not unique".
 --
--- Part 5 — orgs_update RLS widened
--- Previously super_admin-only; now also lets an org's own admin
--- (mcs_admin/authority_admin) update their own organization row, which
--- is what lets them set the two new columns above from js/views/admin.js.
+-- Part 5 — orgs_update stays super-admin-only; update_org_workflow_settings() RPC added
+-- An earlier draft of this patch widened orgs_update so an org's own
+-- admin could update their own organization row directly — that was
+-- wrong: RLS gates rows, not columns, so it would also have let that
+-- admin flip is_active/code/name/logo_path on their own org via a
+-- direct API call, bypassing the super-admin-only UI that exposes
+-- those fields. Fixed before this ever shipped: orgs_update stays
+-- super_admin-only, and a new SECURITY DEFINER RPC,
+-- update_org_workflow_settings(), is hard-scoped to exactly
+-- default_receiving_section_id/reference_number_format, with input
+-- validation (section must belong to the target org; format must be
+-- non-empty and include {SEQ}).
 --
 -- Part 6 — assigned_receiver visibility scoped to the default section
 -- requests_select_assigned_receiver / requests_update_assigned_receiver
@@ -53,6 +61,16 @@
 -- instance. Also a reasonable feature on its own: whoever formally
 -- received a request keeps permanent visibility into it, mirroring
 -- the "Received by [Name]" read-receipt already shown in the UI.
+--
+-- Part 8 — same received_by + default-section scoping fixes, on responses
+-- responses_select gains the identical received_by = auth.uid() clause
+-- as Part 7, for the identical reason (a response is incoming mail to
+-- the originating org too, and markResponseReceived() hits the same
+-- UPDATE-requires-post-update-visibility rule). responses_update_
+-- assigned_receiver is rescoped from a bare has_role('assigned_receiver')
+-- to is_default_section_receiver(r.from_org_id), matching the requests
+-- side, so an assigned_receiver in some unrelated section can no
+-- longer act on responses either, once a default section is configured.
 -- ============================================================
 
 BEGIN;
@@ -127,8 +145,37 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- ── Part 5 ──────────────────────────────────────────────────
 DROP POLICY IF EXISTS "orgs_update" ON organizations;
 CREATE POLICY "orgs_update" ON organizations
-  FOR UPDATE USING (is_super_admin() OR (is_admin() AND id = get_my_org_id()))
-  WITH CHECK (is_super_admin() OR (is_admin() AND id = get_my_org_id()));
+  FOR UPDATE USING (is_super_admin())
+  WITH CHECK (is_super_admin());
+
+CREATE OR REPLACE FUNCTION update_org_workflow_settings(
+  p_org_id UUID,
+  p_default_receiving_section_id UUID,
+  p_reference_number_format TEXT
+)
+RETURNS VOID AS $$
+BEGIN
+  IF NOT (is_super_admin() OR (is_admin() AND p_org_id = get_my_org_id())) THEN
+    RAISE EXCEPTION 'Not authorized to update this organization';
+  END IF;
+
+  IF p_default_receiving_section_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM sections WHERE id = p_default_receiving_section_id AND org_id = p_org_id
+  ) THEN
+    RAISE EXCEPTION 'default_receiving_section_id must belong to the target organization';
+  END IF;
+
+  IF p_reference_number_format IS NULL OR trim(p_reference_number_format) = ''
+     OR p_reference_number_format NOT LIKE '%{SEQ}%' THEN
+    RAISE EXCEPTION 'reference_number_format must be non-empty and include the {SEQ} token';
+  END IF;
+
+  UPDATE organizations
+  SET default_receiving_section_id = p_default_receiving_section_id,
+      reference_number_format = p_reference_number_format
+  WHERE id = p_org_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- ── Part 6 ──────────────────────────────────────────────────
 CREATE OR REPLACE FUNCTION is_default_section_receiver(p_org_id UUID)
@@ -166,6 +213,41 @@ CREATE POLICY "requests_select" ON requests
       OR to_section_id   IN (SELECT my_section_ids())
       OR created_by      = auth.uid()
       OR received_by      = auth.uid()
+    )
+  );
+
+-- ── Part 8 ──────────────────────────────────────────────────
+DROP POLICY IF EXISTS "responses_select" ON responses;
+CREATE POLICY "responses_select" ON responses
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM requests r
+      WHERE r.id = request_id
+        AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
+        AND (
+          is_supervisor_or_above()
+          OR r.from_section_id IN (SELECT my_section_ids())
+          OR r.to_section_id   IN (SELECT my_section_ids())
+          OR r.created_by      = auth.uid()
+          OR created_by        = auth.uid()
+        )
+    )
+    OR received_by = auth.uid()
+  );
+
+DROP POLICY IF EXISTS "responses_update_assigned_receiver" ON responses;
+CREATE POLICY "responses_update_assigned_receiver" ON responses
+  FOR UPDATE USING (
+    status = 'sent' AND received_by IS NULL
+    AND EXISTS (
+      SELECT 1 FROM requests r WHERE r.id = request_id
+        AND r.from_org_id = get_my_org_id() AND is_default_section_receiver(r.from_org_id)
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM requests r WHERE r.id = request_id
+        AND r.from_org_id = get_my_org_id() AND is_default_section_receiver(r.from_org_id)
     )
   );
 

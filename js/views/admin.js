@@ -587,10 +587,9 @@ const AdminView = {
   // Org-wide settings, one small panel appended after the structure
   // tree/designations for both org types — mirrors that same "not
   // hierarchical, doesn't belong to a single command/division" shape.
-  // Only ever touches default_receiving_section_id/reference_number_format
-  // (orgs_update RLS is row-level, not column-level — trusting this UI
-  // to only ever send these two fields, same convention documented on
-  // that policy in supabase/rls.sql).
+  // Goes through AdminAPI.updateOrgWorkflowSettings(), which calls the
+  // update_org_workflow_settings() RPC — hard-scoped server-side to just
+  // these two columns (see supabase/rls.sql), not a generic row update.
   _orgSettingsPanelHtml(org, sections) {
     const activeSections = sections.filter(s => s.is_active);
     return `
@@ -624,9 +623,9 @@ const AdminView = {
       const fd = new FormData(form);
       const errEl = form.querySelector('.org-settings-error');
       try {
-        await AdminAPI.updateOrganization(org.id, {
-          default_receiving_section_id: fd.get('defaultReceivingSectionId') || null,
-          reference_number_format: fd.get('referenceNumberFormat'),
+        await AdminAPI.updateOrgWorkflowSettings(org.id, {
+          defaultReceivingSectionId: fd.get('defaultReceivingSectionId') || null,
+          referenceNumberFormat: fd.get('referenceNumberFormat'),
         });
         await this._renderTab();
       } catch (err) {
