@@ -573,13 +573,20 @@ const RequestsAPI = (() => {
       return data;
     },
 
-    // Every request currently assigned to this one staff member,
-    // regardless of which section routed it to them.
-    async listAssignedTo(userId) {
+    // Every request this staff member has a hand in — either assigned
+    // to them for drafting a reply (assigned_to), OR one they
+    // personally authored as the outbound sender (created_by), still a
+    // draft/pending_approval or further along. Renamed from
+    // listAssignedTo() — that name undersold it: a staff member's own
+    // outbound draft requests (composed via "New Request", never
+    // routed/assigned to anyone) were invisible in the Team tab
+    // entirely under the old assigned_to-only query, not just
+    // miscategorized within it.
+    async listStaffWorkload(userId) {
       const db = getSupabase();
       const { data, error } = await db.from('requests')
         .select('*, from_org:organizations!requests_from_org_id_fkey(name, code), responses(status, received_at)')
-        .eq('assigned_to', userId)
+        .or(`assigned_to.eq.${userId},created_by.eq.${userId}`)
         .order('created_at', { ascending: false });
       if (error) throw wrapRowError(error);
       return data;
