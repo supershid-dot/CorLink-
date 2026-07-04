@@ -131,6 +131,14 @@ const DashboardView = {
         const outstanding = await InternalRequestsAPI.listOutstandingForSections(sectionIds);
         const awaitingTheirReply = outstanding.filter(ir => mySet.has(ir.from_section_id) && !mySet.has(ir.to_section_id)).length;
         rows.push({ icon: 'ti-clock', label: 'Information Requested — Awaiting Reply', count: awaitingTheirReply, href: '#requests?tab=info' });
+
+        // Mirror of the row above, from the OTHER side of the same
+        // internal_requests rows: another section asked MINE for input
+        // and I haven't replied yet. Previously had no dashboard
+        // indicator at all — a recipient section only ever discovered
+        // this by opening the Info Requests tab directly.
+        const needsMyReply = outstanding.filter(ir => mySet.has(ir.to_section_id)).length;
+        rows.push({ icon: 'ti-message-question', label: 'Information Requests — Needs Your Reply', count: needsMyReply, href: '#requests?tab=info' });
       }
 
       listEl.innerHTML = rows.map(r => `
