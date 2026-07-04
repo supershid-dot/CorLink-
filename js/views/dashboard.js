@@ -85,16 +85,25 @@ const DashboardView = {
               </div>
             </div>
 
-            <div class="panel">
-              <div class="panel-header"><h3>Quick Actions</h3></div>
-              <div class="quick-actions-list">
-                ${quickActions.map(a => `
-                  <a href="${a.href}" class="quick-action-btn">
-                    <i class="ti ${a.icon}"></i>
-                    <span>${a.label}</span>
-                    <i class="ti ti-chevron-right"></i>
-                  </a>
-                `).join('')}
+            <div class="dashboard-column-stack">
+              <div class="panel">
+                <div class="panel-header"><h3>Quick Actions</h3></div>
+                <div class="quick-actions-list">
+                  ${quickActions.map(a => `
+                    <a href="${a.href}" class="quick-action-btn">
+                      <i class="ti ${a.icon}"></i>
+                      <span>${a.label}</span>
+                      <i class="ti ti-chevron-right"></i>
+                    </a>
+                  `).join('')}
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-header"><h3>Upcoming Deadlines</h3></div>
+                <div class="deadline-list" id="deadline-list">
+                  <div class="action-list-empty"><span class="spinner spinner--dark"></span> Loading…</div>
+                </div>
               </div>
             </div>
           </div>
@@ -223,10 +232,50 @@ const DashboardView = {
           <i class="ti ti-chevron-right action-row-chevron"></i>
         </a>
       `).join('') || `<div class="action-list-empty">Nothing needs your attention right now.</div>`;
+
+      // Reuses the same inbox/sent already fetched above rather than a
+      // third round trip — both lists already carry deadline/status/
+      // reference_number/subject on every row.
+      this._renderUpcomingDeadlines(inbox, sent);
     } catch (err) {
       console.error('CorLink: failed to load action-needed counts', err);
       listEl.innerHTML = `<div class="action-list-empty">Couldn't load this — refresh to try again.</div>`;
+      const deadlineEl = document.getElementById('deadline-list');
+      if (deadlineEl) deadlineEl.innerHTML = `<div class="action-list-empty">Couldn't load this — refresh to try again.</div>`;
     }
+  },
+
+  _renderUpcomingDeadlines(inbox, sent) {
+    const listEl = document.getElementById('deadline-list');
+    if (!listEl) return;
+
+    const today = new Date().toISOString().slice(0, 10);
+    const items = [...inbox, ...sent]
+      .filter(r => r.deadline && !['closed', 'responded'].includes(r.status))
+      .sort((a, b) => a.deadline.localeCompare(b.deadline))
+      .slice(0, 5);
+
+    listEl.innerHTML = items.map(r => {
+      const diffDays = Math.round((new Date(r.deadline) - new Date(today)) / 86400000);
+      const urgency = diffDays < 0 ? 'error' : diffDays <= 2 ? 'warning' : 'secondary';
+      const statusLabel = diffDays < 0 ? 'Overdue' : diffDays === 0 ? 'Due today' : `${diffDays} day${diffDays === 1 ? '' : 's'} left`;
+      const d = new Date(r.deadline + 'T00:00:00');
+      const month = d.toLocaleDateString(undefined, { month: 'short' }).toUpperCase();
+
+      return `
+        <a href="#request-detail?id=${r.id}" class="deadline-row">
+          <div class="deadline-date deadline-date--${urgency}">
+            <span class="deadline-date-month">${month}</span>
+            <span class="deadline-date-day">${d.getDate()}</span>
+          </div>
+          <div class="deadline-row-body">
+            <div class="deadline-row-ref">${r.reference_number || 'Draft'}</div>
+            <div class="deadline-row-subject"><span class="${r.subject_language === 'dv' ? 'field-divehi' : ''}">${r.subject}</span></div>
+          </div>
+          <span class="deadline-row-status deadline-row-status--${urgency}">${statusLabel}</span>
+        </a>
+      `;
+    }).join('') || `<div class="action-list-empty">No upcoming deadlines.</div>`;
   },
 
   bind() {
