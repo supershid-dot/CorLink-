@@ -955,8 +955,35 @@ CREATE POLICY "attachments_select" ON attachments
     ))
   );
 
+-- Buttons are UX only elsewhere in this app ("an unauthorized click
+-- still fails server-side" — see request-detail.js's own header
+-- comment) — this makes that true here too: once a request/response
+-- is_locked (set on supervisor approval), no more attachments can be
+-- inserted against it, matching the dropzone being hidden client-side.
+-- internal_request has no approval/lock concept, so it's unrestricted
+-- there — but that branch still requires record_id to resolve to a
+-- REAL internal_requests row (mirroring attachments_select's own
+-- shape), not a bare `record_type = 'internal_request'` escape hatch:
+-- attachments.record_id has no FK tying it to whichever table
+-- record_type implies, so without this EXISTS check, record_type
+-- could be spoofed as 'internal_request' while record_id is actually
+-- a LOCKED request's/response's id, bypassing the two checks above
+-- entirely (caught in code review before this ever shipped).
 CREATE POLICY "attachments_insert" ON attachments
-  FOR INSERT WITH CHECK (uploaded_by = auth.uid());
+  FOR INSERT WITH CHECK (
+    uploaded_by = auth.uid()
+    AND (
+      (record_type = 'request' AND NOT EXISTS (
+        SELECT 1 FROM requests r WHERE r.id = record_id AND r.is_locked
+      ))
+      OR (record_type = 'response' AND NOT EXISTS (
+        SELECT 1 FROM responses re WHERE re.id = record_id AND re.is_locked
+      ))
+      OR (record_type = 'internal_request' AND EXISTS (
+        SELECT 1 FROM internal_requests ir WHERE ir.id = record_id
+      ))
+    )
+  );
 
 CREATE POLICY "attachments_delete" ON attachments
   FOR DELETE USING (uploaded_by = auth.uid());

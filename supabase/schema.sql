@@ -222,6 +222,12 @@ CREATE TABLE requests (
   deadline          DATE,
   reference_number  TEXT    UNIQUE,    -- Generated on supervisor approval + send
   is_locked         BOOLEAN NOT NULL DEFAULT FALSE,
+  -- The specific supervisor the creator chose to send this to on
+  -- submitForApproval — informational routing/notification target
+  -- only, NOT an exclusivity gate: RLS still lets any qualifying
+  -- supervisor of from_section_id approve/return it (e.g. if the
+  -- chosen one is away), matching how assigned_to already works.
+  pending_approval_by UUID REFERENCES users(id),
   parent_request_id UUID    REFERENCES requests(id),   -- Same "case" — follow-up requests
   -- Read-receipt: which specific staff member at the destination org
   -- formally acknowledged this request, and when. Shown to the sending
@@ -248,6 +254,9 @@ CREATE TABLE responses (
   -- reads as the same document as the request it answers.
   reference_number TEXT UNIQUE,
   is_locked   BOOLEAN NOT NULL DEFAULT FALSE,
+  -- Symmetric to requests.pending_approval_by — same informational-
+  -- routing-only semantics.
+  pending_approval_by UUID REFERENCES users(id),
   -- Read-receipt symmetric to requests.received_by/received_at — the
   -- originating org's staff member who formally received this response.
   received_by UUID    REFERENCES users(id),
