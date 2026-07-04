@@ -1,33 +1,49 @@
 /* ─── CorLink — Design System ────────────────────────────────
-   Primary: #1A7A6E (Teal)   Secondary: #1D4E89 (Navy)
+   Primary: #6C47FF (Violet)   Secondary: #3B82F6 (Blue)
    Font: Inter, system-sans  Icons: Tabler Icons
    ─────────────────────────────────────────────────────────── */
 
 /* ── Variables ─────────────────────────────────────────────── */
 :root {
-  --color-primary:       #1A7A6E;
-  --color-primary-dark:  #145F56;
-  --color-primary-light: #E8F5F3;
-  --color-secondary:     #1D4E89;
-  --color-secondary-dark:#153870;
+  --color-primary:        #6C47FF;
+  --color-primary-dark:   #5636CC;
+  --color-primary-light:  #F1EDFF;
+  --color-secondary:      #3B82F6;
+  --color-secondary-dark: #2563EB;
+  --color-secondary-light:#EAF2FF;
 
-  --color-success:       #15803D;
-  --color-success-bg:    #DCFCE7;
-  --color-warning:       #B45309;
+  /* Each status color has a vivid tone (icons, decorative accents,
+     large-scale UI) plus a "-dark" tone reserved for text/small-icon use
+     on top of that color's own "-bg" tint — the vivid tones alone don't
+     clear WCAG AA (4.5:1) against their pastel backgrounds or against
+     white, same reasoning as --color-primary/--color-primary-dark
+     already established. */
+  --color-success:       #10B981;
+  --color-success-dark:  #047857;
+  --color-success-bg:    #D1FAE5;
+  --color-warning:       #F59E0B;
+  --color-warning-dark:  #B45309;
   --color-warning-bg:    #FEF3C7;
-  --color-error:         #DC2626;
+  --color-error:         #EF4444;
+  --color-error-dark:    #B91C1C;
   --color-error-bg:      #FEE2E2;
-  --color-info:          #0369A1;
+  --color-info:          #0EA5E9;
+  --color-info-dark:     #0369A1;
   --color-info-bg:       #E0F2FE;
 
-  --color-text:          #111827;
-  --color-text-muted:    #6B7280;
-  --color-text-light:    #9CA3AF;
+  /* --color-text-muted is a mid-slate rather than the reference's
+     literal #94A3B8 — that value is ~2.3:1 against a white surface,
+     failing WCAG AA for the small captions/labels it's used on here.
+     The reference's literal value lives on as --color-text-light,
+     already reserved for lower-stakes decorative text (chevrons etc). */
+  --color-text:          #0F172A;
+  --color-text-muted:    #64748B;
+  --color-text-light:    #94A3B8;
   --color-border:        #E5E7EB;
-  --color-border-focus:  #1A7A6E;
-  --color-bg:            #F9FAFB;
+  --color-border-focus:  #6C47FF;
+  --color-bg:            #F8FAFC;
   --color-surface:       #FFFFFF;
-  --color-overlay:       rgba(17, 24, 39, 0.5);
+  --color-overlay:       rgba(15, 23, 42, 0.5);
 
   --radius-sm:   4px;
   --radius-md:   8px;
@@ -83,10 +99,10 @@
   filter: drop-shadow(0 0 1px rgba(255,255,255,.5)) drop-shadow(0 0 5px rgba(255,255,255,.15));
 }
 :root[data-theme="light"] {
-  --color-text:          #111827;
-  --color-text-muted:    #6B7280;
+  --color-text:          #0F172A;
+  --color-text-muted:    #64748B;
   --color-border:        #E5E7EB;
-  --color-bg:            #F9FAFB;
+  --color-bg:            #F8FAFC;
   --color-surface:       #FFFFFF;
 }
 
@@ -150,10 +166,10 @@ p  { line-height: 1.6; }
   line-height: 1.5;
 }
 .alert i { flex-shrink: 0; margin-top: 2px; }
-.alert-error   { background: var(--color-error-bg);   color: var(--color-error);   }
-.alert-success { background: var(--color-success-bg); color: var(--color-success); }
-.alert-warning { background: var(--color-warning-bg); color: var(--color-warning); }
-.alert-info    { background: var(--color-info-bg);    color: var(--color-info);    }
+.alert-error   { background: var(--color-error-bg);   color: var(--color-error-dark);   }
+.alert-success { background: var(--color-success-bg); color: var(--color-success-dark); }
+.alert-warning { background: var(--color-warning-bg); color: var(--color-warning-dark); }
+.alert-info    { background: var(--color-info-bg);    color: var(--color-info-dark);    }
 
 /* ── Buttons ────────────────────────────────────────────────── */
 .btn {
@@ -244,12 +260,12 @@ p  { line-height: 1.6; }
 }
 .field-input:focus {
   border-color: var(--color-border-focus);
-  box-shadow: 0 0 0 3px rgba(26, 122, 110, 0.15);
+  box-shadow: 0 0 0 3px rgba(108, 71, 255, 0.15);
 }
 .field-input::placeholder { color: var(--color-text-light); }
 .field-input.input-error {
   border-color: var(--color-error);
-  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.12);
 }
 
 .field-toggle-pw {
@@ -296,7 +312,7 @@ p  { line-height: 1.6; }
   color: var(--color-text-muted);
   transition: color var(--transition);
 }
-.pw-req.req-met { color: var(--color-success); }
+.pw-req.req-met { color: var(--color-success-dark); }
 .pw-req i { font-size: 0.875rem; }
 
 /* ── Login Layout ────────────────────────────────────────────── */
@@ -546,7 +562,7 @@ p  { line-height: 1.6; }
   transition: background var(--transition);
 }
 .menu-item:hover { background: var(--color-bg); }
-.menu-item.danger { color: var(--color-error); }
+.menu-item.danger { color: var(--color-error-dark); }
 
 .menu-item-link {
   font-size: 0.8125rem;
@@ -564,7 +580,7 @@ p  { line-height: 1.6; }
   min-width: 16px; height: 16px;
   padding: 0 4px;
   border-radius: var(--radius-full);
-  background: var(--color-error);
+  background: var(--color-error-dark);
   color: #fff;
   font-size: 0.625rem;
   font-weight: 700;
@@ -685,8 +701,8 @@ p  { line-height: 1.6; }
   border-radius: var(--radius-lg);
   padding: 20px;
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 14px;
   transition: border-color var(--transition), box-shadow var(--transition);
 }
 .stat-card:hover { border-color: var(--color-primary); box-shadow: var(--shadow-sm); }
@@ -694,24 +710,34 @@ p  { line-height: 1.6; }
 .stat-card--disabled { opacity: .55; }
 .stat-card--disabled:hover { border-color: var(--color-border); box-shadow: none; }
 
-.stat-icon { font-size: 1.5rem; color: var(--color-primary); }
-.stat-value {
-  font-size: 2.5rem;
-  font-weight: 800;
-  line-height: 1.1;
-  color: var(--color-text);
-}
-.stat-value--primary   { color: var(--color-primary); }
-.stat-value--secondary { color: var(--color-secondary); }
-.stat-value--warning   { color: var(--color-warning); }
-.stat-label {
+/* Colored icon square identifying each stat card's theme — the number
+   itself stays neutral text; color lives in the icon box only, matching
+   the reference layout instead of tinting the whole big digit. */
+.stat-icon-box {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  justify-content: center;
+  font-size: 1.25rem;
+  flex-shrink: 0;
+}
+.stat-icon-box--primary   { background: var(--color-primary-light);   color: var(--color-primary); }
+.stat-icon-box--secondary { background: var(--color-secondary-light); color: var(--color-secondary); }
+.stat-icon-box--warning   { background: var(--color-warning-bg);      color: var(--color-warning-dark); }
+.stat-icon-box--error     { background: var(--color-error-bg);        color: var(--color-error-dark); }
+
+.stat-card-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.stat-value {
+  font-size: 1.75rem;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--color-text);
+}
+.stat-label {
+  font-size: 0.8125rem;
+  font-weight: 500;
   color: var(--color-text-muted);
 }
 .stat-note { font-size: 0.75rem; color: var(--color-text-light); }
@@ -748,6 +774,36 @@ p  { line-height: 1.6; }
   color: var(--color-text-muted);
   font-size: 0.875rem;
   text-align: center;
+}
+
+/* ── Dashboard columns (Action Needed + Quick Actions) ────────── */
+.dashboard-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 24px;
+  margin-top: 24px;
+  align-items: start;
+}
+.quick-actions-list { display: flex; flex-direction: column; gap: 8px; }
+.quick-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  font-size: 0.875rem;
+  font-weight: 500;
+  transition: background var(--transition), border-color var(--transition);
+}
+.quick-action-btn:hover { background: var(--color-bg); border-color: var(--color-primary); }
+.quick-action-btn i:first-child { color: var(--color-primary); font-size: 1.0625rem; flex-shrink: 0; }
+.quick-action-btn span { flex: 1; }
+.quick-action-btn i:last-child { color: var(--color-text-light); flex-shrink: 0; }
+
+@media (max-width: 900px) {
+  .dashboard-columns { grid-template-columns: 1fr; }
 }
 
 /* ── Responsive ─────────────────────────────────────────────── */
@@ -901,7 +957,7 @@ p  { line-height: 1.6; }
 }
 .search-box-input:focus {
   border-color: var(--color-border-focus);
-  box-shadow: 0 0 0 3px rgba(26, 122, 110, 0.15);
+  box-shadow: 0 0 0 3px rgba(108, 71, 255, 0.15);
 }
 .search-box-input::placeholder { color: var(--color-text-light); }
 /* Native WebKit/Chromium "clear" (x) button on type="search" sits at
@@ -1011,7 +1067,7 @@ p  { line-height: 1.6; }
   outline: none;
   width: 100%;
 }
-.field-input-plain:focus { border-color: var(--color-border-focus); box-shadow: 0 0 0 3px rgba(26,122,110,.15); }
+.field-input-plain:focus { border-color: var(--color-border-focus); box-shadow: 0 0 0 3px rgba(108,71,255,.15); }
 /* Multi-line fields only — a single-line <input> sharing this class
    (e.g. Subject) has no meaningful way to resize. Vertical-only so
    dragging can't widen a field past its form and break the layout. */
@@ -1126,11 +1182,11 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
   color: var(--color-text-muted);
   border: 1px solid var(--color-border);
 }
-.badge-success { background: var(--color-success-bg); color: var(--color-success); border-color: transparent; }
+.badge-success { background: var(--color-success-bg); color: var(--color-success-dark); border-color: transparent; }
 .badge-muted   { background: var(--color-bg); color: var(--color-text-light); border-color: transparent; }
 .badge-primary { background: var(--color-primary-light); color: var(--color-primary-dark); border-color: transparent; }
-.badge-warning { background: var(--color-warning-bg); color: var(--color-warning); border-color: transparent; }
-.badge-error   { background: var(--color-error-bg); color: var(--color-error); border-color: transparent; }
+.badge-warning { background: var(--color-warning-bg); color: var(--color-warning-dark); border-color: transparent; }
+.badge-error   { background: var(--color-error-bg); color: var(--color-error-dark); border-color: transparent; }
 .badge-outline { background: transparent; }
 
 /* A pill radius (border-radius: 9999px) only looks right on a single line
@@ -1426,7 +1482,7 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
   color: var(--color-text-muted);
   line-height: 1.5;
 }
-.thread-receipt i { color: var(--color-success); margin-top: 2px; flex-shrink: 0; }
+.thread-receipt i { color: var(--color-success-dark); margin-top: 2px; flex-shrink: 0; }
 
 .thread-approval {
   display: flex;
@@ -1438,8 +1494,8 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
   color: var(--color-text-muted);
 }
 .thread-approval i { margin-top: 2px; flex-shrink: 0; }
-.thread-approval--approved { background: var(--color-success-bg); color: var(--color-success); }
-.thread-approval--returned { background: var(--color-warning-bg); color: var(--color-warning); }
+.thread-approval--approved { background: var(--color-success-bg); color: var(--color-success-dark); }
+.thread-approval--returned { background: var(--color-warning-bg); color: var(--color-warning-dark); }
 
 .detail-actions-panel .panel { margin-bottom: 0; }
 .detail-actions {

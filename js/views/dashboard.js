@@ -13,40 +13,89 @@ const DashboardView = {
     this._user = user;
     this._isSupervisor = AppShell.isSupervisorOrAbove(user);
     this._canReceive = this._isSupervisor || AppShell.hasRole(user, 'assigned_receiver');
+    const isAdmin = AppShell.isAdmin(user);
+
+    // Prisoner Letters compose is MCS-only (mirrors prisoner-letters.js's
+    // own this._isMcs gate on its New Letter button) and Team Workload
+    // only makes sense for a supervisor who actually supervises a
+    // section (mirrors requests.js's own Team-tab gate) — showing either
+    // action to someone who'd just land on an empty/wrong view is worse
+    // than not showing it.
+    const [isMcs, mySupervisedSections] = await Promise.all([
+      this._resolveIsMcs(user),
+      this._isSupervisor ? RequestsAPI.mySupervisedSections().catch(() => []) : Promise.resolve([]),
+    ]);
+
+    const quickActions = [
+      { icon: 'ti-plus', label: 'New Request', href: '#requests?action=compose' },
+      ...(isMcs ? [{ icon: 'ti-mail-plus', label: 'New Prisoner Letter', href: '#prisoner-letters?action=compose' }] : []),
+      ...(mySupervisedSections.length > 0 ? [{ icon: 'ti-users', label: 'Team Workload', href: '#requests?tab=team' }] : []),
+      ...(isAdmin ? [{ icon: 'ti-settings', label: 'Administration', href: '#admin' }] : []),
+    ];
 
     container.innerHTML = `
       <div class="app-layout">
         ${AppShell.topbarHtml(user, 'dashboard')}
 
         <main class="main-content">
-          <div class="page-header">
-            <h2 class="page-title">Dashboard</h2>
-            <p class="page-subtitle">Welcome back, <strong>${name}</strong></p>
+          <div class="page-header page-header-row">
+            <div>
+              <h2 class="page-title">${this._greeting()}, <strong>${name.split(' ')[0]}</strong> 👋</h2>
+              <p class="page-subtitle">${this._todayLabel()}</p>
+            </div>
+            <a href="#requests?action=compose" class="btn btn-primary btn-sm"><i class="ti ti-plus"></i> New Request</a>
           </div>
 
           <div class="stat-grid" id="stat-grid">
             <a href="#requests" class="stat-card" id="stat-inbox">
-              <div class="stat-value stat-value--primary"><span class="spinner spinner--dark"></span></div>
-              <div class="stat-label"><i class="ti ti-inbox"></i> Inbox</div>
+              <div class="stat-icon-box stat-icon-box--primary"><i class="ti ti-inbox"></i></div>
+              <div class="stat-card-body">
+                <div class="stat-value"><span class="spinner spinner--dark"></span></div>
+                <div class="stat-label">Inbox</div>
+              </div>
             </a>
             <a href="#requests?tab=sent" class="stat-card" id="stat-sent">
-              <div class="stat-value stat-value--secondary"><span class="spinner spinner--dark"></span></div>
-              <div class="stat-label"><i class="ti ti-send"></i> Sent Requests</div>
+              <div class="stat-icon-box stat-icon-box--secondary"><i class="ti ti-send"></i></div>
+              <div class="stat-card-body">
+                <div class="stat-value"><span class="spinner spinner--dark"></span></div>
+                <div class="stat-label">Sent Requests</div>
+              </div>
             </a>
             <a href="#requests" class="stat-card" id="stat-overdue">
-              <div class="stat-value stat-value--warning"><span class="spinner spinner--dark"></span></div>
-              <div class="stat-label"><i class="ti ti-alert-triangle"></i> Overdue</div>
+              <div class="stat-icon-box stat-icon-box--error"><i class="ti ti-alert-triangle"></i></div>
+              <div class="stat-card-body">
+                <div class="stat-value"><span class="spinner spinner--dark"></span></div>
+                <div class="stat-label">Overdue</div>
+              </div>
             </a>
             <a href="#prisoner-letters" class="stat-card" id="stat-letters">
-              <div class="stat-value stat-value--primary"><span class="spinner spinner--dark"></span></div>
-              <div class="stat-label"><i class="ti ti-mail"></i> Prisoner Letters</div>
+              <div class="stat-icon-box stat-icon-box--warning"><i class="ti ti-mail"></i></div>
+              <div class="stat-card-body">
+                <div class="stat-value"><span class="spinner spinner--dark"></span></div>
+                <div class="stat-label">Prisoner Letters</div>
+              </div>
             </a>
           </div>
 
-          <div class="panel" style="margin-top: 24px;">
-            <div class="panel-header"><h3>Action Needed</h3></div>
-            <div class="action-list" id="action-list">
-              <div class="action-list-empty"><span class="spinner spinner--dark"></span> Loading…</div>
+          <div class="dashboard-columns">
+            <div class="panel">
+              <div class="panel-header"><h3>Action Needed</h3></div>
+              <div class="action-list" id="action-list">
+                <div class="action-list-empty"><span class="spinner spinner--dark"></span> Loading…</div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-header"><h3>Quick Actions</h3></div>
+              <div class="quick-actions-list">
+                ${quickActions.map(a => `
+                  <a href="${a.href}" class="quick-action-btn">
+                    <i class="ti ${a.icon}"></i>
+                    <span>${a.label}</span>
+                    <i class="ti ti-chevron-right"></i>
+                  </a>
+                `).join('')}
+              </div>
             </div>
           </div>
         </main>
@@ -57,6 +106,31 @@ const DashboardView = {
 
     this._loadStats(user);
     this._loadActionNeeded(user);
+  },
+
+  _greeting() {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Good morning';
+    if (hour < 18) return 'Good afternoon';
+    return 'Good evening';
+  },
+
+  _todayLabel() {
+    return new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  },
+
+  // Same lookup as PrisonerLettersView._resolveIsMcs() — duplicated
+  // rather than shared for the same reason as _loadActionNeeded's
+  // predicates above (one-line, not worth threading state between views).
+  async _resolveIsMcs(user) {
+    try {
+      const orgs = await AdminAPI.listOrganizations();
+      const org = orgs.find(o => o.id === user.org_id);
+      return org?.type === 'mcs';
+    } catch (err) {
+      console.error('CorLink: failed to resolve org type', err);
+      return false;
+    }
   },
 
   async _loadStats(user) {
