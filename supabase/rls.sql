@@ -161,6 +161,78 @@ RETURNS BOOLEAN AS $$
   SELECT is_admin() OR has_role('supervisor');
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
+-- Shared by audit_select_own_records and users_select_audit_trail
+-- (both further down this file) — factored out rather than duplicated
+-- in both policies so the two can never silently drift apart. Defined
+-- here (immediately after the role helpers it composes) rather than
+-- next to either policy, since CREATE POLICY needs this function to
+-- already exist and users_select_audit_trail is defined earlier in
+-- this file than audit_select_own_records is.
+--
+-- Deliberately covers every action type on a request/response (not
+-- just routed/assigned, which is all the UI currently renders): every
+-- logAudit() call site for record_type IN ('request','response')
+-- writes a static or section/staff-name-only string into `notes` (see
+-- routeRequest/assignRequest in js/data/requests-api.js) — never a
+-- free-form reviewer comment (that lives in the separately-RLS'd
+-- `approvals` table) — so exposing the full action history here to
+-- the same audience that can already see the record itself is
+-- intentional, not an oversight.
+CREATE OR REPLACE FUNCTION can_view_case_audit_record(p_record_type TEXT, p_record_id UUID)
+RETURNS BOOLEAN AS $$
+  SELECT
+    (p_record_type = 'request' AND EXISTS (
+      SELECT 1 FROM requests r
+      WHERE r.id = p_record_id
+        AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
+        AND (
+          is_supervisor_or_above()
+          OR r.from_section_id IN (SELECT my_section_ids())
+          OR r.to_section_id   IN (SELECT my_section_ids())
+          OR r.created_by      = auth.uid()
+          OR r.received_by     = auth.uid()
+        )
+    ))
+    OR (p_record_type = 'response' AND EXISTS (
+      SELECT 1 FROM responses resp
+      JOIN requests r ON r.id = resp.request_id
+      WHERE resp.id = p_record_id
+        AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
+        AND (
+          is_supervisor_or_above()
+          OR r.from_section_id IN (SELECT my_section_ids())
+          OR r.to_section_id   IN (SELECT my_section_ids())
+          OR r.created_by      = auth.uid()
+          OR resp.created_by   = auth.uid()
+          OR resp.received_by  = auth.uid()
+        )
+    ));
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+
+-- Backs users_select_audit_trail (further down). Deliberately its own
+-- SECURITY DEFINER function rather than an EXISTS(...) inlined straight
+-- into that policy's USING clause: a plain-SQL subquery embedded in a
+-- policy runs under the INVOKING role, so it would still be subject to
+-- audit_logs's own RLS — and audit_select (the pre-existing admin-only
+-- policy on audit_logs) itself queries `users`, which would then
+-- re-evaluate users_select_audit_trail, which queries audit_logs again,
+-- forever ("infinite recursion detected in policy for relation
+-- audit_logs" — hit this for real against a local Postgres instance
+-- before adding this wrapper). Wrapping the audit_logs lookup in its
+-- own SECURITY DEFINER function breaks the cycle the same way every
+-- other helper in this file already does for user_assignments: the
+-- function body runs as its owner (bypassing RLS), not as the
+-- authenticated caller, so it never re-triggers audit_logs'/users' own
+-- policies.
+CREATE OR REPLACE FUNCTION appears_in_visible_audit_trail(p_user_id UUID)
+RETURNS BOOLEAN AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM audit_logs al
+    WHERE al.user_id = p_user_id
+      AND can_view_case_audit_record(al.record_type, al.record_id)
+  );
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+
 -- ─── organizations ────────────────────────────────────────────
 -- All authenticated users can read all orgs (needed for routing/display).
 -- Only super_admin can create or update rows directly. An org's own
@@ -367,6 +439,19 @@ CREATE POLICY "users_select_correspondence" ON users
         AND (pl2.from_prison_id = get_my_org_id() OR pl2.to_org_id = get_my_org_id())
     )
   );
+
+-- Same reasoning as users_select_correspondence above, but for the case
+-- timeline's routed/assigned "by [Name]" lines specifically: the acting
+-- supervisor/assigned_receiver who routed or assigned a request isn't
+-- necessarily its created_by/assigned_to/received_by (those name the
+-- REQUEST's own parties, not whoever performed a given workflow
+-- action) — without this, a cross-org viewer's PostgREST embed of
+-- audit_logs.user:users(full_name) silently resolves to null for the
+-- other org's actors, showing as "by Unknown" even though the audit
+-- log ROW itself (gated by can_view_case_audit_record via
+-- audit_select_own_records) is correctly visible.
+CREATE POLICY "users_select_audit_trail" ON users
+  FOR SELECT USING (appears_in_visible_audit_trail(users.id));
 
 CREATE POLICY "users_insert" ON users
   FOR INSERT WITH CHECK (
@@ -927,6 +1012,16 @@ CREATE POLICY "audit_select" ON audit_logs
       SELECT 1 FROM users u WHERE u.id = audit_logs.user_id AND u.org_id = get_my_org_id()
     ))
   );
+
+-- Additive: lets anyone who can already SEE a given request/response
+-- (via requests_select/responses_select) also see the routed/assigned/
+-- etc. audit trail entries for that same record — request-detail.js's
+-- conversation timeline needs "routed to X by Y at [time]" / "assigned
+-- to X by Y at [time]" visible to plain staff/supervisors, not just
+-- org admins, which the audit_select policy above never covers (it's
+-- scoped to the admin-only global Audit Log tab).
+CREATE POLICY "audit_select_own_records" ON audit_logs
+  FOR SELECT USING (can_view_case_audit_record(record_type, record_id));
 
 -- No UPDATE policy → no one can update audit logs.
 -- No DELETE policy → no one can delete audit logs.

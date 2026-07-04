@@ -69,6 +69,9 @@ const RequestDetailView = {
         })));
         return { request, responseDetails, approvals, internalRequestDetails, attachments };
       }));
+      const requestIds = this._conversation.map(entry => entry.request.id);
+      const responseIds = this._conversation.flatMap(entry => entry.responseDetails.map(rd => rd.response.id));
+      this._auditTrail = await RequestsAPI.listCaseAuditTrail(requestIds, responseIds);
       main.innerHTML = this._renderContent();
       this._bindActions();
     } catch (err) {
@@ -145,6 +148,7 @@ const RequestDetailView = {
             </div>
             <div class="thread-message-body${r.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(r.body)}</div>
             ${this._renderReceipt(r)}
+            ${this._renderProcessEvents(r.id)}
           </div>
 
           ${this._renderApprovalHistory(entry.approvals)}
@@ -178,6 +182,25 @@ const RequestDetailView = {
         Received by <strong>${name}</strong>${designation ? `, ${designation}` : ''} — ${new Date(record.received_at).toLocaleString()}
       </div>
     `;
+  },
+
+  // "Routed to X" / "Assigned to Y" only ever show CURRENT state
+  // elsewhere in this view (round-meta-row) with no record of WHEN or
+  // by WHOM — these lines fill that gap using the same audit_logs
+  // entries logAudit() already writes on every routeRequest()/
+  // assignRequest() call, rendered in the same receipt-style format as
+  // _renderReceipt() so the whole case reads as one dated timeline
+  // rather than routing/assignment being the only undated steps in it.
+  _renderProcessEvents(requestId) {
+    const events = (this._auditTrail || [])
+      .filter(e => e.record_type === 'request' && e.record_id === requestId && ['routed', 'assigned'].includes(e.action));
+    if (!events.length) return '';
+    return events.map(e => `
+      <div class="thread-receipt">
+        <i class="ti ${e.action === 'routed' ? 'ti-arrow-forward-up' : 'ti-user-check'}"></i>
+        ${this._escapeHtml(e.notes || (e.action === 'routed' ? 'Routed' : 'Assigned'))} by <strong>${this._escapeHtml(e.user?.full_name || 'Unknown')}</strong> — ${new Date(e.created_at).toLocaleString()}
+      </div>
+    `).join('');
   },
 
   _renderApprovalHistory(approvals) {
