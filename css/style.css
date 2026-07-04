@@ -1417,15 +1417,16 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
 
 .thread-receipt {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px dashed var(--color-border);
   font-size: 0.8125rem;
   color: var(--color-text-muted);
+  line-height: 1.5;
 }
-.thread-receipt i { color: var(--color-success); }
+.thread-receipt i { color: var(--color-success); margin-top: 2px; flex-shrink: 0; }
 
 .thread-approval {
   display: flex;

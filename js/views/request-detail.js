@@ -174,12 +174,12 @@ const RequestDetailView = {
 
   _renderReceipt(record) {
     if (!record.received_at) return '';
-    const name = record.received_by_user?.full_name || 'Unknown';
+    const name = this._escapeHtml(record.received_by_user?.full_name || 'Unknown');
     const designation = record.received_by_user?.designations?.name;
     return `
       <div class="thread-receipt">
         <i class="ti ti-circle-check"></i>
-        Received by <strong>${name}</strong>${designation ? `, ${designation}` : ''} — ${new Date(record.received_at).toLocaleString()}
+        <span>Received by <strong>${name}</strong>${designation ? `, ${this._escapeHtml(designation)}` : ''} — ${new Date(record.received_at).toLocaleString()}</span>
       </div>
     `;
   },
@@ -198,7 +198,7 @@ const RequestDetailView = {
     return events.map(e => `
       <div class="thread-receipt">
         <i class="ti ${e.action === 'routed' ? 'ti-arrow-forward-up' : 'ti-user-check'}"></i>
-        ${this._escapeHtml(e.notes || (e.action === 'routed' ? 'Routed' : 'Assigned'))} by <strong>${this._escapeHtml(e.user?.full_name || 'Unknown')}</strong> — ${new Date(e.created_at).toLocaleString()}
+        <span>${this._escapeHtml(e.notes || (e.action === 'routed' ? 'Routed' : 'Assigned'))} by <strong>${this._escapeHtml(e.user?.full_name || 'Unknown')}</strong> — ${new Date(e.created_at).toLocaleString()}</span>
       </div>
     `).join('');
   },
