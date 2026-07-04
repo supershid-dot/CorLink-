@@ -189,17 +189,26 @@ const RequestsView = {
     ];
   },
 
-  // The Team tab's per-staff breakdown — same shape as _inboxFilters,
-  // scoped down to just the request's own reply-drafting workflow since
-  // everything here is, by definition, already routed and assigned to
-  // this one person (no unrouted/not-assigned chips needed).
+  // The Team tab's per-staff breakdown, covering BOTH sides of this
+  // person's workload now that listStaffWorkload() fetches requests
+  // they're assigned to reply to AND ones they personally authored as
+  // sender: "Not Started"/(response) "Sent" stay scoped to the reply
+  // side (r.assigned_to === staffId) so an outbound draft they're
+  // still writing doesn't get miscounted as an unstarted reply: "Drafts"
+  // and "Sent" each check both sides explicitly instead.
   _teamFilters() {
     const today = new Date().toISOString().slice(0, 10);
+    const staffId = this._state.teamStaffId;
     return [
       { key: 'all', label: 'All', test: () => true },
-      { key: 'response_not_started', label: 'Not Started', test: r => (r.responses || []).length === 0 },
-      { key: 'response_drafted', label: 'Drafted', test: r => (r.responses || []).some(resp => ['draft', 'pending_approval'].includes(resp.status)) },
-      { key: 'response_sent', label: 'Sent', test: r => (r.responses || []).some(resp => resp.status === 'sent') },
+      { key: 'drafts', label: 'Drafts', test: r =>
+          (r.created_by === staffId && ['draft', 'pending_approval'].includes(r.status))
+          || (r.responses || []).some(resp => ['draft', 'pending_approval'].includes(resp.status)) },
+      { key: 'response_not_started', label: 'Not Started', test: r =>
+          r.assigned_to === staffId && r.status === 'in_progress' && (r.responses || []).length === 0 },
+      { key: 'response_sent', label: 'Sent', test: r =>
+          (r.created_by === staffId && r.status === 'sent')
+          || (r.responses || []).some(resp => resp.status === 'sent') },
       { key: 'overdue', label: 'Overdue', test: r => !!r.deadline && r.deadline < today && !['closed', 'responded'].includes(r.status) },
       { key: 'closed', label: 'Closed', test: r => ['responded', 'closed'].includes(r.status) },
     ];
@@ -375,7 +384,7 @@ const RequestsView = {
       return;
     }
     resultsEl.innerHTML = `<div class="tab-loading"><span class="spinner spinner--dark"></span> Loading…</div>`;
-    this._teamItems = await RequestsAPI.listAssignedTo(this._state.teamStaffId);
+    this._teamItems = await RequestsAPI.listStaffWorkload(this._state.teamStaffId);
     this._renderTeamFiltered();
   },
 
