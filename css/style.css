@@ -1,13 +1,13 @@
 /* ─── CorLink — Design System ────────────────────────────────
-   Primary: #6C47FF (Violet)   Secondary: #3B82F6 (Blue)
+   Primary: #1A7A6E (Teal)   Secondary: #3B82F6 (Blue)
    Font: Inter, system-sans  Icons: Tabler Icons
    ─────────────────────────────────────────────────────────── */
 
 /* ── Variables ─────────────────────────────────────────────── */
 :root {
-  --color-primary:        #6C47FF;
-  --color-primary-dark:   #5636CC;
-  --color-primary-light:  #F1EDFF;
+  --color-primary:        #1A7A6E;
+  --color-primary-dark:   #145F56;
+  --color-primary-light:  #E8F5F3;
   --color-secondary:      #3B82F6;
   --color-secondary-dark: #2563EB;
   --color-secondary-light:#EAF2FF;
@@ -40,7 +40,7 @@
   --color-text-muted:    #64748B;
   --color-text-light:    #94A3B8;
   --color-border:        #E5E7EB;
-  --color-border-focus:  #6C47FF;
+  --color-border-focus:  #1A7A6E;
   --color-bg:            #F8FAFC;
   --color-surface:       #FFFFFF;
   --color-overlay:       rgba(15, 23, 42, 0.5);
@@ -260,7 +260,7 @@ p  { line-height: 1.6; }
 }
 .field-input:focus {
   border-color: var(--color-border-focus);
-  box-shadow: 0 0 0 3px rgba(108, 71, 255, 0.15);
+  box-shadow: 0 0 0 3px rgba(26, 122, 110, 0.15);
 }
 .field-input::placeholder { color: var(--color-text-light); }
 .field-input.input-error {
@@ -776,7 +776,10 @@ p  { line-height: 1.6; }
   text-align: center;
 }
 
-/* ── Dashboard columns (Action Needed + Quick Actions) ────────── */
+/* ── Dashboard columns (Action Needed + Quick Actions/Deadlines) ──
+   Right column stacks two panels (Quick Actions + Upcoming Deadlines)
+   so its total height roughly matches the left column's single, taller
+   Action Needed panel instead of leaving a lopsided gap underneath. */
 .dashboard-columns {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
@@ -784,6 +787,7 @@ p  { line-height: 1.6; }
   margin-top: 24px;
   align-items: start;
 }
+.dashboard-column-stack { display: flex; flex-direction: column; gap: 24px; }
 .quick-actions-list { display: flex; flex-direction: column; gap: 8px; }
 .quick-action-btn {
   display: flex;
@@ -801,6 +805,46 @@ p  { line-height: 1.6; }
 .quick-action-btn i:first-child { color: var(--color-primary); font-size: 1.0625rem; flex-shrink: 0; }
 .quick-action-btn span { flex: 1; }
 .quick-action-btn i:last-child { color: var(--color-text-light); flex-shrink: 0; }
+
+/* ── Upcoming Deadlines ────────────────────────────────────────── */
+.deadline-list { display: flex; flex-direction: column; }
+.deadline-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+  transition: background var(--transition);
+}
+.deadline-row:last-child { border-bottom: none; }
+.deadline-row:hover { background: var(--color-bg); }
+.deadline-date {
+  flex-shrink: 0;
+  width: 42px;
+  border-radius: var(--radius-md);
+  padding: 4px 0;
+  text-align: center;
+  line-height: 1.15;
+}
+.deadline-date-month { display: block; font-size: 0.625rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.deadline-date-day { display: block; font-size: 1.0625rem; font-weight: 700; }
+.deadline-date--error     { background: var(--color-error-bg);     color: var(--color-error-dark); }
+.deadline-date--warning   { background: var(--color-warning-bg);   color: var(--color-warning-dark); }
+.deadline-date--secondary { background: var(--color-secondary-light); color: var(--color-secondary-dark); }
+.deadline-row-body { flex: 1; min-width: 0; }
+.deadline-row-ref { font-size: 0.8125rem; font-weight: 600; }
+.deadline-row-subject {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.deadline-row-status { flex-shrink: 0; font-size: 0.75rem; font-weight: 600; }
+.deadline-row-status--error     { color: var(--color-error-dark); }
+.deadline-row-status--warning   { color: var(--color-warning-dark); }
+.deadline-row-status--secondary { color: var(--color-secondary-dark); }
 
 @media (max-width: 900px) {
   .dashboard-columns { grid-template-columns: 1fr; }
@@ -957,7 +1001,7 @@ p  { line-height: 1.6; }
 }
 .search-box-input:focus {
   border-color: var(--color-border-focus);
-  box-shadow: 0 0 0 3px rgba(108, 71, 255, 0.15);
+  box-shadow: 0 0 0 3px rgba(26, 122, 110, 0.15);
 }
 .search-box-input::placeholder { color: var(--color-text-light); }
 /* Native WebKit/Chromium "clear" (x) button on type="search" sits at
@@ -1067,7 +1111,7 @@ p  { line-height: 1.6; }
   outline: none;
   width: 100%;
 }
-.field-input-plain:focus { border-color: var(--color-border-focus); box-shadow: 0 0 0 3px rgba(108,71,255,.15); }
+.field-input-plain:focus { border-color: var(--color-border-focus); box-shadow: 0 0 0 3px rgba(26,122,110,.15); }
 /* Multi-line fields only — a single-line <input> sharing this class
    (e.g. Subject) has no meaningful way to resize. Vertical-only so
    dragging can't widen a field past its form and break the layout. */
