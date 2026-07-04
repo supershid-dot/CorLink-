@@ -157,7 +157,7 @@ CREATE POLICY "internal_requests_insert" ON internal_requests
     )
     AND scope_org_id('section', to_section_id) = get_my_org_id()
     AND EXISTS (
-      SELECT 1 FROM requests r WHERE r.id = parent_request_id
+      SELECT 1 FROM requests r WHERE r.id = internal_requests.parent_request_id
         AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
     )
   );

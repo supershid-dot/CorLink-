@@ -800,6 +800,17 @@ CREATE POLICY "internal_requests_select" ON internal_requests
     OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', to_section_id))
   );
 
+-- The EXISTS subquery below explicitly qualifies parent_request_id as
+-- internal_requests.parent_request_id — requests ALSO has a column
+-- literally named parent_request_id (used for its own follow-up-
+-- request chaining), so a bare `parent_request_id` reference inside
+-- `FROM requests r WHERE r.id = parent_request_id` silently resolves
+-- to the closer/inner r.parent_request_id instead of the intended
+-- outer internal_requests row being inserted — collapsing the check
+-- to "is this request its own parent" (always false/NULL for a root
+-- request), which rejected every "Loop in a Section" attempt against
+-- a root request. Confirmed empirically against a real Postgres
+-- instance before fixing.
 CREATE POLICY "internal_requests_insert" ON internal_requests
   FOR INSERT WITH CHECK (
     created_by = auth.uid()
@@ -809,7 +820,7 @@ CREATE POLICY "internal_requests_insert" ON internal_requests
     )
     AND scope_org_id('section', to_section_id) = get_my_org_id()
     AND EXISTS (
-      SELECT 1 FROM requests r WHERE r.id = parent_request_id
+      SELECT 1 FROM requests r WHERE r.id = internal_requests.parent_request_id
         AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
     )
   );
