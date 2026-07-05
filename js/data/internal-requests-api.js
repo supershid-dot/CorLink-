@@ -111,6 +111,29 @@ const InternalRequestsAPI = (() => {
       return data;
     },
 
+    // Pass a received request on to a different section (it wasn't the
+    // right one to answer). Fully resets the receiving side: the new
+    // section must mark it received and assign its own staff, exactly
+    // like a fresh arrival.
+    async reroute(id, toSectionId) {
+      const db = getSupabase();
+      const { data, error } = await db.from('internal_requests')
+        .update({
+          to_section_id: toSectionId, status: 'sent',
+          received_by: null, received_at: null, assigned_to: null,
+        })
+        .eq('id', id).select().single();
+      if (error) throw error;
+      const { data: section } = await db.from('sections').select('name').eq('id', toSectionId).single();
+      await logAudit('routed', id, `Re-routed internal request to ${section?.name || 'another section'}`);
+      const recipients = await NotificationsAPI.sectionUserIds(toSectionId);
+      await NotificationsAPI.notify(recipients, {
+        type: 'new_request', recordType: 'request', recordId: data.parent_request_id,
+        message: `"${data.subject}" — an internal request was routed to your section`,
+      });
+      return data;
+    },
+
     // Assign to a staff member of the receiving section — the same
     // step external requests get after routing. Clearing (userId null)
     // drops back to 'received'.
