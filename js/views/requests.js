@@ -528,7 +528,7 @@ const RequestsView = {
                 <td data-label="Case">${ir.parent_request?.reference_number || ir.parent_request?.subject || '—'}</td>
                 <td data-label="Subject"><span class="${ir.subject_language === 'dv' ? 'field-divehi' : ''}">${ir.subject}</span></td>
                 <td data-label="From → To">${ir.from_section?.name || ''} → ${ir.to_section?.name || ''}</td>
-                <td data-label="Status"><span class="badge badge-outline">${ir.status}</span></td>
+                <td data-label="Status"><span class="badge badge-outline">${ir.status.replace(/_/g, ' ')}</span></td>
                 <td data-label="Sent">${new Date(ir.created_at).toLocaleDateString()}</td>
                 <td data-label="Actions">${ir.parent_request?.id
                   ? `<a class="btn btn-secondary btn-xs" href="#request-detail?id=${ir.parent_request.id}">View</a>`
