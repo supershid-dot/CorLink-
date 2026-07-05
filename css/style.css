@@ -1120,6 +1120,15 @@ p  { line-height: 1.6; }
   direction: rtl;
   text-align: right;
 }
+/* Form controls need the element+class selector: .field-input/
+   .field-input-plain declare font-family at the same specificity but
+   LATER in this sheet, which silently beat the plain .field-divehi
+   rule above on <input>/<textarea> — the Subject field stayed in the
+   sans font when toggled to Divehi. (0,1,1) outranks (0,1,0)
+   regardless of source order. */
+input.field-divehi, textarea.field-divehi, select.field-divehi {
+  font-family: var(--font-divehi);
+}
 
 /* ── Topbar Nav Links ────────────────────────────────────────── */
 .topbar-link {
@@ -1697,7 +1706,15 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
 .thread-message-body ul:last-child,
 .thread-message-body ol:last-child,
 .thread-message-body table:last-child { margin-bottom: 0; }
-.thread-message-body ul, .thread-message-body ol { padding-left: 1.5em; }
+/* Logical padding so markers flip correctly for RTL (Divehi) bodies —
+   same fix as .rich-editor-body's lists. */
+.thread-message-body ul, .thread-message-body ol { padding-inline-start: 1.5em; }
+.thread-message-body blockquote {
+  border-inline-start: 3px solid var(--color-border);
+  padding-inline-start: 10px;
+  margin-inline-start: 8px;
+  margin-bottom: 10px;
+}
 .thread-message-body table { border-collapse: collapse; width: 100%; }
 .thread-message-body td, .thread-message-body th {
   border: 1px solid var(--color-border);
@@ -1807,6 +1824,69 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
   background: none;
   cursor: pointer;
 }
+
+/* ── Table dropdown (grid picker + row/column operations) ─────── */
+.rich-editor-table-wrap { position: relative; }
+.rich-editor-table-menu {
+  position: absolute;
+  top: 32px;
+  left: 0;
+  z-index: 60;
+  width: max-content;
+  padding: 10px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+.rich-editor-menu-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  margin-bottom: 6px;
+}
+.rich-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 16px);
+  gap: 3px;
+}
+.rich-editor-grid-cell {
+  width: 16px;
+  height: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.rich-editor-grid-cell--on {
+  background: var(--color-primary-light);
+  border-color: var(--color-primary);
+}
+.rich-editor-grid-size {
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  margin-top: 6px;
+}
+.rich-editor-menu-divider {
+  height: 1px;
+  background: var(--color-border);
+  margin: 8px -10px;
+}
+.rich-editor-table-menu button[data-table-op] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  color: var(--color-text);
+  text-align: left;
+  transition: background var(--transition);
+}
+.rich-editor-table-menu button[data-table-op]:hover:not(:disabled) { background: var(--color-bg); }
+.rich-editor-table-menu button[data-table-op]:disabled { opacity: .4; cursor: not-allowed; }
+.rich-editor-table-menu button[data-table-op] i { font-size: 1rem; color: var(--color-text-muted); }
 .rich-editor-body {
   min-height: 140px;
   max-height: 640px;
@@ -1822,7 +1902,17 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
 }
 .rich-editor-body:focus { background: var(--color-surface); }
 .rich-editor-body p, .rich-editor-body ul, .rich-editor-body ol, .rich-editor-body table { margin-bottom: 10px; }
-.rich-editor-body ul, .rich-editor-body ol { padding-left: 1.5em; }
+/* padding-inline-start, not padding-left: the physical property put the
+   list markers outside the box in RTL (Divehi) — bullets/numbers looked
+   like they simply didn't work. The logical property flips with the
+   direction set by .field-divehi. */
+.rich-editor-body ul, .rich-editor-body ol { padding-inline-start: 1.5em; }
+.rich-editor-body blockquote {
+  border-inline-start: 3px solid var(--color-border);
+  padding-inline-start: 10px;
+  margin-inline-start: 8px;
+  margin-bottom: 10px;
+}
 .rich-editor-body table { border-collapse: collapse; width: 100%; }
 .rich-editor-body td, .rich-editor-body th {
   border: 1px solid var(--color-border);
