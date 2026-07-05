@@ -87,7 +87,7 @@
     --color-success-bg:     rgba(16, 185, 129, .14);
     --color-warning-dark:   #F59E0B;
     --color-warning-bg:     rgba(245, 158, 11, .14);
-    --color-error-dark:     #EF4444;
+    --color-error-dark:     #F87171;
     --color-error-bg:       rgba(239, 68, 68, .15);
     --color-info-dark:      #38BDF8;
     --color-info-bg:        rgba(14, 165, 233, .15);
@@ -123,7 +123,7 @@
   --color-success-bg:     rgba(16, 185, 129, .14);
   --color-warning-dark:   #F59E0B;
   --color-warning-bg:     rgba(245, 158, 11, .14);
-  --color-error-dark:     #EF4444;
+  --color-error-dark:     #F87171;
   --color-error-bg:       rgba(239, 68, 68, .15);
   --color-info-dark:      #38BDF8;
   --color-info-bg:        rgba(14, 165, 233, .15);
@@ -131,6 +131,14 @@
 :root[data-theme="dark"] .login-logo-img,
 :root[data-theme="dark"] .topbar-logo-crop img {
   filter: drop-shadow(0 0 1px rgba(255,255,255,.5)) drop-shadow(0 0 5px rgba(255,255,255,.15));
+}
+/* The logo halo lives inside the prefers-color-scheme media block above
+   as a plain rule, not a variable — so an explicit Light choice while
+   the OS is dark needs this to undo it, same contract as the variable
+   resets below. */
+:root[data-theme="light"] .login-logo-img,
+:root[data-theme="light"] .topbar-logo-crop img {
+  filter: none;
 }
 :root[data-theme="light"] {
   --color-text:          #0F172A;
@@ -654,7 +662,7 @@ p  { line-height: 1.6; }
 }
 .bottom-nav-item:hover { text-decoration: none; background: var(--color-bg); }
 .bottom-nav-item i { font-size: 1.25rem; }
-.bottom-nav-item--active { color: var(--color-primary); }
+.bottom-nav-item--active { color: var(--color-primary-dark); }
 
 /* ── User Menu ───────────────────────────────────────────────── */
 .user-menu-wrap { position: relative; }
@@ -724,7 +732,7 @@ p  { line-height: 1.6; }
 
 .menu-item-link {
   font-size: 0.8125rem;
-  color: var(--color-primary);
+  color: var(--color-primary-dark);
   font-weight: 500;
 }
 .menu-item-link:hover { text-decoration: underline; }
@@ -738,7 +746,9 @@ p  { line-height: 1.6; }
   min-width: 16px; height: 16px;
   padding: 0 4px;
   border-radius: var(--radius-full);
-  background: var(--color-error-dark);
+  /* Fixed deep red, NOT var(--color-error-dark): that var flips to the
+     vivid #EF4444 in dark mode where white-on-it is only ~3.8:1. */
+  background: #B91C1C;
   color: #fff;
   font-size: 0.625rem;
   font-weight: 700;
@@ -934,17 +944,10 @@ p  { line-height: 1.6; }
   text-align: center;
 }
 
-/* ── Dashboard grids ──────────────────────────────────────────
-   Row 1 (.dashboard-grid): Recent Requests table (wide) | Recent
-   Activity | Quick Actions — the reference's three-column main area.
-   Row 2 (.dashboard-columns): Action Needed | Upcoming Deadlines. */
-.dashboard-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr);
-  gap: 24px;
-  margin-top: 24px;
-  align-items: start;
-}
+/* ── Dashboard columns (Action Needed + Quick Actions/Deadlines) ──
+   Right column stacks two panels (Quick Actions + Upcoming Deadlines)
+   so its total height roughly matches the left column's single, taller
+   Action Needed panel instead of leaving a lopsided gap underneath. */
 .dashboard-columns {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
@@ -952,15 +955,10 @@ p  { line-height: 1.6; }
   margin-top: 24px;
   align-items: start;
 }
-@media (max-width: 1250px) {
-  .dashboard-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  .dashboard-grid-main { grid-column: 1 / -1; }
-}
+.dashboard-column-stack { display: flex; flex-direction: column; gap: 24px; }
 @media (max-width: 900px) {
-  .dashboard-grid, .dashboard-columns { grid-template-columns: 1fr; }
+  .dashboard-columns { grid-template-columns: 1fr; }
 }
-
-.panel-header .panel-link { font-size: 0.8125rem; font-weight: 500; }
 
 .quick-actions-list { display: flex; flex-direction: column; gap: 8px; }
 .quick-action-btn {
@@ -997,42 +995,6 @@ p  { line-height: 1.6; }
   text-overflow: ellipsis;
 }
 .quick-action-btn > i { color: var(--color-text-light); flex-shrink: 0; }
-
-/* ── Recent Activity timeline ─────────────────────────────────── */
-.activity-list { display: flex; flex-direction: column; }
-.activity-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 10px 2px;
-  border-bottom: 1px solid var(--color-border);
-  color: var(--color-text);
-  transition: background var(--transition);
-}
-.activity-row:last-child { border-bottom: none; }
-.activity-row:hover { background: var(--color-bg); text-decoration: none; }
-.activity-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-md);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  background: var(--color-primary-light);
-  color: var(--color-primary-dark);
-  font-size: 1rem;
-}
-.activity-body { min-width: 0; display: block; }
-.activity-message {
-  font-size: 0.8125rem;
-  line-height: 1.45;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.activity-time { display: block; font-size: 0.71875rem; color: var(--color-text-light); margin-top: 2px; }
 
 /* ── Upcoming Deadlines ────────────────────────────────────────── */
 .deadline-list { display: flex; flex-direction: column; }
@@ -1073,10 +1035,6 @@ p  { line-height: 1.6; }
 .deadline-row-status--error     { color: var(--color-error-dark); }
 .deadline-row-status--warning   { color: var(--color-warning-dark); }
 .deadline-row-status--secondary { color: var(--color-secondary-dark); }
-
-@media (max-width: 900px) {
-  .dashboard-columns { grid-template-columns: 1fr; }
-}
 
 /* ── Responsive ─────────────────────────────────────────────── */
 @media (max-width: 640px) {
@@ -1165,7 +1123,7 @@ p  { line-height: 1.6; }
   transition: background var(--transition), color var(--transition);
 }
 .topbar-link:hover { background: var(--color-bg); text-decoration: none; }
-.topbar-link--active { color: var(--color-primary); background: var(--color-primary-light); }
+.topbar-link--active { color: var(--color-primary-dark); background: var(--color-primary-light); }
 
 /* ── Tabs ────────────────────────────────────────────────────── */
 .tabs {
@@ -1189,7 +1147,7 @@ p  { line-height: 1.6; }
   white-space: nowrap;
 }
 .tab-btn:hover { color: var(--color-text); }
-.tab-btn--active { color: var(--color-primary); border-bottom-color: var(--color-primary); }
+.tab-btn--active { color: var(--color-primary-dark); border-bottom-color: var(--color-primary); }
 
 .tab-loading {
   display: flex; align-items: center; gap: 8px;
@@ -1260,7 +1218,7 @@ p  { line-height: 1.6; }
   padding: 6px 12px;
   border-radius: var(--radius-full);
   border: 1px solid var(--color-border);
-  background: #fff;
+  background: var(--color-surface);
   font-size: 0.8125rem;
   font-weight: 500;
   color: var(--color-text-muted);
@@ -1947,7 +1905,7 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--color-primary);
+  color: var(--color-primary-dark);
   background: var(--color-surface);
   padding: 2px 8px;
   border-radius: var(--radius-full);

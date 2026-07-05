@@ -20,12 +20,19 @@ const AdminView = {
     );
 
     if (!isSuperAdmin && !isOrgAdmin) {
+      // Full shell (sidebar + topbar), not a bare .main-content — at
+      // desktop widths .app-layout is a grid with a 250px sidebar
+      // column, so content without a sidebar sibling would render
+      // offset next to an empty gutter.
       container.innerHTML = `
         <div class="app-layout">
-          <div class="main-content">
+          ${AppShell.topbarHtml(user, 'admin')}
+          <main class="main-content">
             <div class="alert alert-error"><i class="ti ti-lock"></i> You do not have permission to view this page.</div>
-          </div>
+          </main>
+          ${AppShell.bottomNavHtml(user, 'admin')}
         </div>`;
+      AppShell.bindTopbar();
       return;
     }
 

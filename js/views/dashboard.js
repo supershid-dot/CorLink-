@@ -77,41 +77,6 @@ const DashboardView = {
             </a>
           </div>
 
-          <div class="dashboard-grid">
-            <div class="panel dashboard-grid-main">
-              <div class="panel-header">
-                <h3>Recent Requests</h3>
-                <a href="#requests" class="panel-link">View all</a>
-              </div>
-              <div id="recent-requests">
-                <div class="action-list-empty"><span class="spinner spinner--dark"></span> Loading…</div>
-              </div>
-            </div>
-
-            <div class="panel">
-              <div class="panel-header"><h3>Recent Activity</h3></div>
-              <div class="activity-list" id="activity-list">
-                <div class="action-list-empty"><span class="spinner spinner--dark"></span> Loading…</div>
-              </div>
-            </div>
-
-            <div class="panel">
-              <div class="panel-header"><h3>Quick Actions</h3></div>
-              <div class="quick-actions-list">
-                ${quickActions.map(a => `
-                  <a href="${a.href}" class="quick-action-btn">
-                    <span class="quick-action-icon"><i class="ti ${a.icon}"></i></span>
-                    <span class="quick-action-text">
-                      <span class="quick-action-label">${a.label}</span>
-                      <span class="quick-action-sub">${a.sub}</span>
-                    </span>
-                    <i class="ti ti-chevron-right"></i>
-                  </a>
-                `).join('')}
-              </div>
-            </div>
-          </div>
-
           <div class="dashboard-columns">
             <div class="panel">
               <div class="panel-header"><h3>Action Needed</h3></div>
@@ -120,10 +85,28 @@ const DashboardView = {
               </div>
             </div>
 
-            <div class="panel">
-              <div class="panel-header"><h3>Upcoming Deadlines</h3></div>
-              <div class="deadline-list" id="deadline-list">
-                <div class="action-list-empty"><span class="spinner spinner--dark"></span> Loading…</div>
+            <div class="dashboard-column-stack">
+              <div class="panel">
+                <div class="panel-header"><h3>Quick Actions</h3></div>
+                <div class="quick-actions-list">
+                  ${quickActions.map(a => `
+                    <a href="${a.href}" class="quick-action-btn">
+                      <span class="quick-action-icon"><i class="ti ${a.icon}"></i></span>
+                      <span class="quick-action-text">
+                        <span class="quick-action-label">${a.label}</span>
+                        <span class="quick-action-sub">${a.sub}</span>
+                      </span>
+                      <i class="ti ti-chevron-right"></i>
+                    </a>
+                  `).join('')}
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-header"><h3>Upcoming Deadlines</h3></div>
+                <div class="deadline-list" id="deadline-list">
+                  <div class="action-list-empty"><span class="spinner spinner--dark"></span> Loading…</div>
+                </div>
               </div>
             </div>
           </div>
@@ -135,7 +118,6 @@ const DashboardView = {
 
     this._loadStats(user);
     this._loadActionNeeded(user);
-    this._loadRecentActivity();
   },
 
   _greeting() {
@@ -143,10 +125,6 @@ const DashboardView = {
     if (hour < 12) return 'Good morning';
     if (hour < 18) return 'Good afternoon';
     return 'Good evening';
-  },
-
-  _todayLabel() {
-    return new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   },
 
   // Same lookup as PrisonerLettersView._resolveIsMcs() — duplicated
@@ -256,96 +234,15 @@ const DashboardView = {
 
       // Reuses the same inbox/sent already fetched above rather than
       // extra round trips — both lists already carry deadline/status/
-      // reference_number/subject/org embeds on every row.
+      // reference_number/subject on every row.
       this._renderUpcomingDeadlines(inbox, sent);
-      this._renderRecentRequests(inbox, sent);
     } catch (err) {
       console.error('CorLink: failed to load action-needed counts', err);
       const failMsg = `<div class="action-list-empty">Couldn't load this — refresh to try again.</div>`;
       listEl.innerHTML = failMsg;
-      ['deadline-list', 'recent-requests'].forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.innerHTML = failMsg;
-      });
+      const deadlineEl = document.getElementById('deadline-list');
+      if (deadlineEl) deadlineEl.innerHTML = failMsg;
     }
-  },
-
-  // The reference-design table: latest few requests in either direction
-  // with their status at a glance. Reuses RequestsView._statusBadge so a
-  // status renders identically here and in the Requests list.
-  _renderRecentRequests(inbox, sent) {
-    const el = document.getElementById('recent-requests');
-    if (!el) return;
-
-    const rows = [...inbox, ...sent]
-      .sort((a, b) => b.created_at.localeCompare(a.created_at))
-      .slice(0, 5);
-
-    if (rows.length === 0) {
-      el.innerHTML = `<div class="action-list-empty">No requests yet.</div>`;
-      return;
-    }
-
-    el.innerHTML = `
-      <table class="data-table">
-        <thead>
-          <tr><th>Reference No.</th><th>Subject</th><th>From / To</th><th>Deadline</th><th>Status</th></tr>
-        </thead>
-        <tbody>
-          ${rows.map(r => `
-            <tr>
-              <td data-label="Reference No."><a href="#request-detail?id=${r.id}">${r.reference_number || 'Draft'}</a></td>
-              <td data-label="Subject"><span class="${r.subject_language === 'dv' ? 'field-divehi' : ''}">${r.subject}</span></td>
-              <td data-label="From / To">${r.to_org ? `To: ${r.to_org.code || r.to_org.name}` : (r.from_org?.code || r.from_org?.name || '—')}</td>
-              <td data-label="Deadline">${r.deadline ? new Date(r.deadline + 'T00:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</td>
-              <td data-label="Status">${RequestsView._statusBadge(r.status, r.deadline)}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    `;
-  },
-
-  // The user's own notification feed doubles as the reference design's
-  // "Recent Activity" timeline — it already contains exactly the
-  // human-readable workflow events ("New request received: …",
-  // "Response approved: …") with timestamps, scoped to this user.
-  async _loadRecentActivity() {
-    const el = document.getElementById('activity-list');
-    try {
-      const items = await NotificationsAPI.listMine(6);
-      if (items.length === 0) {
-        el.innerHTML = `<div class="action-list-empty">No recent activity.</div>`;
-        return;
-      }
-      el.innerHTML = items.map(n => {
-        const route = n.record_type === 'prisoner_letter' ? 'prisoner-letter-detail' : 'request-detail';
-        const icon = n.record_type === 'prisoner_letter' ? 'ti-mail' : 'ti-file-text';
-        return `
-          <a href="#${route}?id=${n.record_id}" class="activity-row">
-            <span class="activity-icon"><i class="ti ${icon}"></i></span>
-            <span class="activity-body">
-              <span class="activity-message">${AppShell._escapeHtml(n.message)}</span>
-              <span class="activity-time">${this._timeAgo(n.created_at)}</span>
-            </span>
-          </a>
-        `;
-      }).join('');
-    } catch (err) {
-      console.error('CorLink: failed to load recent activity', err);
-      if (el) el.innerHTML = `<div class="action-list-empty">Couldn't load this — refresh to try again.</div>`;
-    }
-  },
-
-  _timeAgo(iso) {
-    const mins = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 60000));
-    if (mins < 1) return 'Just now';
-    if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'} ago`;
-    const hours = Math.floor(mins / 60);
-    if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
-    const days = Math.floor(hours / 24);
-    if (days < 7) return `${days} day${days === 1 ? '' : 's'} ago`;
-    return new Date(iso).toLocaleDateString();
   },
 
   _renderUpcomingDeadlines(inbox, sent) {
