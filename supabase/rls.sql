@@ -868,15 +868,23 @@ CREATE POLICY "internal_requests_update" ON internal_requests
     OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', to_section_id))
   );
 
+-- The asking side (from_section / the internal request's creator) only
+-- ever sees SENT replies — a reply still being drafted or awaiting a
+-- supervisor's approval belongs to the replying section alone, exactly
+-- like an external response draft is invisible to the counterpart org
+-- until approved and sent.
 CREATE POLICY "internal_request_replies_select" ON internal_request_replies
   FOR SELECT USING (
     EXISTS (
       SELECT 1 FROM internal_requests ir WHERE ir.id = internal_request_id
         AND (
-          ir.from_section_id IN (SELECT my_section_ids())
-          OR ir.to_section_id IN (SELECT my_section_ids())
-          OR ir.created_by = auth.uid()
+          ir.to_section_id IN (SELECT my_section_ids())
+          OR internal_request_replies.created_by = auth.uid()
           OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', ir.to_section_id))
+          OR (
+            internal_request_replies.status = 'sent'
+            AND (ir.from_section_id IN (SELECT my_section_ids()) OR ir.created_by = auth.uid())
+          )
         )
     )
   );
@@ -887,6 +895,30 @@ CREATE POLICY "internal_request_replies_insert" ON internal_request_replies
     AND EXISTS (
       SELECT 1 FROM internal_requests ir WHERE ir.id = internal_request_id
         AND ir.to_section_id IN (SELECT my_section_ids())
+    )
+  );
+
+-- Draft -> pending_approval -> sent transitions. The drafter can edit/
+-- submit while the reply is still theirs (draft/pending_approval, same
+-- editable-until-actually-approved rule as responses_update); a
+-- supervisor over the replying section approves/returns anything
+-- pending. WITH CHECK repeats USING so a permitted editor can't move a
+-- row somewhere they couldn't touch (the requests_update lesson).
+CREATE POLICY "internal_request_replies_update" ON internal_request_replies
+  FOR UPDATE USING (
+    (created_by = auth.uid() AND status IN ('draft', 'pending_approval'))
+    OR EXISTS (
+      SELECT 1 FROM internal_requests ir WHERE ir.id = internal_request_id
+        AND is_supervisor_or_above()
+        AND get_my_org_id() = scope_org_id('section', ir.to_section_id)
+    )
+  )
+  WITH CHECK (
+    (created_by = auth.uid() AND status IN ('draft', 'pending_approval'))
+    OR EXISTS (
+      SELECT 1 FROM internal_requests ir WHERE ir.id = internal_request_id
+        AND is_supervisor_or_above()
+        AND get_my_org_id() = scope_org_id('section', ir.to_section_id)
     )
   );
 

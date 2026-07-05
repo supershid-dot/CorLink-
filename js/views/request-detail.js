@@ -336,35 +336,84 @@ const RequestDetailView = {
   _renderInternalRequestRow(ird) {
     const ir = ird.internalRequest;
     const inToSection = this._mySections.some(s => s.id === ir.to_section_id);
-    // internal_requests_update (mark received) has a supervisor bypass;
-    // internal_request_replies_insert does not — only a literal member
-    // of the receiving section can reply. Showing Reply to a supervisor
-    // who isn't in that section would be a button that always fails.
+    // internal_requests_update (mark received/assign) has a supervisor
+    // bypass; internal_request_replies_insert does not — only a literal
+    // member of the receiving section can draft a reply. Showing Draft
+    // Reply to a supervisor who isn't in that section would be a
+    // button that always fails.
     const canReceive = inToSection || this._isSupervisor;
+    // internal_requests_update lets section members and org supervisors
+    // update; assignment is surfaced only to supervisors (mirrors the
+    // external Assign/Reassign gate).
+    const canAssign = this._isSupervisor;
     const canReply = inToSection;
+    const isCreatorSide = ir.created_by === this._user.id;
+    const statusBadge = {
+      sent:        ['Sent', 'badge-primary'],
+      received:    ['Received', 'badge-primary'],
+      in_progress: ['In Progress', 'badge-primary'],
+      responded:   ['Responded', 'badge-success'],
+      closed:      ['Closed', 'badge-muted'],
+    }[ir.status] || [ir.status, 'badge-outline'];
+    // One reply draft at a time — mirrors the one-open-response rule on
+    // the external side; a fresh draft only becomes possible again once
+    // the current one is approved & sent.
+    const openReply = ird.replies.find(rep => rep.status !== 'sent');
+
     return `
       <div class="internal-request-row" data-internal-request="${ir.id}">
         <div class="thread-message-header">
           <strong class="${ir.subject_language === 'dv' ? 'field-divehi' : ''}">${ir.subject}</strong>
           <span class="structure-empty">${ir.from_section?.name || ''} → ${ir.to_section?.name || ''}</span>
-          <span class="badge badge-outline">${ir.status}</span>
+          <span class="badge ${statusBadge[1]}">${statusBadge[0]}</span>
         </div>
         <div class="thread-message-body${ir.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(ir.body)}</div>
         ${this._renderReceipt(ir)}
+        ${ir.assigned_to_user ? `
+          <div class="thread-receipt"><i class="ti ti-user-check"></i>
+            Assigned to <strong>${this._escapeHtml(ir.assigned_to_user.full_name)}</strong>${ir.assigned_to_user.designations?.name ? ', ' + this._escapeHtml(ir.assigned_to_user.designations.name) : ''}
+          </div>` : ''}
         ${this._renderAttachments('internal_request', ir.id, ird.attachments, true)}
         <div class="internal-request-replies">
-          ${ird.replies.map(reply => `
-            <div class="thread-message thread-message--response">
-              <div class="thread-message-header">
-                <strong>${reply.created_by_user?.full_name || 'Unknown'}</strong>
-                <span class="structure-empty">${new Date(reply.created_at).toLocaleString()}</span>
-              </div>
-              <div class="thread-message-body">${RichEditor.sanitize(reply.body)}</div>
-            </div>
-          `).join('')}
+          ${ird.replies.map(reply => this._renderInternalReply(ir, reply)).join('')}
         </div>
-        ${ir.status === 'sent' && !ir.received_at && canReceive ? `<button class="btn btn-secondary btn-xs" data-mark-internal-received="${ir.id}">Mark Received</button>` : ''}
-        ${canReply && ir.status !== 'closed' ? `<button class="btn btn-secondary btn-xs" data-reply-internal="${ir.id}">Reply</button>` : ''}
+        <div class="detail-actions">
+          ${ir.status === 'sent' && !ir.received_at && canReceive ? `<button class="btn btn-primary btn-xs" data-mark-internal-received="${ir.id}">Mark Received</button>` : ''}
+          ${['received', 'in_progress'].includes(ir.status) && canAssign ? `<button class="btn btn-secondary btn-xs" data-assign-internal="${ir.id}">${ir.assigned_to ? 'Reassign' : 'Assign to Staff'}</button>` : ''}
+          ${canReply && !openReply && !['responded', 'closed'].includes(ir.status) && ir.status !== 'sent' ? `<button class="btn btn-primary btn-xs" data-reply-internal="${ir.id}">Draft Reply</button>` : ''}
+          ${isCreatorSide && ir.status === 'responded' ? `<button class="btn btn-secondary btn-xs" data-close-internal="${ir.id}">Close</button>` : ''}
+        </div>
+      </div>
+    `;
+  },
+
+  _renderInternalReply(ir, reply) {
+    const isMine = reply.created_by === this._user.id;
+    const badge = {
+      draft:            ['Draft', 'badge-muted'],
+      pending_approval: ['Pending Approval', 'badge-warning'],
+      sent:             ['Sent', 'badge-success'],
+    }[reply.status] || [reply.status, 'badge-outline'];
+    return `
+      <div class="thread-message thread-message--response">
+        <div class="thread-message-header">
+          <strong>${this._escapeHtml(reply.created_by_user?.full_name || 'Unknown')}</strong>
+          <span class="badge ${badge[1]}">${badge[0]}</span>
+          <span class="structure-empty">${new Date(reply.created_at).toLocaleString()}</span>
+        </div>
+        <div class="thread-message-body${reply.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(reply.body)}</div>
+        ${reply.status === 'sent' && reply.approved_by_user ? `
+          <div class="thread-receipt"><i class="ti ti-circle-check"></i>
+            Approved &amp; sent by <strong>${this._escapeHtml(reply.approved_by_user.full_name)}</strong>${reply.approved_by_user.designations?.name ? ', ' + this._escapeHtml(reply.approved_by_user.designations.name) : ''}
+            ${reply.approved_at ? ' — ' + new Date(reply.approved_at).toLocaleString() : ''}
+          </div>` : ''}
+        <div class="detail-actions">
+          ${['draft', 'pending_approval'].includes(reply.status) && isMine ? `<button class="btn btn-secondary btn-xs" data-edit-internal-reply="${reply.id}" data-ir="${ir.id}">Edit Draft</button>` : ''}
+          ${reply.status === 'draft' && isMine ? `<button class="btn btn-primary btn-xs" data-submit-internal-reply="${reply.id}" data-ir="${ir.id}">Submit for Approval</button>` : ''}
+          ${reply.status === 'pending_approval' && this._isSupervisor ? `
+            <button class="btn btn-primary btn-xs" data-approve-internal-reply="${reply.id}" data-ir="${ir.id}">Approve &amp; Send</button>
+            <button class="btn btn-secondary btn-xs" data-return-internal-reply="${reply.id}" data-ir="${ir.id}">Return</button>` : ''}
+        </div>
       </div>
     `;
   },
@@ -554,6 +603,33 @@ const RequestDetailView = {
     });
     main.querySelectorAll('[data-mark-internal-received]').forEach(btn => {
       btn.addEventListener('click', () => this._runAction(() => InternalRequestsAPI.markReceived(btn.dataset.markInternalReceived)));
+    });
+    main.querySelectorAll('[data-assign-internal]').forEach(btn => {
+      btn.addEventListener('click', () => this._openAssignInternalModal(btn.dataset.assignInternal));
+    });
+    main.querySelectorAll('[data-close-internal]').forEach(btn => {
+      btn.addEventListener('click', () => this._runAction(() => InternalRequestsAPI.close(btn.dataset.closeInternal)));
+    });
+    main.querySelectorAll('[data-edit-internal-reply]').forEach(btn => {
+      btn.addEventListener('click', () => this._openInternalReplyModal(btn.dataset.ir, btn.dataset.editInternalReply));
+    });
+    main.querySelectorAll('[data-submit-internal-reply]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const ir = this._findInternalRequest(btn.dataset.ir);
+        if (ir) this._openSubmitForApprovalModal('internal-reply', btn.dataset.submitInternalReply, ir.to_section_id, ir);
+      });
+    });
+    main.querySelectorAll('[data-approve-internal-reply]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const ir = this._findInternalRequest(btn.dataset.ir);
+        if (ir) this._runAction(() => InternalRequestsAPI.approveReply(btn.dataset.approveInternalReply, ir));
+      });
+    });
+    main.querySelectorAll('[data-return-internal-reply]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const ir = this._findInternalRequest(btn.dataset.ir);
+        if (ir) this._runAction(() => InternalRequestsAPI.returnReply(btn.dataset.returnInternalReply, ir));
+      });
     });
     main.querySelectorAll('[data-reply-internal]').forEach(btn => {
       btn.addEventListener('click', () => this._openInternalReplyModal(btn.dataset.replyInternal));
@@ -763,7 +839,7 @@ const RequestDetailView = {
   // is stored for routing/display only — RLS still lets any qualifying
   // supervisor of that section approve/return it, see submitRequest/
   // submitResponse in js/data/requests-api.js.
-  async _openSubmitForApprovalModal(kind, recordId, sectionId) {
+  async _openSubmitForApprovalModal(kind, recordId, sectionId, extra = null) {
     let approvers;
     try {
       approvers = await RequestsAPI.listEligibleApprovers(sectionId);
@@ -798,6 +874,9 @@ const RequestDetailView = {
       try {
         if (kind === 'request') {
           await RequestsAPI.submitRequest(recordId, fd.get('approverId') || null);
+        } else if (kind === 'internal-reply') {
+          // extra = the internal_requests row the reply belongs to
+          await InternalRequestsAPI.submitReplyForApproval(recordId, fd.get('approverId') || null, extra);
         } else {
           await RequestsAPI.submitResponse(recordId, fd.get('approverId') || null);
         }
@@ -844,7 +923,7 @@ const RequestDetailView = {
           <button type="submit" class="btn btn-primary">Save Changes</button>
         </div>
       </form>
-    `);
+    `, { large: true });
     const form = document.getElementById('edit-request-form');
     const editor = RichEditor.create(document.getElementById('edit-request-body'), { language: r.language || 'en' });
     editor.setHTML(r.body);
@@ -902,7 +981,7 @@ const RequestDetailView = {
           <button type="submit" class="btn btn-primary">Save Changes</button>
         </div>
       </form>
-    `);
+    `, { large: true });
     const form = document.getElementById('edit-response-form');
     const editor = RichEditor.create(document.getElementById('edit-response-body'), { language: resp.language || 'en' });
     editor.setHTML(resp.body);
@@ -973,7 +1052,7 @@ const RequestDetailView = {
           <button type="submit" class="btn btn-primary">Save Draft</button>
         </div>
       </form>
-    `);
+    `, { large: true });
     const form = document.getElementById('followup-form');
     const editor = RichEditor.create(document.getElementById('followup-body'), { language: 'en' });
     const followupSubject = document.getElementById('followup-subject');
@@ -1053,7 +1132,7 @@ const RequestDetailView = {
           <button type="submit" class="btn btn-primary">Send</button>
         </div>
       </form>
-    `);
+    `, { large: true });
     const form = document.getElementById('internal-form');
     const editor = RichEditor.create(document.getElementById('internal-body'), { language: 'en' });
     const internalSubject = document.getElementById('internal-subject');
@@ -1084,25 +1163,56 @@ const RequestDetailView = {
     });
   },
 
-  async _openInternalReplyModal(internalRequestId) {
+  // Locates the raw internal_requests row across every conversation
+  // round — the approve/return/submit handlers need the full row
+  // (parent_request_id, to_section_id, subject, created_by) for
+  // notifications and the supervisor picker.
+  _findInternalRequest(id) {
+    for (const entry of this._conversation) {
+      const hit = entry.internalRequestDetails.find(ird => ird.internalRequest.id === id);
+      if (hit) return hit.internalRequest;
+    }
+    return null;
+  },
+
+  // Creates a reply DRAFT (replyId null) or edits an existing one —
+  // sending now happens only through a supervisor's Approve & Send,
+  // the same lifecycle as an external response.
+  _openInternalReplyModal(internalRequestId, replyId = null) {
+    let existing = null;
+    if (replyId) {
+      for (const entry of this._conversation) {
+        for (const ird of entry.internalRequestDetails) {
+          const hit = ird.replies.find(rep => rep.id === replyId);
+          if (hit) existing = hit;
+        }
+      }
+    }
     this._openModal(`
-      <h3>Reply</h3>
+      <h3>${replyId ? 'Edit Draft Reply' : 'Draft Reply'}</h3>
       <form id="internal-reply-form" class="modal-form">
         <div class="field-group">
+          <div class="field-group-row">
+            <label class="field-label">Reply</label>
+            ${RichEditor.langToggleHtml('language', existing?.language || 'en')}
+          </div>
           <div id="internal-reply-body"></div>
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
-          <button type="submit" class="btn btn-primary">Send Reply</button>
+          <button type="submit" class="btn btn-primary">Save Draft</button>
         </div>
       </form>
-    `);
-    const editor = RichEditor.create(document.getElementById('internal-reply-body'), { language: 'en' });
+    `, { large: true });
+    const editor = RichEditor.create(document.getElementById('internal-reply-body'), { language: existing?.language || 'en' });
+    if (existing) editor.setHTML(existing.body);
     const form = document.getElementById('internal-reply-form');
+    RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const errEl = form.querySelector('.modal-error');
+      const fd = new FormData(form);
       const body = editor.getHTML();
       if (!body || body === '<p><br></p>') {
         errEl.textContent = 'Reply cannot be empty.';
@@ -1110,7 +1220,53 @@ const RequestDetailView = {
         return;
       }
       try {
-        await InternalRequestsAPI.reply({ internalRequestId, body });
+        if (replyId) {
+          await InternalRequestsAPI.updateReplyDraft(replyId, { body, language: fd.get('language') });
+        } else {
+          await InternalRequestsAPI.draftReply({ internalRequestId, body, language: fd.get('language') });
+        }
+        this._closeModal();
+        await this._load();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
+  async _openAssignInternalModal(internalRequestId) {
+    const ir = this._findInternalRequest(internalRequestId);
+    let users;
+    try {
+      users = (await AdminAPI.listUsersByOrg(this._user.org_id)).filter(u => u.is_active);
+    } catch (err) {
+      console.error('CorLink: failed to load users for assignment', err);
+      return;
+    }
+    this._openModal(`
+      <h3>Assign to Staff</h3>
+      <form id="assign-internal-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Staff Member</label>
+          <select class="field-select" name="userId">
+            <option value="">— Unassigned —</option>
+            ${users.map(u => `<option value="${u.id}" ${u.id === ir?.assigned_to ? 'selected' : ''}>${this._escapeHtml(u.full_name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    `);
+    const form = document.getElementById('assign-internal-form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const errEl = form.querySelector('.modal-error');
+      try {
+        await InternalRequestsAPI.assign(internalRequestId, fd.get('userId') || null);
         this._closeModal();
         await this._load();
       } catch (err) {
@@ -1127,11 +1283,11 @@ const RequestDetailView = {
   },
 
   // ── Generic Modal Helpers ──────────────────────────────────────
-  _openModal(innerHtml) {
+  _openModal(innerHtml, { large = false } = {}) {
     const root = document.getElementById('modal-root');
     root.innerHTML = `
       <div class="modal-overlay" id="modal-overlay">
-        <div class="modal-box">${innerHtml}</div>
+        <div class="modal-box${large ? ' modal-box--lg' : ''}">${innerHtml}</div>
       </div>
     `;
     document.getElementById('modal-overlay').addEventListener('click', (e) => {

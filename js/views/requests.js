@@ -690,7 +690,7 @@ const RequestsView = {
           <button type="submit" class="btn btn-primary">Save Draft</button>
         </div>
       </form>
-    `);
+    `, { large: true });
 
     const form = document.getElementById('compose-form');
     const editor = RichEditor.create(document.getElementById('compose-body'), { language: 'en' });
@@ -782,11 +782,11 @@ const RequestsView = {
   },
 
   // ── Generic Modal Helpers ──────────────────────────────────────
-  _openModal(innerHtml) {
+  _openModal(innerHtml, { large = false } = {}) {
     const root = document.getElementById('modal-root');
     root.innerHTML = `
       <div class="modal-overlay" id="modal-overlay">
-        <div class="modal-box">${innerHtml}</div>
+        <div class="modal-box${large ? ' modal-box--lg' : ''}">${innerHtml}</div>
       </div>
     `;
     document.getElementById('modal-overlay').addEventListener('click', (e) => {
