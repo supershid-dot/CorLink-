@@ -145,8 +145,8 @@ const RequestDetailView = {
         <div class="round-meta-row">
           ${!multiRound ? `<span>${RequestsView._statusBadge(r.status, r.deadline)}</span>` : ''}
           ${!multiRound && r.reference_number ? `<span class="structure-empty">${r.reference_number}</span>` : ''}
-          <span class="structure-empty">${r.to_section ? 'Routed to ' + r.to_section.name : 'Not yet routed'}</span>
-          <span class="structure-empty">Assigned: ${r.assigned_to_user?.full_name || 'Unassigned'}</span>
+          ${isToOrgMember ? `<span class="structure-empty">${r.to_section ? 'Routed to ' + r.to_section.name : 'Not yet routed'}</span>` : ''}
+          ${isToOrgMember ? `<span class="structure-empty">Assigned: ${r.assigned_to_user?.full_name || 'Unassigned'}</span>` : ''}
           ${!multiRound && r.deadline ? `<span class="structure-empty">Due ${r.deadline}</span>` : ''}
         </div>
 
@@ -161,10 +161,10 @@ const RequestDetailView = {
             ${this._renderReviewComments('request', r, entry.reviewComments, ctx.isFromOrgMember)}
             ${this._renderReceipt(r)}
             ${this._renderPendingApprovalNote(r)}
-            ${this._renderProcessEvents(r.id)}
+            ${ctx.isToOrgMember ? this._renderProcessEvents(r.id) : ''}
           </div>
 
-          ${this._renderApprovalHistory(entry.approvals)}
+          ${this._renderApprovalHistory(entry.approvals, ctx.isFromOrgMember)}
           ${this._renderAttachments('request', r.id, entry.attachments, ctx.isFromOrgMember || ctx.isToOrgMember, r.is_locked)}
         </div>
 
@@ -329,12 +329,18 @@ const RequestDetailView = {
     });
   },
 
-  _renderApprovalHistory(approvals) {
-    if (!approvals || approvals.length === 0) return '';
-    return approvals.map(a => `
+  // ownSide = viewer belongs to the org whose review loop this is. The
+  // counterpart org still sees that the document WAS approved (and by
+  // whom — it authenticates the correspondence), but never the internal
+  // return rounds or reviewer comments.
+  _renderApprovalHistory(approvals, ownSide = true) {
+    let list = approvals || [];
+    if (!ownSide) list = list.filter(a => a.decision === 'approved');
+    if (list.length === 0) return '';
+    return list.map(a => `
       <div class="thread-approval thread-approval--${a.decision}">
         <i class="ti ${a.decision === 'approved' ? 'ti-circle-check' : 'ti-corner-up-left'}"></i>
-        <span><strong>${a.reviewed_by_user?.full_name || 'Unknown'}</strong> ${a.decision === 'approved' ? 'approved' : 'returned'} this on ${new Date(a.reviewed_at).toLocaleString()}${a.comment ? ' — “' + this._escapeHtml(a.comment) + '”' : ''}</span>
+        <span><strong>${a.reviewed_by_user?.full_name || 'Unknown'}</strong> ${a.decision === 'approved' ? 'approved' : 'returned'} this on ${new Date(a.reviewed_at).toLocaleString()}${ownSide && a.comment ? ' — “' + this._escapeHtml(a.comment) + '”' : ''}</span>
       </div>
     `).join('');
   },
@@ -360,7 +366,7 @@ const RequestDetailView = {
           </div>
         ` : ''}
       </div>
-      ${this._renderApprovalHistory(rd.approvals)}
+      ${this._renderApprovalHistory(rd.approvals, this._user.org_id === request.to_org_id)}
       ${this._renderAttachments('response', resp.id, rd.attachments, true, resp.is_locked)}
       ${resp.status === 'sent' && !resp.received_at && request.from_org_id === this._user.org_id && this._canReceive ? `
         <div class="thread-message-actions">

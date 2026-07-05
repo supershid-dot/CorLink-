@@ -8,6 +8,7 @@ const RequestsView = {
   _state: {
     tab: 'inbox', inboxFilter: 'all', sentFilter: 'all', teamFilter: 'all',
     inboxSearch: '', sentSearch: '', approvalsSearch: '', infoSearch: '', teamSearch: '',
+    inboxOrg: 'all', sentOrg: 'all',
     teamStaffId: null,
   },
 
@@ -253,6 +254,34 @@ const RequestsView = {
   // term (first strong-directional character decides), with no JS and
   // no language toggle needed — a search box has to accept either
   // script in the same field, unlike compose forms.
+  // Organization dropdown for the Inbox ("From") / Sent ("To") lists —
+  // options derive from the orgs actually present in the fetched items,
+  // so it never lists organizations this tab has no mail with.
+  _orgFilterHtml(stateKey, items, orgEmbedKey) {
+    const orgIdField = orgEmbedKey === 'from_org' ? 'from_org_id' : 'to_org_id';
+    const seen = new Map();
+    (items || []).forEach(r => {
+      const org = r[orgEmbedKey];
+      if (r[orgIdField] && org?.name && !seen.has(r[orgIdField])) seen.set(r[orgIdField], org.name);
+    });
+    const current = this._state[stateKey];
+    return `
+      <select class="field-select org-filter-select" data-org-filter="${stateKey}" title="Filter by organization">
+        <option value="all">All organizations</option>
+        ${[...seen.entries()].map(([id, name]) => `<option value="${id}" ${current === id ? 'selected' : ''}>${name}</option>`).join('')}
+      </select>
+    `;
+  },
+
+  _bindOrgFilter(container, stateKey, onChange) {
+    const sel = container.querySelector(`[data-org-filter="${stateKey}"]`);
+    if (!sel) return;
+    sel.addEventListener('change', () => {
+      this._state[stateKey] = sel.value;
+      onChange();
+    });
+  },
+
   _searchBoxHtml(name, placeholder, value = '') {
     return `
       <div class="search-box">
@@ -288,10 +317,14 @@ const RequestsView = {
   async _renderInbox(content) {
     this._inboxItems = await RequestsAPI.listInbox(this._user.org_id);
     content.innerHTML = `
-      ${this._searchBoxHtml('inboxSearch', 'Search subject or message…', this._state.inboxSearch)}
+      <div class="list-toolbar">
+        ${this._searchBoxHtml('inboxSearch', 'Search subject or message…', this._state.inboxSearch)}
+        ${this._orgFilterHtml('inboxOrg', this._inboxItems, 'from_org')}
+      </div>
       <div id="inbox-results"></div>
     `;
     this._bindSearchBox(content, 'inboxSearch', () => this._renderInboxFiltered());
+    this._bindOrgFilter(content, 'inboxOrg', () => this._renderInboxFiltered());
     this._renderInboxFiltered();
   },
 
@@ -300,7 +333,8 @@ const RequestsView = {
     if (!resultsEl) return;
     const items = this._inboxItems || [];
     const query = (this._state.inboxSearch || '').trim().toLowerCase();
-    const searched = items.filter(r => this._matchesQuery(r.subject, r.body, query, r.reference_number));
+    const orgFiltered = this._state.inboxOrg === 'all' ? items : items.filter(r => r.from_org_id === this._state.inboxOrg);
+    const searched = orgFiltered.filter(r => this._matchesQuery(r.subject, r.body, query, r.reference_number));
     const filters = this._inboxFilters();
     const active = filters.find(f => f.key === this._state.inboxFilter) || filters[0];
     const filtered = searched.filter(active.test);
@@ -320,10 +354,14 @@ const RequestsView = {
   async _renderSent(content) {
     this._sentItems = await RequestsAPI.listSent(this._user.org_id);
     content.innerHTML = `
-      ${this._searchBoxHtml('sentSearch', 'Search subject or message…', this._state.sentSearch)}
+      <div class="list-toolbar">
+        ${this._searchBoxHtml('sentSearch', 'Search subject or message…', this._state.sentSearch)}
+        ${this._orgFilterHtml('sentOrg', this._sentItems, 'to_org')}
+      </div>
       <div id="sent-results"></div>
     `;
     this._bindSearchBox(content, 'sentSearch', () => this._renderSentFiltered());
+    this._bindOrgFilter(content, 'sentOrg', () => this._renderSentFiltered());
     this._renderSentFiltered();
   },
 
@@ -332,7 +370,8 @@ const RequestsView = {
     if (!resultsEl) return;
     const items = this._sentItems || [];
     const query = (this._state.sentSearch || '').trim().toLowerCase();
-    const searched = items.filter(r => this._matchesQuery(r.subject, r.body, query, r.reference_number));
+    const orgFiltered = this._state.sentOrg === 'all' ? items : items.filter(r => r.to_org_id === this._state.sentOrg);
+    const searched = orgFiltered.filter(r => this._matchesQuery(r.subject, r.body, query, r.reference_number));
     const filters = this._sentFilters();
     const active = filters.find(f => f.key === this._state.sentFilter) || filters[0];
     const filtered = searched.filter(active.test);
