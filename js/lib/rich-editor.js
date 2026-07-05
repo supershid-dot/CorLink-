@@ -16,19 +16,26 @@
 
 const RichEditor = (() => {
   // Tight allowlist — only what the toolbar below can actually produce.
+  // BLOCKQUOTE is what Chrome's indent command wraps non-list blocks in.
   const ALLOWED_TAGS = new Set([
     'P', 'BR', 'DIV', 'B', 'STRONG', 'I', 'EM', 'U', 'S', 'STRIKE', 'SPAN',
-    'OL', 'UL', 'LI', 'TABLE', 'THEAD', 'TBODY', 'TR', 'TD', 'TH',
+    'OL', 'UL', 'LI', 'BLOCKQUOTE',
+    'TABLE', 'THEAD', 'TBODY', 'TR', 'TD', 'TH',
   ]);
   // Chrome's execCommand (in styleWithCSS mode, enabled below) emits
   // longhand properties for some commands — font-style for italic,
   // text-decoration-line for underline/strikethrough — rather than the
   // shorthand text-decoration; both forms are allowed since browsers
   // differ here (verified against real execCommand output, not guessed).
+  // The margin/padding entries are what indent/outdent emit (Chrome
+  // writes "margin: 0 0 0 40px" on the blockquote wrapper, and the
+  // direction-flipped margin-right in RTL blocks).
   const ALLOWED_STYLE_PROPS = new Set([
     'color', 'background-color', 'text-align',
     'font-size', 'font-weight', 'font-style',
     'text-decoration', 'text-decoration-line',
+    'margin', 'margin-left', 'margin-right',
+    'padding-left', 'padding-right',
   ]);
   // Letters/digits/#/./,/%/()/whitespace/hyphen only — rejects
   // javascript:, quotes, braces, semicolons in the VALUE (property
@@ -113,19 +120,17 @@ const RichEditor = (() => {
     return out.innerHTML;
   }
 
-  function insertTable(body) {
-    const rows = 3, cols = 3;
-    let html = '<table><tbody>';
-    for (let r = 0; r < rows; r++) {
-      html += '<tr>' + '<td>&nbsp;</td>'.repeat(cols) + '</tr>';
-    }
-    html += '</tbody></table><p><br></p>';
-    document.execCommand('insertHTML', false, html);
-  }
+  const GRID_MAX = 8;
 
   function toolbarHtml() {
+    const gridCells = Array.from({ length: GRID_MAX * GRID_MAX }, (_, i) =>
+      `<span class="rich-editor-grid-cell" data-row="${Math.floor(i / GRID_MAX) + 1}" data-col="${(i % GRID_MAX) + 1}"></span>`
+    ).join('');
     return `
       <div class="rich-editor-toolbar" role="toolbar">
+        <button type="button" data-cmd="undo" title="Undo"><i class="ti ti-arrow-back-up"></i></button>
+        <button type="button" data-cmd="redo" title="Redo"><i class="ti ti-arrow-forward-up"></i></button>
+        <span class="rich-editor-sep"></span>
         <button type="button" data-cmd="bold" title="Bold"><i class="ti ti-bold"></i></button>
         <button type="button" data-cmd="italic" title="Italic"><i class="ti ti-italic"></i></button>
         <button type="button" data-cmd="underline" title="Underline"><i class="ti ti-underline"></i></button>
@@ -145,15 +150,35 @@ const RichEditor = (() => {
           <i class="ti ti-highlight"></i>
           <input type="color" data-cmd="hiliteColor" value="#fff59d" />
         </label>
+        <button type="button" data-cmd="removeFormat" title="Clear formatting"><i class="ti ti-clear-formatting"></i></button>
         <span class="rich-editor-sep"></span>
         <button type="button" data-cmd="justifyLeft" title="Align left"><i class="ti ti-align-left"></i></button>
         <button type="button" data-cmd="justifyCenter" title="Align center"><i class="ti ti-align-center"></i></button>
         <button type="button" data-cmd="justifyRight" title="Align right"><i class="ti ti-align-right"></i></button>
+        <button type="button" data-cmd="justifyFull" title="Justify"><i class="ti ti-align-justified"></i></button>
         <span class="rich-editor-sep"></span>
         <button type="button" data-cmd="insertUnorderedList" title="Bulleted list"><i class="ti ti-list"></i></button>
         <button type="button" data-cmd="insertOrderedList" title="Numbered list"><i class="ti ti-list-numbers"></i></button>
+        <button type="button" data-cmd="outdent" title="Decrease indent"><i class="ti ti-indent-decrease"></i></button>
+        <button type="button" data-cmd="indent" title="Increase indent"><i class="ti ti-indent-increase"></i></button>
         <span class="rich-editor-sep"></span>
-        <button type="button" data-action="table" title="Insert table"><i class="ti ti-table"></i></button>
+        <div class="rich-editor-table-wrap">
+          <button type="button" data-action="table-menu" title="Table"><i class="ti ti-table"></i></button>
+          <div class="rich-editor-table-menu hidden">
+            <div class="rich-editor-menu-label">Insert table</div>
+            <div class="rich-editor-grid">${gridCells}</div>
+            <div class="rich-editor-grid-size">1 × 1</div>
+            <div class="rich-editor-menu-divider"></div>
+            <button type="button" data-table-op="row-above"><i class="ti ti-row-insert-top"></i> Insert row above</button>
+            <button type="button" data-table-op="row-below"><i class="ti ti-row-insert-bottom"></i> Insert row below</button>
+            <button type="button" data-table-op="col-left"><i class="ti ti-column-insert-left"></i> Insert column left</button>
+            <button type="button" data-table-op="col-right"><i class="ti ti-column-insert-right"></i> Insert column right</button>
+            <div class="rich-editor-menu-divider"></div>
+            <button type="button" data-table-op="del-row"><i class="ti ti-row-remove"></i> Delete row</button>
+            <button type="button" data-table-op="del-col"><i class="ti ti-column-remove"></i> Delete column</button>
+            <button type="button" data-table-op="del-table"><i class="ti ti-table-off"></i> Delete table</button>
+          </div>
+        </div>
       </div>
     `;
   }
@@ -171,37 +196,223 @@ const RichEditor = (() => {
       const root = containerEl.querySelector('.rich-editor');
       const toolbar = root.querySelector('.rich-editor-toolbar');
       const body = root.querySelector('.rich-editor-body');
+      const tableMenu = root.querySelector('.rich-editor-table-menu');
 
-      // Makes foreColor/hiliteColor/fontSize emit inline style="" (span)
-      // instead of legacy <font> tags — without this, color/highlight
-      // would visually work in the live editor but vanish entirely on
-      // save, since <font> isn't in the sanitizer's tag allowlist and
-      // colors aren't re-derivable from anything else in the markup.
-      document.execCommand('styleWithCSS', false, true);
+      // ── Selection preservation ───────────────────────────────────
+      // Interacting with toolbar controls that take real focus — the
+      // native color picker dialog especially — can collapse or drop
+      // the contenteditable selection before the command runs, so
+      // "highlight selected text" silently highlighted nothing. Track
+      // the last selection seen inside the body and restore it before
+      // every command instead of trusting focus() to bring it back.
+      let savedRange = null;
+      const onSelectionChange = () => {
+        const sel = document.getSelection();
+        if (sel.rangeCount > 0 && body.contains(sel.anchorNode)) {
+          savedRange = sel.getRangeAt(0).cloneRange();
+        }
+      };
+      document.addEventListener('selectionchange', onSelectionChange);
 
+      function restoreSelection() {
+        body.focus();
+        const sel = document.getSelection();
+        if (savedRange && body.contains(savedRange.commonAncestorContainer)) {
+          sel.removeAllRanges();
+          sel.addRange(savedRange);
+        } else {
+          // Never focused/selected yet — put the caret at the end so
+          // commands like table-insert still have a valid target.
+          const range = document.createRange();
+          range.selectNodeContents(body);
+          range.collapse(false);
+          sel.removeAllRanges();
+          sel.addRange(range);
+        }
+      }
+
+      function exec(cmd, value = null) {
+        restoreSelection();
+        // styleWithCSS is document-global mutable state (another editor
+        // instance or browser quirk can reset it) — re-assert it every
+        // time so foreColor/hiliteColor/fontSize keep emitting inline
+        // style spans instead of legacy <font> tags, which the
+        // sanitizer would strip on save.
+        document.execCommand('styleWithCSS', false, true);
+        document.execCommand(cmd, false, value);
+        onSelectionChange();
+      }
+
+      // ── Table helpers ────────────────────────────────────────────
+      function selectionCell() {
+        let node = null;
+        const sel = document.getSelection();
+        if (sel.rangeCount > 0 && body.contains(sel.anchorNode)) {
+          node = sel.anchorNode;
+        } else if (savedRange && body.contains(savedRange.commonAncestorContainer)) {
+          node = savedRange.commonAncestorContainer;
+        }
+        if (!node) return null;
+        const el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+        const cell = el && el.closest('td, th');
+        return cell && body.contains(cell) ? cell : null;
+      }
+
+      function placeCaret(el, atEnd = false) {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(!atEnd);
+        const sel = document.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        onSelectionChange();
+      }
+
+      function makeCell(refCell) {
+        const cell = document.createElement(refCell && refCell.tagName === 'TH' ? 'th' : 'td');
+        cell.innerHTML = '&nbsp;';
+        return cell;
+      }
+
+      function insertRow(cell, below) {
+        const row = cell.closest('tr');
+        const newRow = document.createElement('tr');
+        Array.from(row.children).forEach(c => newRow.appendChild(makeCell(c)));
+        row.parentElement.insertBefore(newRow, below ? row.nextSibling : row);
+        placeCaret(newRow.firstElementChild);
+      }
+
+      function insertColumn(cell, right) {
+        const row = cell.closest('tr');
+        const table = cell.closest('table');
+        const idx = Array.prototype.indexOf.call(row.children, cell);
+        table.querySelectorAll('tr').forEach(tr => {
+          const ref = tr.children[Math.min(idx, tr.children.length - 1)];
+          const fresh = makeCell(ref);
+          if (right) tr.insertBefore(fresh, ref ? ref.nextSibling : null);
+          else tr.insertBefore(fresh, ref || null);
+        });
+        placeCaret(row.children[right ? idx + 1 : idx]);
+      }
+
+      function deleteRow(cell) {
+        const row = cell.closest('tr');
+        const table = cell.closest('table');
+        row.remove();
+        if (!table.querySelector('tr')) table.remove();
+        else placeCaret(table.querySelector('td, th'));
+      }
+
+      function deleteColumn(cell) {
+        const row = cell.closest('tr');
+        const table = cell.closest('table');
+        const idx = Array.prototype.indexOf.call(row.children, cell);
+        table.querySelectorAll('tr').forEach(tr => {
+          if (tr.children[idx]) tr.children[idx].remove();
+        });
+        if (!table.querySelector('td, th')) table.remove();
+        else placeCaret(table.querySelector('td, th'));
+      }
+
+      function insertTable(rows, cols) {
+        let html = '<table><tbody>';
+        for (let r = 0; r < rows; r++) {
+          html += '<tr>' + '<td>&nbsp;</td>'.repeat(cols) + '</tr>';
+        }
+        html += '</tbody></table><p><br></p>';
+        exec('insertHTML', html);
+      }
+
+      // ── Toolbar wiring ───────────────────────────────────────────
       toolbar.querySelectorAll('button[data-cmd]').forEach(btn => {
+        // mousedown + preventDefault keeps the click from moving focus
+        // (and collapsing the selection) in the first place; the
+        // command then runs against the still-live selection.
+        btn.addEventListener('mousedown', (e) => e.preventDefault());
         btn.addEventListener('click', (e) => {
           e.preventDefault();
-          body.focus();
-          document.execCommand(btn.dataset.cmd, false, null);
+          exec(btn.dataset.cmd);
         });
       });
       toolbar.querySelector('select[data-cmd="fontSize"]').addEventListener('change', (e) => {
-        body.focus();
-        document.execCommand('fontSize', false, e.target.value);
+        exec('fontSize', e.target.value);
       });
       toolbar.querySelector('input[data-cmd="foreColor"]').addEventListener('input', (e) => {
-        body.focus();
-        document.execCommand('foreColor', false, e.target.value);
+        exec('foreColor', e.target.value);
       });
       toolbar.querySelector('input[data-cmd="hiliteColor"]').addEventListener('input', (e) => {
-        body.focus();
-        document.execCommand('hiliteColor', false, e.target.value);
+        exec('hiliteColor', e.target.value);
       });
-      toolbar.querySelector('[data-action="table"]').addEventListener('click', (e) => {
+
+      // ── Table menu ───────────────────────────────────────────────
+      const menuBtn = toolbar.querySelector('[data-action="table-menu"]');
+      const grid = tableMenu.querySelector('.rich-editor-grid');
+      const gridSize = tableMenu.querySelector('.rich-editor-grid-size');
+
+      menuBtn.addEventListener('mousedown', (e) => e.preventDefault());
+      menuBtn.addEventListener('click', (e) => {
         e.preventDefault();
-        body.focus();
-        insertTable(body);
+        const opening = tableMenu.classList.contains('hidden');
+        tableMenu.classList.toggle('hidden');
+        if (opening) {
+          const inTable = !!selectionCell();
+          tableMenu.querySelectorAll('[data-table-op]').forEach(op => { op.disabled = !inTable; });
+        }
+      });
+      const onDocClick = (e) => {
+        if (!root.contains(e.target)) tableMenu.classList.add('hidden');
+      };
+      document.addEventListener('click', onDocClick);
+
+      grid.querySelectorAll('.rich-editor-grid-cell').forEach(cellEl => {
+        cellEl.addEventListener('mouseenter', () => {
+          const rows = +cellEl.dataset.row, cols = +cellEl.dataset.col;
+          gridSize.textContent = `${rows} × ${cols}`;
+          grid.querySelectorAll('.rich-editor-grid-cell').forEach(c => {
+            c.classList.toggle('rich-editor-grid-cell--on', +c.dataset.row <= rows && +c.dataset.col <= cols);
+          });
+        });
+        cellEl.addEventListener('click', () => {
+          tableMenu.classList.add('hidden');
+          insertTable(+cellEl.dataset.row, +cellEl.dataset.col);
+        });
+      });
+
+      tableMenu.querySelectorAll('[data-table-op]').forEach(opBtn => {
+        opBtn.addEventListener('mousedown', (e) => e.preventDefault());
+        opBtn.addEventListener('click', () => {
+          tableMenu.classList.add('hidden');
+          const cell = selectionCell();
+          if (!cell) return;
+          body.focus();
+          switch (opBtn.dataset.tableOp) {
+            case 'row-above': insertRow(cell, false); break;
+            case 'row-below': insertRow(cell, true); break;
+            case 'col-left':  insertColumn(cell, false); break;
+            case 'col-right': insertColumn(cell, true); break;
+            case 'del-row':   deleteRow(cell); break;
+            case 'del-col':   deleteColumn(cell); break;
+            case 'del-table': { const t = cell.closest('table'); t.remove(); break; }
+          }
+        });
+      });
+
+      // Word-style Tab navigation between table cells; tabbing past the
+      // last cell appends a fresh row, same as Word/Sheets.
+      body.addEventListener('keydown', (e) => {
+        if (e.key !== 'Tab') return;
+        const cell = selectionCell();
+        if (!cell) return;
+        e.preventDefault();
+        const table = cell.closest('table');
+        const cells = Array.from(table.querySelectorAll('td, th'));
+        const i = cells.indexOf(cell);
+        let target = e.shiftKey ? cells[i - 1] : cells[i + 1];
+        if (!target && !e.shiftKey) {
+          insertRow(cell, true);
+          return; // insertRow already placed the caret in the new row
+        }
+        if (target) placeCaret(target, true);
       });
 
       return {
@@ -214,7 +425,11 @@ const RichEditor = (() => {
         setHTML(html) { body.innerHTML = sanitize(html); },
         setLanguage(lang) { body.classList.toggle('field-divehi', lang === 'dv'); },
         focus() { body.focus(); },
-        destroy() { containerEl.innerHTML = ''; },
+        destroy() {
+          document.removeEventListener('selectionchange', onSelectionChange);
+          document.removeEventListener('click', onDocClick);
+          containerEl.innerHTML = '';
+        },
       };
     },
 
