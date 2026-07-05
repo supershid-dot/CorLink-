@@ -1765,10 +1765,14 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
 .followup-row { display: flex; }
 
 /* ── Rich Text Editor ─────────────────────────────────────────── */
+/* No overflow:hidden here — the table dropdown is position:absolute
+   inside the toolbar and must escape the editor box (a short/empty
+   body would otherwise clip most of the menu unreachably). The corner
+   rounding that overflow used to provide moves to the toolbar/body
+   radii below. */
 .rich-editor {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  overflow: hidden;
 }
 .rich-editor-toolbar {
   display: flex;
@@ -1778,6 +1782,7 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
   padding: 6px;
   background: var(--color-bg);
   border-bottom: 1px solid var(--color-border);
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
 }
 .rich-editor-toolbar button {
   display: flex;
@@ -1891,6 +1896,7 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
   min-height: 140px;
   max-height: 640px;
   overflow-y: auto;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
   padding: 10px 12px;
   font-size: 0.9375rem;
   line-height: 1.6;
