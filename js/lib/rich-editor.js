@@ -50,6 +50,16 @@ const RichEditor = (() => {
   // rather than depending on that staying true as the allowlist grows.
   const SAFE_STYLE_VALUE = /^[a-z0-9#.,%()\s-]+$/i;
   const UNSAFE_VALUE_SUBSTRING = /url\(|expression\(/i;
+  // Box properties get a stricter shape than the general charset:
+  // 1-4 non-negative lengths, each ≤3 integer digits. Without this, a
+  // body written straight through the REST API (the threat model in
+  // the header comment) could carry margin: -9999px and overlap its
+  // rendered content over neighbouring messages' headers — not script
+  // execution, but effective spoofing in the display context.
+  const BOX_PROPS = new Set(['margin', 'margin-left', 'margin-right', 'padding-left', 'padding-right']);
+  // Whitespace REQUIRED between components — with it merely optional,
+  // "99999px" sneaks through as two adjacent repetitions ("999"+"99px").
+  const SAFE_BOX_VALUE = /^\d{1,3}(?:\.\d+)?(?:px|em|rem|%)?(?:\s+\d{1,3}(?:\.\d+)?(?:px|em|rem|%)?){0,3}$/i;
 
   function sanitizeStyle(styleText) {
     const kept = [];
@@ -60,6 +70,7 @@ const RichEditor = (() => {
       const val = decl.slice(idx + 1).trim();
       if (!ALLOWED_STYLE_PROPS.has(prop) || !val) return;
       if (!SAFE_STYLE_VALUE.test(val) || UNSAFE_VALUE_SUBSTRING.test(val)) return;
+      if (BOX_PROPS.has(prop) && !SAFE_BOX_VALUE.test(val)) return;
       kept.push(`${prop}: ${val}`);
     });
     return kept.join('; ');
@@ -205,8 +216,15 @@ const RichEditor = (() => {
       // "highlight selected text" silently highlighted nothing. Track
       // the last selection seen inside the body and restore it before
       // every command instead of trusting focus() to bring it back.
+      // The two document-level listeners below tear themselves down the
+      // first time they fire after the editor's DOM is gone — callers
+      // close modals by wiping innerHTML rather than calling destroy(),
+      // which would otherwise leak one selectionchange + one click
+      // listener (each pinning the whole detached editor tree) per
+      // compose/reply form ever opened in the SPA session.
       let savedRange = null;
       const onSelectionChange = () => {
+        if (!body.isConnected) { teardown(); return; }
         const sel = document.getSelection();
         if (sel.rangeCount > 0 && body.contains(sel.anchorNode)) {
           savedRange = sel.getRangeAt(0).cloneRange();
@@ -282,11 +300,19 @@ const RichEditor = (() => {
         placeCaret(newRow.firstElementChild);
       }
 
+      // Only THIS table's rows — querySelectorAll('tr') also matches
+      // rows of tables nested inside a cell, so a column op on the
+      // outer table would silently add/remove cells in every inner
+      // table too.
+      function ownRows(table) {
+        return Array.from(table.querySelectorAll('tr')).filter(tr => tr.closest('table') === table);
+      }
+
       function insertColumn(cell, right) {
         const row = cell.closest('tr');
         const table = cell.closest('table');
         const idx = Array.prototype.indexOf.call(row.children, cell);
-        table.querySelectorAll('tr').forEach(tr => {
+        ownRows(table).forEach(tr => {
           const ref = tr.children[Math.min(idx, tr.children.length - 1)];
           const fresh = makeCell(ref);
           if (right) tr.insertBefore(fresh, ref ? ref.nextSibling : null);
@@ -299,7 +325,7 @@ const RichEditor = (() => {
         const row = cell.closest('tr');
         const table = cell.closest('table');
         row.remove();
-        if (!table.querySelector('tr')) table.remove();
+        if (ownRows(table).length === 0) table.remove();
         else placeCaret(table.querySelector('td, th'));
       }
 
@@ -307,10 +333,10 @@ const RichEditor = (() => {
         const row = cell.closest('tr');
         const table = cell.closest('table');
         const idx = Array.prototype.indexOf.call(row.children, cell);
-        table.querySelectorAll('tr').forEach(tr => {
+        ownRows(table).forEach(tr => {
           if (tr.children[idx]) tr.children[idx].remove();
         });
-        if (!table.querySelector('td, th')) table.remove();
+        if (!ownRows(table).some(tr => tr.children.length > 0)) table.remove();
         else placeCaret(table.querySelector('td, th'));
       }
 
@@ -360,9 +386,15 @@ const RichEditor = (() => {
         }
       });
       const onDocClick = (e) => {
+        if (!body.isConnected) { teardown(); return; }
         if (!root.contains(e.target)) tableMenu.classList.add('hidden');
       };
       document.addEventListener('click', onDocClick);
+
+      function teardown() {
+        document.removeEventListener('selectionchange', onSelectionChange);
+        document.removeEventListener('click', onDocClick);
+      }
 
       grid.querySelectorAll('.rich-editor-grid-cell').forEach(cellEl => {
         cellEl.addEventListener('mouseenter', () => {
@@ -426,8 +458,7 @@ const RichEditor = (() => {
         setLanguage(lang) { body.classList.toggle('field-divehi', lang === 'dv'); },
         focus() { body.focus(); },
         destroy() {
-          document.removeEventListener('selectionchange', onSelectionChange);
-          document.removeEventListener('click', onDocClick);
+          teardown();
           containerEl.innerHTML = '';
         },
       };

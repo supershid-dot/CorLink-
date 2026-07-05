@@ -287,18 +287,33 @@ CREATE TABLE internal_requests (
   body              TEXT        NOT NULL,
   language          TEXT        NOT NULL DEFAULT 'en' CHECK (language IN ('en', 'dv')),
   status            TEXT        NOT NULL DEFAULT 'sent' CHECK (status IN (
-                       'sent', 'received', 'responded', 'closed'
+                       'sent', 'received', 'in_progress', 'responded', 'closed'
                      )),
   received_by       UUID        REFERENCES users(id),
   received_at       TIMESTAMPTZ,
+  assigned_to       UUID        REFERENCES users(id),
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Replies mirror the external responses workflow: draft ->
+-- pending_approval -> sent, with the approving supervisor recorded on
+-- the row itself (approved_by/approved_at) rather than in the
+-- approvals table — the internal loop needs the receipt display, not
+-- a separate review-history record. pending_approval_by is the
+-- specific supervisor the drafter chose, informational routing only
+-- (same non-exclusive semantics as requests/responses.pending_approval_by).
 CREATE TABLE internal_request_replies (
   id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   internal_request_id UUID        NOT NULL REFERENCES internal_requests(id),
   body                TEXT        NOT NULL,
+  language            TEXT        NOT NULL DEFAULT 'en' CHECK (language IN ('en', 'dv')),
+  status              TEXT        NOT NULL DEFAULT 'sent' CHECK (status IN (
+                        'draft', 'pending_approval', 'sent'
+                      )),
+  pending_approval_by UUID        REFERENCES users(id),
+  approved_by         UUID        REFERENCES users(id),
+  approved_at         TIMESTAMPTZ,
   created_by          UUID        NOT NULL REFERENCES users(id),
   created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

@@ -39,6 +39,10 @@ match what changed since, instead of re-running the full files:
   `responses_update` RLS so a draft stays editable through `pending_approval`, not
   just before submitting (also fixes a pre-existing bug where "Submit for Approval"
   always failed RLS)
+- `supabase/patch-internal-workflow.sql` — internal collaboration gets the full
+  external-style lifecycle: assign-to-staff on internal requests, and replies now go
+  draft → submit for approval → supervisor approves & sends (draft/pending replies
+  are hidden from the asking section until sent)
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 
