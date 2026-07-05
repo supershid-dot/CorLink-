@@ -256,7 +256,14 @@ const Auth = (() => {
         .eq('user_id', session.user.id)
         .eq('is_active', true);
 
-      const profile = { ...data, assignments: await resolveScopeNames(db, assignments || []) };
+      // Org name rides in the cached profile so the (synchronous) app
+      // shell can show "logo + organisation name" in the header without
+      // its own fetch. Falls back gracefully for stale caches that
+      // predate this field.
+      const { data: org } = await db.from('organizations')
+        .select('name, code').eq('id', data.org_id).single();
+
+      const profile = { ...data, organization: org || null, assignments: await resolveScopeNames(db, assignments || []) };
       localStorage.setItem(USER_KEY, JSON.stringify(profile));
       return profile;
     },

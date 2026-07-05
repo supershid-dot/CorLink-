@@ -59,23 +59,25 @@ const RequestDetailView = {
     try {
       const conversation = await RequestsAPI.getConversation(this._requestId);
       this._conversation = await Promise.all(conversation.map(async (request) => {
-        const [responses, approvals, internalRequests, attachments] = await Promise.all([
+        const [responses, approvals, internalRequests, attachments, reviewComments] = await Promise.all([
           RequestsAPI.listResponses(request.id),
           RequestsAPI.listApprovals('request', request.id),
           InternalRequestsAPI.list(request.id),
           AttachmentsAPI.list('request', request.id),
+          ReviewCommentsAPI.list('request', request.id),
         ]);
         const responseDetails = await Promise.all(responses.map(async (response) => ({
           response,
           approvals: await RequestsAPI.listApprovals('response', response.id),
           attachments: await AttachmentsAPI.list('response', response.id),
+          reviewComments: await ReviewCommentsAPI.list('response', response.id),
         })));
         const internalRequestDetails = await Promise.all(internalRequests.map(async (ir) => ({
           internalRequest: ir,
           replies: await InternalRequestsAPI.listReplies(ir.id),
           attachments: await AttachmentsAPI.list('internal_request', ir.id),
         })));
-        return { request, responseDetails, approvals, internalRequestDetails, attachments };
+        return { request, responseDetails, approvals, internalRequestDetails, attachments, reviewComments };
       }));
       const requestIds = this._conversation.map(entry => entry.request.id);
       const responseIds = this._conversation.flatMap(entry => entry.responseDetails.map(rd => rd.response.id));
@@ -150,11 +152,13 @@ const RequestDetailView = {
 
         <div class="thread">
           <div class="thread-message thread-message--request">
+            <div class="thread-message-kind">Request</div>
             <div class="thread-message-header">
               <strong>${r.created_by_user?.full_name || 'Unknown'}</strong>
               <span class="structure-empty">${new Date(r.created_at).toLocaleString()}</span>
             </div>
             <div class="thread-message-body${r.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(r.body)}</div>
+            ${this._renderReviewComments('request', r, entry.reviewComments, ctx.isFromOrgMember)}
             ${this._renderReceipt(r)}
             ${this._renderPendingApprovalNote(r)}
             ${this._renderProcessEvents(r.id)}
@@ -231,6 +235,100 @@ const RequestDetailView = {
     `).join('');
   },
 
+  // Word-style review loop on a draft awaiting approval (Option B —
+  // quoted snippets, not live anchors): visible to the drafting side
+  // only (RLS enforces; sideOk just avoids rendering a dead panel to
+  // the counterpart org). Supervisors can add comments while the draft
+  // is pending; anyone on the drafting side can resolve.
+  _renderReviewComments(recordType, record, comments, sideOk) {
+    comments = comments || [];
+    const pending = record.status === 'pending_approval';
+    const canComment = pending && sideOk && this._isSupervisor;
+    if (comments.length === 0 && !canComment) return '';
+    const unresolved = comments.filter(c => !c.resolved_at).length;
+    return `
+      <div class="review-comments">
+        <div class="review-comments-header">
+          <i class="ti ti-message-2"></i> Review Comments
+          ${unresolved > 0 ? `<span class="badge badge-warning">${unresolved} open</span>` : ''}
+          ${canComment ? `<button class="btn btn-secondary btn-xs" data-add-comment-type="${recordType}" data-add-comment-id="${record.id}">Add Comment</button>` : ''}
+        </div>
+        ${comments.map(c => `
+          <div class="review-comment${c.resolved_at ? ' review-comment--resolved' : ''}">
+            ${c.quoted_text ? `<div class="review-comment-quote">“${this._escapeHtml(c.quoted_text)}”</div>` : ''}
+            <div class="review-comment-text">${this._escapeHtml(c.comment)}</div>
+            <div class="review-comment-meta">
+              <span><strong>${this._escapeHtml(c.created_by_user?.full_name || 'Unknown')}</strong>${c.created_by_user?.designations?.name ? ', ' + this._escapeHtml(c.created_by_user.designations.name) : ''} — ${new Date(c.created_at).toLocaleString()}</span>
+              ${c.resolved_at
+                ? `<span class="badge badge-success">Resolved${c.resolved_by_user ? ' by ' + this._escapeHtml(c.resolved_by_user.full_name) : ''}</span>`
+                : (sideOk ? `<button class="btn btn-secondary btn-xs" data-resolve-comment="${c.id}">Mark Resolved</button>` : '')}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  },
+
+  // Resolves the request row + draft creator + subject for a comment
+  // target ('request'/'response' + id) from the already-loaded
+  // conversation — used by the Add Comment modal for notifications.
+  _findCommentTarget(recordType, recordId) {
+    for (const entry of this._conversation) {
+      if (recordType === 'request' && entry.request.id === recordId) {
+        return { requestId: entry.request.id, creator: entry.request.created_by, subject: entry.request.subject };
+      }
+      if (recordType === 'response') {
+        const rd = entry.responseDetails.find(d => d.response.id === recordId);
+        if (rd) return { requestId: entry.request.id, creator: rd.response.created_by, subject: entry.request.subject };
+      }
+    }
+    return null;
+  },
+
+  _openAddCommentModal(recordType, recordId, quotedText) {
+    const target = this._findCommentTarget(recordType, recordId);
+    this._openModal(`
+      <h3>Add Review Comment</h3>
+      <form id="review-comment-form" class="modal-form">
+        ${quotedText ? `
+          <div class="field-group">
+            <label class="field-label">Selected text</label>
+            <div class="review-comment-quote">“${this._escapeHtml(quotedText)}”</div>
+          </div>` : `
+          <div class="field-hint">Tip: select a passage of the draft first to quote it in your comment.</div>`}
+        <div class="field-group">
+          <label class="field-label">Comment</label>
+          <textarea class="field-input-plain" name="comment" rows="4" required placeholder="e.g. Reword this paragraph; add the inmate's case number"></textarea>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Add Comment</button>
+        </div>
+      </form>
+    `);
+    const form = document.getElementById('review-comment-form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const errEl = form.querySelector('.modal-error');
+      try {
+        await ReviewCommentsAPI.add({
+          recordType, recordId, quotedText,
+          comment: fd.get('comment'),
+          notifyUserId: target?.creator,
+          navRecordId: target?.requestId,
+          subject: target?.subject || '',
+        });
+        this._closeModal();
+        await this._load();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
   _renderApprovalHistory(approvals) {
     if (!approvals || approvals.length === 0) return '';
     return approvals.map(a => `
@@ -245,12 +343,14 @@ const RequestDetailView = {
     const resp = rd.response;
     return `
       <div class="thread-message thread-message--response">
+        <div class="thread-message-kind">Response</div>
         <div class="thread-message-header">
           <strong>${resp.created_by_user?.full_name || 'Unknown'}</strong>
           ${RequestsView._statusBadge(resp.status)}
           <span class="structure-empty">${new Date(resp.created_at).toLocaleString()}</span>
         </div>
         <div class="thread-message-body${resp.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(resp.body)}</div>
+        ${this._renderReviewComments('response', resp, rd.reviewComments, this._user.org_id === request.to_org_id)}
         ${this._renderReceipt(resp)}
         ${this._renderPendingApprovalNote(resp)}
         ${['draft', 'pending_approval'].includes(resp.status) && resp.created_by === this._user.id ? `
@@ -459,13 +559,20 @@ const RequestDetailView = {
       && (AppShell.isAdmin(this._user) || this._mySupervisedSections.some(s => s.id === r.to_section_id));
     if (r.to_section_id && ctx.isToOrgMember && ['in_progress'].includes(r.status) && canAssign) {
       blocks.push(`<button class="btn btn-secondary btn-sm" data-assign-request="${r.id}">${r.assigned_to ? 'Reassign' : 'Assign to Staff'}</button>`);
+      // A section that received a routed request but isn't the right
+      // one to answer can pass it on — the new section then assigns its
+      // own staff (assignment is cleared on re-route, see routeRequest).
+      blocks.push(`<button class="btn btn-secondary btn-sm" data-route-request="${r.id}">Route to Another Section</button>`);
     }
 
-    // Recipient-side assignee/supervisor composing the response, once
-    // routed. Only one response per request in this first pass — once
-    // it exists, further action happens on that response instead.
+    // Recipient-side composing the response — only AFTER the section
+    // has assigned a staff member (receive -> route -> assign -> draft;
+    // an unassigned request shows Assign/Route actions instead of a
+    // premature drafting box). Visible to the assignee and to
+    // supervisors. Only one response per request in this first pass —
+    // once it exists, further action happens on that response instead.
     if (['in_progress'].includes(r.status) && ctx.isToOrgMember && entry.responseDetails.length === 0
-        && (ctx.isAssignee || !r.assigned_to || this._isSupervisor)) {
+        && r.assigned_to && (ctx.isAssignee || this._isSupervisor)) {
       blocks.push(this._composeResponseHtml(r.id));
     }
 
@@ -557,6 +664,23 @@ const RequestDetailView = {
       btn.addEventListener('click', () => this._runAction(() => RequestsAPI.markRequestReceived(btn.dataset.markReceived)));
     });
 
+    main.querySelectorAll('[data-add-comment-type]').forEach(btn => {
+      // Selection is captured on mousedown (before the click collapses
+      // it) so "highlight a passage, then click Add Comment" quotes the
+      // highlighted text, MS-Word style. preventDefault keeps the
+      // selection alive through the press.
+      btn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        this._quoteCapture = (window.getSelection()?.toString() || '').trim().slice(0, 500);
+      });
+      btn.addEventListener('click', () => {
+        this._openAddCommentModal(btn.dataset.addCommentType, btn.dataset.addCommentId, this._quoteCapture || '');
+        this._quoteCapture = '';
+      });
+    });
+    main.querySelectorAll('[data-resolve-comment]').forEach(btn => {
+      btn.addEventListener('click', () => this._runAction(() => ReviewCommentsAPI.resolve(btn.dataset.resolveComment)));
+    });
     main.querySelectorAll('[data-route-request]').forEach(btn => {
       btn.addEventListener('click', () => this._openRouteModal(btn.dataset.routeRequest));
     });

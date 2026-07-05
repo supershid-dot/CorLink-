@@ -331,6 +331,26 @@ CREATE TABLE approvals (
   reviewed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- ─── Review Comments ────────────────────────────────────────
+-- Word-style review feedback on a draft awaiting approval: the
+-- supervisor selects a passage, the selected snippet is stored as a
+-- plain-text QUOTE alongside the note (not as a live anchor inside the
+-- document — anchors go stale the moment the drafter rewords the
+-- passage; a stored quote can't be misplaced). The drafter fixes the
+-- draft, marks the comment resolved, and resubmits; the loop repeats
+-- until the supervisor approves.
+CREATE TABLE review_comments (
+  id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  record_type  TEXT        NOT NULL CHECK (record_type IN ('request', 'response', 'internal_reply')),
+  record_id    UUID        NOT NULL,
+  quoted_text  TEXT,
+  comment      TEXT        NOT NULL,
+  created_by   UUID        NOT NULL REFERENCES users(id),
+  resolved_by  UUID        REFERENCES users(id),
+  resolved_at  TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- ─── Attachments ────────────────────────────────────────────
 -- Supabase Storage handles the actual files. storage_path is the bucket path.
 -- Allowed types: pdf, docx, xlsx, jpg, png  |  Max: 20 MB each, 100 MB total

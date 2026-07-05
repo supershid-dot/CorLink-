@@ -373,8 +373,11 @@ const RequestsAPI = (() => {
     // received, regardless of where it gets routed afterward.
     async routeRequest(id, toSectionId) {
       const db = getSupabase();
+      // assigned_to is cleared on every route — for first-time routing
+      // it's already null, and on a RE-route the previous section's
+      // assignee must not stay attached; the new section assigns its own.
       const { data, error } = await db.from('requests')
-        .update({ to_section_id: toSectionId, status: 'in_progress' }).eq('id', id).select().single();
+        .update({ to_section_id: toSectionId, status: 'in_progress', assigned_to: null }).eq('id', id).select().single();
       if (error) throw wrapRowError(error);
       const { data: section, error: sectionErr } = await db.from('sections').select('name').eq('id', toSectionId).single();
       if (sectionErr) console.warn('CorLink: failed to look up section name for routing audit log:', sectionErr.message);
