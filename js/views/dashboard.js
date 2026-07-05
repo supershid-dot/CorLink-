@@ -13,25 +13,6 @@ const DashboardView = {
     this._user = user;
     this._isSupervisor = AppShell.isSupervisorOrAbove(user);
     this._canReceive = this._isSupervisor || AppShell.hasRole(user, 'assigned_receiver');
-    const isAdmin = AppShell.isAdmin(user);
-
-    // Prisoner Letters compose is MCS-only (mirrors prisoner-letters.js's
-    // own this._isMcs gate on its New Letter button) and Team Workload
-    // only makes sense for a supervisor who actually supervises a
-    // section (mirrors requests.js's own Team-tab gate) — showing either
-    // action to someone who'd just land on an empty/wrong view is worse
-    // than not showing it.
-    const [isMcs, mySupervisedSections] = await Promise.all([
-      this._resolveIsMcs(user),
-      this._isSupervisor ? RequestsAPI.mySupervisedSections().catch(() => []) : Promise.resolve([]),
-    ]);
-
-    const quickActions = [
-      { icon: 'ti-plus', label: 'New Request', sub: 'Send a request to an authority', href: '#requests?action=compose' },
-      ...(isMcs ? [{ icon: 'ti-mail-plus', label: 'New Prisoner Letter', sub: 'Manage prisoner correspondence', href: '#prisoner-letters?action=compose' }] : []),
-      ...(mySupervisedSections.length > 0 ? [{ icon: 'ti-users', label: 'Team Workload', sub: "Review your team's assignments", href: '#requests?tab=team' }] : []),
-      ...(isAdmin ? [{ icon: 'ti-settings', label: 'Administration', sub: 'Users, structure & audit logs', href: '#admin' }] : []),
-    ];
 
     container.innerHTML = `
       <div class="app-layout">
@@ -87,18 +68,9 @@ const DashboardView = {
 
             <div class="dashboard-column-stack">
               <div class="panel">
-                <div class="panel-header"><h3>Quick Actions</h3></div>
-                <div class="quick-actions-list">
-                  ${quickActions.map(a => `
-                    <a href="${a.href}" class="quick-action-btn">
-                      <span class="quick-action-icon"><i class="ti ${a.icon}"></i></span>
-                      <span class="quick-action-text">
-                        <span class="quick-action-label">${a.label}</span>
-                        <span class="quick-action-sub">${a.sub}</span>
-                      </span>
-                      <i class="ti ti-chevron-right"></i>
-                    </a>
-                  `).join('')}
+                <div class="panel-header"><h3>My Workload &amp; Efficiency</h3></div>
+                <div id="workload-panel">
+                  <div class="action-list-empty"><span class="spinner spinner--dark"></span> Loading…</div>
                 </div>
               </div>
 
@@ -125,20 +97,6 @@ const DashboardView = {
     if (hour < 12) return 'Good morning';
     if (hour < 18) return 'Good afternoon';
     return 'Good evening';
-  },
-
-  // Same lookup as PrisonerLettersView._resolveIsMcs() — duplicated
-  // rather than shared for the same reason as _loadActionNeeded's
-  // predicates above (one-line, not worth threading state between views).
-  async _resolveIsMcs(user) {
-    try {
-      const orgs = await AdminAPI.listOrganizations();
-      const org = orgs.find(o => o.id === user.org_id);
-      return org?.type === 'mcs';
-    } catch (err) {
-      console.error('CorLink: failed to resolve org type', err);
-      return false;
-    }
   },
 
   async _loadStats(user) {
@@ -178,6 +136,7 @@ const DashboardView = {
       ]);
 
       const rows = [];
+      let outstanding = [];
 
       // Unrouted mail only exists as a concept for supervisors/
       // assigned_receiver (requests_select_assigned_receiver RLS) —
@@ -210,7 +169,7 @@ const DashboardView = {
       if (mySections.length > 0) {
         const sectionIds = mySections.map(s => s.id);
         const mySet = new Set(sectionIds);
-        const outstanding = await InternalRequestsAPI.listOutstandingForSections(sectionIds);
+        outstanding = await InternalRequestsAPI.listOutstandingForSections(sectionIds);
         const awaitingTheirReply = outstanding.filter(ir => mySet.has(ir.from_section_id) && !mySet.has(ir.to_section_id)).length;
         rows.push({ icon: 'ti-clock', label: 'Information Requested — Awaiting Reply', count: awaitingTheirReply, href: '#requests?tab=info' });
 
@@ -236,13 +195,68 @@ const DashboardView = {
       // extra round trips — both lists already carry deadline/status/
       // reference_number/subject on every row.
       this._renderUpcomingDeadlines(inbox, sent);
+      this._renderWorkload(user, inbox, outstanding);
     } catch (err) {
       console.error('CorLink: failed to load action-needed counts', err);
       const failMsg = `<div class="action-list-empty">Couldn't load this — refresh to try again.</div>`;
       listEl.innerHTML = failMsg;
-      const deadlineEl = document.getElementById('deadline-list');
-      if (deadlineEl) deadlineEl.innerHTML = failMsg;
+      ['deadline-list', 'workload-panel'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = failMsg;
+      });
     }
+  },
+
+  // Personal workload + efficiency, computed from the same inbox/
+  // internal-request lists Action Needed already fetched. "Efficiency"
+  // is two honest, client-computable rates: completion (my assigned
+  // requests that reached responded/closed) and on-track (open items
+  // not past their deadline) — no server aggregates needed.
+  _renderWorkload(user, inbox, outstanding) {
+    const el = document.getElementById('workload-panel');
+    if (!el) return;
+
+    const today = new Date().toISOString().slice(0, 10);
+    const mine = inbox.filter(r => r.assigned_to === user.id);
+    const open = mine.filter(r => !['responded', 'closed'].includes(r.status));
+    const done = mine.length - open.length;
+    const notStarted = open.filter(r => (r.responses || []).length === 0).length;
+    const drafting = open.length - notStarted;
+    const internalMine = (outstanding || []).filter(ir => ir.assigned_to === user.id).length;
+    const overdueOpen = open.filter(r => r.deadline && r.deadline < today).length;
+
+    const completionPct = mine.length ? Math.round((done / mine.length) * 100) : 0;
+    const onTrackPct = open.length ? Math.round(((open.length - overdueOpen) / open.length) * 100) : 100;
+
+    const bar = (label, count, max, cls) => `
+      <div class="workload-row">
+        <span class="workload-label">${label}</span>
+        <div class="workload-bar"><div class="workload-bar-fill workload-bar-fill--${cls}" style="width: ${max ? Math.round((count / max) * 100) : 0}%"></div></div>
+        <span class="workload-count">${count}</span>
+      </div>`;
+    const maxBar = Math.max(notStarted, drafting, internalMine, done, 1);
+
+    el.innerHTML = `
+      <div class="workload-rings">
+        <div class="eff-ring-wrap">
+          <div class="eff-ring" style="--pct: ${completionPct};"><span>${completionPct}%</span></div>
+          <div class="eff-ring-label">Completion</div>
+        </div>
+        <div class="eff-ring-wrap">
+          <div class="eff-ring eff-ring--track" style="--pct: ${onTrackPct};"><span>${onTrackPct}%</span></div>
+          <div class="eff-ring-label">On track</div>
+        </div>
+      </div>
+      ${mine.length === 0 && internalMine === 0
+        ? `<div class="action-list-empty">Nothing is assigned to you right now.</div>`
+        : `
+          ${bar('Not started', notStarted, maxBar, 'warning')}
+          ${bar('Drafting / in review', drafting, maxBar, 'secondary')}
+          ${bar('Internal requests on you', internalMine, maxBar, 'primary')}
+          ${bar('Completed', done, maxBar, 'success')}
+          ${overdueOpen > 0 ? `<div class="workload-note"><i class="ti ti-alert-triangle"></i> ${overdueOpen} of your open item${overdueOpen === 1 ? ' is' : 's are'} past deadline</div>` : ''}
+        `}
+    `;
   },
 
   _renderUpcomingDeadlines(inbox, sent) {

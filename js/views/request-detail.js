@@ -145,8 +145,8 @@ const RequestDetailView = {
         <div class="round-meta-row">
           ${!multiRound ? `<span>${RequestsView._statusBadge(r.status, r.deadline)}</span>` : ''}
           ${!multiRound && r.reference_number ? `<span class="structure-empty">${r.reference_number}</span>` : ''}
-          <span class="structure-empty">${r.to_section ? 'Routed to ' + r.to_section.name : 'Not yet routed'}</span>
-          <span class="structure-empty">Assigned: ${r.assigned_to_user?.full_name || 'Unassigned'}</span>
+          ${isToOrgMember ? `<span class="structure-empty">${r.to_section ? 'Routed to ' + r.to_section.name : 'Not yet routed'}</span>` : ''}
+          ${isToOrgMember ? `<span class="structure-empty">Assigned: ${r.assigned_to_user?.full_name || 'Unassigned'}</span>` : ''}
           ${!multiRound && r.deadline ? `<span class="structure-empty">Due ${r.deadline}</span>` : ''}
         </div>
 
@@ -161,10 +161,10 @@ const RequestDetailView = {
             ${this._renderReviewComments('request', r, entry.reviewComments, ctx.isFromOrgMember)}
             ${this._renderReceipt(r)}
             ${this._renderPendingApprovalNote(r)}
-            ${this._renderProcessEvents(r.id)}
+            ${ctx.isToOrgMember ? this._renderProcessEvents(r.id) : ''}
           </div>
 
-          ${this._renderApprovalHistory(entry.approvals)}
+          ${ctx.isFromOrgMember ? this._renderApprovalHistory(entry.approvals) : ''}
           ${this._renderAttachments('request', r.id, entry.attachments, ctx.isFromOrgMember || ctx.isToOrgMember, r.is_locked)}
         </div>
 
@@ -360,7 +360,7 @@ const RequestDetailView = {
           </div>
         ` : ''}
       </div>
-      ${this._renderApprovalHistory(rd.approvals)}
+      ${this._user.org_id === request.to_org_id ? this._renderApprovalHistory(rd.approvals) : ''}
       ${this._renderAttachments('response', resp.id, rd.attachments, true, resp.is_locked)}
       ${resp.status === 'sent' && !resp.received_at && request.from_org_id === this._user.org_id && this._canReceive ? `
         <div class="thread-message-actions">

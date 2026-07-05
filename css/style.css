@@ -969,6 +969,78 @@ p  { line-height: 1.6; }
   .dashboard-columns { grid-template-columns: 1fr; }
 }
 
+/* ── My Workload & Efficiency (dashboard) ─────────────────────── */
+.workload-rings {
+  display: flex;
+  justify-content: space-around;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.eff-ring-wrap { text-align: center; }
+.eff-ring {
+  width: 86px;
+  height: 86px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  background:
+    radial-gradient(closest-side, var(--color-surface) 74%, transparent 75% 100%),
+    conic-gradient(var(--color-primary) calc(var(--pct) * 1%), var(--color-border) 0);
+  font-size: 1.0625rem;
+  font-weight: 700;
+}
+.eff-ring--track {
+  background:
+    radial-gradient(closest-side, var(--color-surface) 74%, transparent 75% 100%),
+    conic-gradient(var(--color-success) calc(var(--pct) * 1%), var(--color-border) 0);
+}
+.eff-ring-label {
+  margin-top: 6px;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+}
+.workload-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 0;
+  font-size: 0.8125rem;
+}
+.workload-label { width: 40%; min-width: 0; color: var(--color-text-muted); }
+.workload-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--color-bg);
+  overflow: hidden;
+}
+.workload-bar-fill { height: 100%; border-radius: var(--radius-full); }
+.workload-bar-fill--primary   { background: var(--color-primary); }
+.workload-bar-fill--secondary { background: var(--color-secondary); }
+.workload-bar-fill--warning   { background: var(--color-warning); }
+.workload-bar-fill--success   { background: var(--color-success); }
+.workload-count { width: 22px; text-align: right; font-weight: 600; }
+.workload-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 0.75rem;
+  color: var(--color-error-dark);
+}
+
+/* ── List toolbar (search + org filter) ───────────────────────── */
+.list-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.list-toolbar .search-box { flex: 1; min-width: 220px; }
+.org-filter-select { max-width: 240px; }
+
 .quick-actions-list { display: flex; flex-direction: column; gap: 8px; }
 .quick-action-btn {
   display: flex;
