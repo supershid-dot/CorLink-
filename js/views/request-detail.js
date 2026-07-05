@@ -480,7 +480,8 @@ const RequestDetailView = {
         <div class="detail-actions">
           ${ir.status === 'sent' && !ir.received_at && canReceive ? `<button class="btn btn-primary btn-xs" data-mark-internal-received="${ir.id}">Mark Received</button>` : ''}
           ${['received', 'in_progress'].includes(ir.status) && canAssign ? `<button class="btn btn-secondary btn-xs" data-assign-internal="${ir.id}">${ir.assigned_to ? 'Reassign' : 'Assign to Staff'}</button>` : ''}
-          ${canReply && !openReply && !['responded', 'closed'].includes(ir.status) && ir.status !== 'sent' ? `<button class="btn btn-primary btn-xs" data-reply-internal="${ir.id}">Draft Reply</button>` : ''}
+          ${['received', 'in_progress'].includes(ir.status) && canAssign ? `<button class="btn btn-secondary btn-xs" data-reroute-internal="${ir.id}">Route to Another Section</button>` : ''}
+          ${canReply && !openReply && ir.status === 'in_progress' && (ir.assigned_to === this._user.id || this._isSupervisor) ? `<button class="btn btn-primary btn-xs" data-reply-internal="${ir.id}">Draft Reply</button>` : ''}
           ${isCreatorSide && ir.status === 'responded' ? `<button class="btn btn-secondary btn-xs" data-close-internal="${ir.id}">Close</button>` : ''}
         </div>
       </div>
@@ -731,6 +732,9 @@ const RequestDetailView = {
     main.querySelectorAll('[data-assign-internal]').forEach(btn => {
       btn.addEventListener('click', () => this._openAssignInternalModal(btn.dataset.assignInternal));
     });
+    main.querySelectorAll('[data-reroute-internal]').forEach(btn => {
+      btn.addEventListener('click', () => this._openRerouteInternalModal(btn.dataset.rerouteInternal));
+    });
     main.querySelectorAll('[data-close-internal]').forEach(btn => {
       btn.addEventListener('click', () => this._runAction(() => InternalRequestsAPI.close(btn.dataset.closeInternal)));
     });
@@ -919,7 +923,12 @@ const RequestDetailView = {
     const entry = this._conversation.find(e => e.request.id === requestId);
     let users;
     try {
-      users = (await AdminAPI.listUsersByOrg(entry.request.to_org_id)).filter(u => u.is_active);
+      // Only staff whose assignments cover the section this request was
+      // routed to (section_user_ids expands command/department-level
+      // assignments down) — not the whole organization.
+      const sectionUserIds = new Set(await NotificationsAPI.sectionUserIds(entry.request.to_section_id));
+      users = (await AdminAPI.listUsersByOrg(entry.request.to_org_id))
+        .filter(u => u.is_active && sectionUserIds.has(u.id));
     } catch (err) {
       console.error('CorLink: failed to load users for assignment', err);
       return;
@@ -1287,6 +1296,57 @@ const RequestDetailView = {
     });
   },
 
+  async _openRerouteInternalModal(internalRequestId) {
+    const ir = this._findInternalRequest(internalRequestId);
+    let sections;
+    try {
+      sections = (await AdminAPI.listSectionsByOrg(this._user.org_id))
+        .filter(sec => sec.is_active && sec.id !== ir.to_section_id && sec.id !== ir.from_section_id);
+    } catch (err) {
+      console.error('CorLink: failed to load sections', err);
+      return;
+    }
+    if (sections.length === 0) {
+      this._openModal(`
+        <h3>Route to Another Section</h3>
+        <div class="alert alert-info">No other active sections to route to.</div>
+        <div class="modal-actions"><button class="btn btn-secondary" data-close-modal>Close</button></div>
+      `);
+      return;
+    }
+    this._openModal(`
+      <h3>Route to Another Section</h3>
+      <form id="reroute-internal-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Section</label>
+          <select class="field-select" name="toSectionId">
+            ${sections.map(sec => `<option value="${sec.id}">${this._escapeHtml(sec.name)}</option>`).join('')}
+          </select>
+          <div class="field-hint">The new section will receive it fresh and assign its own staff.</div>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Route</button>
+        </div>
+      </form>
+    `);
+    const form = document.getElementById('reroute-internal-form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const errEl = form.querySelector('.modal-error');
+      try {
+        await InternalRequestsAPI.reroute(internalRequestId, fd.get('toSectionId'));
+        this._closeModal();
+        await this._load();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
   // Locates the raw internal_requests row across every conversation
   // round — the approve/return/submit handlers need the full row
   // (parent_request_id, to_section_id, subject, created_by) for
@@ -1362,7 +1422,11 @@ const RequestDetailView = {
     const ir = this._findInternalRequest(internalRequestId);
     let users;
     try {
-      users = (await AdminAPI.listUsersByOrg(this._user.org_id)).filter(u => u.is_active);
+      // Same section scoping as the external assign modal — only staff
+      // whose assignments cover the receiving section.
+      const sectionUserIds = new Set(await NotificationsAPI.sectionUserIds(ir.to_section_id));
+      users = (await AdminAPI.listUsersByOrg(this._user.org_id))
+        .filter(u => u.is_active && sectionUserIds.has(u.id));
     } catch (err) {
       console.error('CorLink: failed to load users for assignment', err);
       return;
