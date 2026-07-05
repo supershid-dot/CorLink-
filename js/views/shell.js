@@ -60,6 +60,43 @@ const AppShell = {
       : `${primaryLabel}${suffix}`;
   },
 
+  // Persistent left sidebar, shown ≥900px in place of the topbar's own
+  // brand + nav links (see the .app-layout grid CSS). Emitted by
+  // topbarHtml() as a sibling of the <header>, so every view gets it
+  // without changing its own markup.
+  sidebarHtml(user, activeRoute) {
+    const admin = this.isAdmin(user);
+    const item = (route, label, icon) =>
+      `<a href="#${route}" class="sidebar-link${activeRoute === route ? ' sidebar-link--active' : ''}">
+        <i class="ti ${icon}"></i><span>${label}</span>
+      </a>`;
+
+    return `
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <div class="topbar-logo-crop"><img src="assets/logo.png" alt="${APP_NAME} logo" /></div>
+          <div>
+            <div class="sidebar-appname">${APP_NAME}</div>
+            <div class="sidebar-tagline">${APP_TAGLINE}</div>
+          </div>
+        </div>
+        <nav class="sidebar-nav">
+          ${item('dashboard', 'Dashboard', 'ti-layout-dashboard')}
+          ${item('requests', 'Requests', 'ti-inbox')}
+          ${item('prisoner-letters', 'Prisoner Letters', 'ti-mail')}
+          ${admin ? item('admin', 'Administration', 'ti-settings') : ''}
+        </nav>
+        <div class="sidebar-user">
+          <div class="avatar">${this.initials(user.full_name)}</div>
+          <div class="sidebar-user-meta">
+            <div class="sidebar-user-name">${user.full_name}</div>
+            <div class="sidebar-user-role">${this.roleSummary(user)}</div>
+          </div>
+        </div>
+      </aside>
+    `;
+  },
+
   topbarHtml(user, activeRoute) {
     const name = user.full_name;
     const admin = this.isAdmin(user);
@@ -67,6 +104,7 @@ const AppShell = {
       `<a href="#${route}" class="topbar-link${activeRoute === route ? ' topbar-link--active' : ''}">${label}</a>`;
 
     return `
+      ${this.sidebarHtml(user, activeRoute)}
       <header class="topbar">
         <div class="topbar-brand">
           <div class="topbar-logo-crop"><img src="assets/logo.png" alt="${APP_NAME} logo" /></div>
