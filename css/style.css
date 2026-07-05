@@ -827,7 +827,11 @@ p  { line-height: 1.6; }
 .main-content {
   flex: 1;
   padding: 32px 32px;
-  max-width: 1200px;
+  /* 1200px was tuned for the old full-width topbar layout — with the
+     250px sidebar now consuming part of the viewport, the same cap
+     left the content floating in a sea of empty margin on wide
+     desktops. */
+  max-width: 1440px;
   width: 100%;
   margin: 0 auto;
 }
@@ -857,9 +861,13 @@ p  { line-height: 1.6; }
 .phase-notice p { margin-top: 4px; font-size: 0.875rem; color: var(--color-text-muted); }
 
 /* ── Stat Grid ───────────────────────────────────────────────── */
+/* auto-FIT, not auto-fill: fill would keep empty phantom tracks on
+   wide screens so 4 cards huddle in the left two-thirds of the row —
+   fit collapses the unused tracks and stretches the cards evenly
+   across the full content width. */
 .stat-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 16px;
 }
 
