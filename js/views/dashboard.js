@@ -145,10 +145,6 @@ const DashboardView = {
     return 'Good evening';
   },
 
-  _todayLabel() {
-    return new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-  },
-
   // Same lookup as PrisonerLettersView._resolveIsMcs() — duplicated
   // rather than shared for the same reason as _loadActionNeeded's
   // predicates above (one-line, not worth threading state between views).
@@ -296,7 +292,7 @@ const DashboardView = {
             <tr>
               <td data-label="Reference No."><a href="#request-detail?id=${r.id}">${r.reference_number || 'Draft'}</a></td>
               <td data-label="Subject"><span class="${r.subject_language === 'dv' ? 'field-divehi' : ''}">${r.subject}</span></td>
-              <td data-label="From / To">${r.to_org ? `To: ${r.to_org.code || r.to_org.name}` : (r.from_org?.code || r.from_org?.name || '—')}</td>
+              <td data-label="From / To">${r.to_org ? `To: ${r.to_org.code || r.to_org.name}` : (r.from_org ? `From: ${r.from_org.code || r.from_org.name}` : '—')}</td>
               <td data-label="Deadline">${r.deadline ? new Date(r.deadline + 'T00:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</td>
               <td data-label="Status">${RequestsView._statusBadge(r.status, r.deadline)}</td>
             </tr>
@@ -312,8 +308,10 @@ const DashboardView = {
   // "Response approved: …") with timestamps, scoped to this user.
   async _loadRecentActivity() {
     const el = document.getElementById('activity-list');
+    if (!el) return;
     try {
       const items = await NotificationsAPI.listMine(6);
+      if (!document.getElementById('activity-list')) return; // navigated away mid-fetch
       if (items.length === 0) {
         el.innerHTML = `<div class="action-list-empty">No recent activity.</div>`;
         return;
