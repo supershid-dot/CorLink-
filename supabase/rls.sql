@@ -21,6 +21,8 @@ ALTER TABLE internal_request_replies ENABLE ROW LEVEL SECURITY;
 ALTER TABLE review_comments        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE approvals            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE attachments          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE prisoners            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE letter_reference_sequences ENABLE ROW LEVEL SECURITY;
 ALTER TABLE prisoner_letters     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE prisoner_replies     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE deadline_extensions  ENABLE ROW LEVEL SECURITY;
@@ -1052,6 +1054,19 @@ CREATE POLICY "attachments_select" ON attachments
           OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', ir.to_section_id))
         )
     ))
+    OR (record_type = 'prisoner_letter' AND EXISTS (
+      SELECT 1 FROM prisoner_letters pl
+      WHERE pl.id = record_id
+        AND (pl.submitted_by = auth.uid() OR pl.assigned_to = auth.uid()
+             OR pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
+    ))
+    OR (record_type = 'prisoner_reply' AND EXISTS (
+      SELECT 1 FROM prisoner_replies pr
+      JOIN prisoner_letters pl ON pl.id = pr.letter_id
+      WHERE pr.id = record_id
+        AND (pl.submitted_by = auth.uid() OR pl.assigned_to = auth.uid()
+             OR pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
+    ))
   );
 
 -- Buttons are UX only elsewhere in this app ("an unauthorized click
@@ -1072,20 +1087,54 @@ CREATE POLICY "attachments_insert" ON attachments
   FOR INSERT WITH CHECK (
     uploaded_by = auth.uid()
     AND (
-      (record_type = 'request' AND NOT EXISTS (
-        SELECT 1 FROM requests r WHERE r.id = record_id AND r.is_locked
+      (record_type = 'request' AND EXISTS (
+        SELECT 1 FROM requests r WHERE r.id = record_id
+          AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
+          AND r.is_locked = FALSE
       ))
-      OR (record_type = 'response' AND NOT EXISTS (
-        SELECT 1 FROM responses re WHERE re.id = record_id AND re.is_locked
+      OR (record_type = 'response' AND EXISTS (
+        SELECT 1 FROM responses re JOIN requests r ON r.id = re.request_id
+        WHERE re.id = record_id
+          AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
+          AND re.is_locked = FALSE
       ))
       OR (record_type = 'internal_request' AND EXISTS (
         SELECT 1 FROM internal_requests ir WHERE ir.id = record_id
+          AND (
+            ir.from_section_id IN (SELECT my_section_ids())
+            OR ir.to_section_id IN (SELECT my_section_ids())
+            OR ir.created_by = auth.uid()
+          )
+      ))
+      OR (record_type = 'prisoner_letter' AND EXISTS (
+        SELECT 1 FROM prisoner_letters pl WHERE pl.id = record_id
+          AND (pl.submitted_by = auth.uid() OR pl.assigned_to = auth.uid()
+               OR pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
+      ))
+      OR (record_type = 'prisoner_reply' AND EXISTS (
+        SELECT 1 FROM prisoner_replies pr JOIN prisoner_letters pl ON pl.id = pr.letter_id
+        WHERE pr.id = record_id
+          AND (pr.replied_by = auth.uid() OR pl.to_org_id = get_my_org_id())
       ))
     )
   );
 
 CREATE POLICY "attachments_delete" ON attachments
   FOR DELETE USING (uploaded_by = auth.uid());
+
+-- ─── prisoners (registry) ───────────────────────────────────
+DROP POLICY IF EXISTS "prisoners_select" ON prisoners;
+CREATE POLICY "prisoners_select" ON prisoners
+  FOR SELECT USING (org_id = get_my_org_id());
+
+DROP POLICY IF EXISTS "prisoners_insert" ON prisoners;
+CREATE POLICY "prisoners_insert" ON prisoners
+  FOR INSERT WITH CHECK (org_id = get_my_org_id());
+
+DROP POLICY IF EXISTS "prisoners_update" ON prisoners;
+CREATE POLICY "prisoners_update" ON prisoners
+  FOR UPDATE USING (org_id = get_my_org_id())
+  WITH CHECK (org_id = get_my_org_id());
 
 -- ─── prisoner_letters ────────────────────────────────────────
 -- Strict access: only submitter, assignee, supervisors, and admins.
