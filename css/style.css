@@ -487,10 +487,11 @@ p  { line-height: 1.6; }
   }
   .topbar { grid-area: topbar; }
   .main-content { grid-area: main; }
-  /* Extra .topbar qualifier so these outrank the base .topbar-brand/
-     .topbar-nav rules that appear LATER in the file — equal specificity
-     would let source order re-show them. */
-  .topbar .topbar-brand, .topbar .topbar-nav { display: none; }
+  /* Extra .topbar qualifier so this outranks the base .topbar-nav rule
+     that appears LATER in the file — equal specificity would let source
+     order re-show it. The brand (logo + organisation name) stays
+     visible at every width; only the nav links move into the sidebar. */
+  .topbar .topbar-nav { display: none; }
 
   .sidebar {
     grid-area: sidebar;
@@ -1051,7 +1052,15 @@ p  { line-height: 1.6; }
      bit of page content doesn't render underneath it. */
   .main-content { padding: 20px 16px calc(76px + env(safe-area-inset-bottom)); }
   .topbar { padding: 0 16px; gap: 10px; }
-  .topbar-appname { display: none; }
+  /* Organisation name stays visible on phones, just bounded — it can
+     be long ("Maldives Correctional Service"). */
+  .topbar-appname {
+    font-size: 0.875rem;
+    max-width: 46vw;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .user-name-short { display: none; }
   /* The topbar's own nav links get cramped/cut off at phone widths —
      .bottom-nav replaces them with a fixed tab bar instead. */
@@ -1725,6 +1734,61 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
   border: 1px solid var(--color-border);
   padding: 6px 10px;
 }
+/* Small kind label ("Request" / "Response") atop each thread message —
+   makes the two windows unmistakable at a glance. */
+.thread-message-kind {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+  margin-bottom: 6px;
+}
+
+/* ── Review comments (supervisor feedback on pending drafts) ──── */
+.review-comments {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--color-border);
+}
+.review-comments-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.review-comments-header .btn { margin-left: auto; }
+.review-comment {
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  margin-bottom: 8px;
+  font-size: 0.8125rem;
+}
+.review-comment--resolved { opacity: .65; }
+.review-comment-quote {
+  border-inline-start: 3px solid var(--color-warning);
+  padding: 2px 10px;
+  margin-bottom: 6px;
+  color: var(--color-text-muted);
+  font-style: italic;
+  background: var(--color-warning-bg);
+  border-radius: var(--radius-sm);
+}
+.review-comment-text { line-height: 1.5; }
+.review-comment-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 0.71875rem;
+  color: var(--color-text-light);
+}
+.review-comment-meta .btn { margin-left: auto; }
+
 .thread-message-actions {
   margin-top: 12px;
   padding-top: 12px;

@@ -18,6 +18,7 @@ ALTER TABLE requests             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE responses            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE internal_requests        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE internal_request_replies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE review_comments        ENABLE ROW LEVEL SECURITY;
 ALTER TABLE approvals            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE attachments          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE prisoner_letters     ENABLE ROW LEVEL SECURITY;
@@ -920,6 +921,72 @@ CREATE POLICY "internal_request_replies_update" ON internal_request_replies
         AND is_supervisor_or_above()
         AND get_my_org_id() = scope_org_id('section', ir.to_section_id)
     )
+  );
+
+-- ─── review_comments ────────────────────────────────────────────
+-- Supervisor feedback on drafts is strictly a same-side, internal
+-- artifact: comments on a REQUEST draft belong to the drafting org
+-- (from_org), comments on a RESPONSE draft to the responding org
+-- (to_org), and comments on an internal reply to the replying section's
+-- side. The counterpart organization can never see review chatter.
+CREATE POLICY "review_comments_select" ON review_comments
+  FOR SELECT USING (
+    created_by = auth.uid()
+    OR (record_type = 'request' AND EXISTS (
+      SELECT 1 FROM requests r WHERE r.id = record_id AND r.from_org_id = get_my_org_id()
+    ))
+    OR (record_type = 'response' AND EXISTS (
+      SELECT 1 FROM responses resp JOIN requests r ON r.id = resp.request_id
+      WHERE resp.id = record_id AND r.to_org_id = get_my_org_id()
+    ))
+    OR (record_type = 'internal_reply' AND EXISTS (
+      SELECT 1 FROM internal_request_replies irr JOIN internal_requests ir ON ir.id = irr.internal_request_id
+      WHERE irr.id = record_id
+        AND (ir.to_section_id IN (SELECT my_section_ids())
+             OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', ir.to_section_id)))
+    ))
+  );
+
+-- Only supervisors/admins comment (the reviewing role); the same-side
+-- scoping repeats so a supervisor can't attach comments to the OTHER
+-- org's drafts.
+CREATE POLICY "review_comments_insert" ON review_comments
+  FOR INSERT WITH CHECK (
+    created_by = auth.uid()
+    AND is_supervisor_or_above()
+    AND (
+      (record_type = 'request' AND EXISTS (
+        SELECT 1 FROM requests r WHERE r.id = record_id AND r.from_org_id = get_my_org_id()
+      ))
+      OR (record_type = 'response' AND EXISTS (
+        SELECT 1 FROM responses resp JOIN requests r ON r.id = resp.request_id
+        WHERE resp.id = record_id AND r.to_org_id = get_my_org_id()
+      ))
+      OR (record_type = 'internal_reply' AND EXISTS (
+        SELECT 1 FROM internal_request_replies irr JOIN internal_requests ir ON ir.id = irr.internal_request_id
+        WHERE irr.id = record_id AND get_my_org_id() = scope_org_id('section', ir.to_section_id)
+      ))
+    )
+  );
+
+-- Resolving is the drafter's side of the loop — any same-side viewer
+-- may update (set resolved_by/resolved_at); the visibility expression
+-- above already excludes the counterpart org entirely.
+CREATE POLICY "review_comments_update" ON review_comments
+  FOR UPDATE USING (
+    (record_type = 'request' AND EXISTS (
+      SELECT 1 FROM requests r WHERE r.id = record_id AND r.from_org_id = get_my_org_id()
+    ))
+    OR (record_type = 'response' AND EXISTS (
+      SELECT 1 FROM responses resp JOIN requests r ON r.id = resp.request_id
+      WHERE resp.id = record_id AND r.to_org_id = get_my_org_id()
+    ))
+    OR (record_type = 'internal_reply' AND EXISTS (
+      SELECT 1 FROM internal_request_replies irr JOIN internal_requests ir ON ir.id = irr.internal_request_id
+      WHERE irr.id = record_id
+        AND (ir.to_section_id IN (SELECT my_section_ids())
+             OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', ir.to_section_id)))
+    ))
   );
 
 -- ─── approvals ────────────────────────────────────────────────

@@ -108,7 +108,7 @@ const AppShell = {
       <header class="topbar">
         <div class="topbar-brand">
           <div class="topbar-logo-crop"><img src="assets/logo.png" alt="${APP_NAME} logo" /></div>
-          <span class="topbar-appname">${APP_NAME}</span>
+          <span class="topbar-appname">${user.organization?.name || APP_NAME}</span>
         </div>
         <nav class="topbar-nav" id="topbar-nav">
           ${link('dashboard', 'Dashboard')}

@@ -43,6 +43,9 @@ match what changed since, instead of re-running the full files:
   external-style lifecycle: assign-to-staff on internal requests, and replies now go
   draft → submit for approval → supervisor approves & sends (draft/pending replies
   are hidden from the asking section until sent)
+- `supabase/patch-review-comments.sql` — Word-style review comments on drafts
+  awaiting approval (supervisor quotes a passage + note; drafter resolves and
+  resubmits)
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 
