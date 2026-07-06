@@ -46,6 +46,10 @@ match what changed since, instead of re-running the full files:
 - `supabase/patch-review-comments.sql` — Word-style review comments on drafts
   awaiting approval (supervisor quotes a passage + note; drafter resolves and
   resubmits)
+- `supabase/patch-prisoner-letters-v2.sql` — prisoner registry (searchable dropdown
+  source for letters), letter read receipts, per-letter PL- reference numbers, and
+  attachments on letters/replies — also re-run `supabase/storage-policies.sql` OR this
+  patch (it updates the storage insert policy's allowed folders too)
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 
