@@ -356,7 +356,7 @@ CREATE TABLE review_comments (
 -- Allowed types: pdf, docx, xlsx, jpg, png  |  Max: 20 MB each, 100 MB total
 CREATE TABLE attachments (
   id            UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
-  record_type   TEXT    NOT NULL CHECK (record_type IN ('request', 'response', 'prisoner_letter', 'internal_request')),
+  record_type   TEXT    NOT NULL CHECK (record_type IN ('request', 'response', 'prisoner_letter', 'internal_request', 'prisoner_reply')),
   record_id     UUID    NOT NULL,
   filename      TEXT    NOT NULL,
   storage_path  TEXT    NOT NULL,   -- Path within Supabase Storage bucket
@@ -367,6 +367,47 @@ CREATE TABLE attachments (
 );
 
 -- ─── Prisoner Letters ───────────────────────────────────────
+-- Prisoner registry — source for the searchable dropdown in compose.
+CREATE TABLE prisoners (
+  id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id          UUID        NOT NULL REFERENCES organizations(id),
+  file_number     TEXT        NOT NULL,          -- e.g. 1-2026
+  id_card_number  TEXT        NOT NULL,          -- e.g. A000000
+  full_name       TEXT        NOT NULL,
+  address         TEXT        NOT NULL,
+  prison          TEXT        NOT NULL CHECK (prison IN (
+                    'Maafushi Prison', 'Asseyri Prison', 'Hulhumale Prison'
+                  )),
+  is_active       BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (org_id, file_number)
+);
+
+CREATE TABLE letter_reference_sequences (
+  org_id        UUID    NOT NULL REFERENCES organizations(id),
+  year          INTEGER NOT NULL,
+  next_sequence INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (org_id, year)
+);
+CREATE OR REPLACE FUNCTION generate_prisoner_letter_reference(p_org_id UUID)
+RETURNS TEXT AS $$
+DECLARE
+  v_year INTEGER := EXTRACT(YEAR FROM NOW());
+  v_seq  INTEGER;
+  v_code TEXT;
+BEGIN
+  INSERT INTO letter_reference_sequences (org_id, year, next_sequence)
+  VALUES (p_org_id, v_year, 2)
+  ON CONFLICT (org_id, year)
+  DO UPDATE SET next_sequence = letter_reference_sequences.next_sequence + 1
+  RETURNING next_sequence - 1 INTO v_seq;
+
+  SELECT code INTO v_code FROM organizations WHERE id = p_org_id;
+  RETURN 'PL-' || COALESCE(v_code, 'ORG') || '-' || v_year || '-' || LPAD(v_seq::TEXT, 4, '0');
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
 CREATE TABLE prisoner_letters (
   id               UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
   prisoner_id      TEXT    NOT NULL,   -- Prisoner's official ID number
@@ -381,6 +422,9 @@ CREATE TABLE prisoner_letters (
                      'submitted', 'received', 'replied', 'delivered'
                    )),
   slip_generated   BOOLEAN NOT NULL DEFAULT FALSE,
+  prisoner_ref     UUID    REFERENCES prisoners(id),
+  received_by      UUID    REFERENCES users(id),
+  received_at      TIMESTAMPTZ,
   reference_number TEXT    UNIQUE,
   created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()

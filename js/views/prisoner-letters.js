@@ -4,7 +4,7 @@
 // gate (see prisoner-letters-api.js header comment).
 
 const PrisonerLettersView = {
-  _state: { tab: 'inbox' },
+  _state: { tab: 'inbox', inboxFilter: 'all', sentFilter: 'all', inboxOrg: 'all', sentOrg: 'all' },
 
   async render(container, params = {}) {
     const user = Auth.getCachedProfile();
@@ -107,15 +107,81 @@ const PrisonerLettersView = {
   },
 
   async _renderInbox(content) {
-    const items = await PrisonerLettersAPI.listInbox(this._user.org_id);
-    content.innerHTML = this._listPanel('Inbox', items, { orgCol: 'From', orgKey: 'from_org', allowRoute: this._isSupervisor });
-    this._bindListActions(content, items);
+    this._inboxItems = await PrisonerLettersAPI.listInbox(this._user.org_id);
+    content.innerHTML = `<div id="letters-results"></div>`;
+    this._renderFiltered(content, 'inbox');
   },
 
   async _renderSent(content) {
-    const items = await PrisonerLettersAPI.listSent(this._user.org_id);
-    content.innerHTML = this._listPanel('Sent', items, { orgCol: 'To', orgKey: 'to_org' });
-    this._bindListActions(content, items);
+    this._sentItems = await PrisonerLettersAPI.listSent(this._user.org_id);
+    content.innerHTML = `<div id="letters-results"></div>`;
+    this._renderFiltered(content, 'sent');
+  },
+
+  // Status categories mirror the letter lifecycle both ways: the
+  // receiving side cares about what it hasn't received/answered, the
+  // sending side about what the other org hasn't. Same client-side
+  // chips-over-one-fetch pattern as the Requests tabs.
+  _letterFilters() {
+    return [
+      { key: 'all', label: 'All', test: () => true },
+      { key: 'not_received', label: 'Not Received', test: l => l.status === 'submitted' },
+      { key: 'received', label: 'Received', test: l => l.status === 'received' },
+      { key: 'not_responded', label: 'Not Responded', test: l => ['submitted', 'received'].includes(l.status) },
+      { key: 'responded', label: 'Responded', test: l => ['replied', 'delivered'].includes(l.status) },
+      { key: 'delivered', label: 'Delivered', test: l => l.status === 'delivered' },
+    ];
+  },
+
+  _renderFiltered(content, which) {
+    const resultsEl = content.querySelector('#letters-results') || document.getElementById('letters-results');
+    if (!resultsEl) return;
+    const isInbox = which === 'inbox';
+    const items = (isInbox ? this._inboxItems : this._sentItems) || [];
+    const orgKey = isInbox ? 'from_org' : 'to_org';
+    const orgIdField = isInbox ? 'from_prison_id' : 'to_org_id';
+    const orgStateKey = isInbox ? 'inboxOrg' : 'sentOrg';
+    const filterStateKey = isInbox ? 'inboxFilter' : 'sentFilter';
+
+    const orgFiltered = this._state[orgStateKey] === 'all'
+      ? items : items.filter(l => l[orgIdField] === this._state[orgStateKey]);
+    const filters = this._letterFilters();
+    const active = filters.find(f => f.key === this._state[filterStateKey]) || filters[0];
+    const filtered = orgFiltered.filter(active.test);
+
+    const seen = new Map();
+    items.forEach(l => {
+      if (l[orgIdField] && l[orgKey]?.name && !seen.has(l[orgIdField])) seen.set(l[orgIdField], l[orgKey].name);
+    });
+
+    resultsEl.innerHTML = `
+      <div class="list-toolbar" style="margin-bottom: 12px;">
+        <select class="field-select org-filter-select" data-letters-org>
+          <option value="all">All organizations</option>
+          ${[...seen.entries()].map(([id, name]) => `<option value="${id}" ${this._state[orgStateKey] === id ? 'selected' : ''}>${name}</option>`).join('')}
+        </select>
+      </div>
+      <div class="filter-chips">
+        ${filters.map(f => `
+          <button class="filter-chip${f.key === active.key ? ' filter-chip--active' : ''}" data-filter="${f.key}">
+            ${f.label} <span class="filter-chip-count">${orgFiltered.filter(f.test).length}</span>
+          </button>`).join('')}
+      </div>
+      ${this._listPanel(isInbox ? 'Inbox' : 'Sent', filtered, isInbox
+        ? { orgCol: 'From', orgKey: 'from_org', allowRoute: this._isSupervisor }
+        : { orgCol: 'To', orgKey: 'to_org' })}
+    `;
+    resultsEl.querySelector('[data-letters-org]').addEventListener('change', (e) => {
+      this._state[orgStateKey] = e.target.value;
+      this._renderFiltered(content, which);
+    });
+    resultsEl.querySelectorAll('[data-filter]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this._state[filterStateKey] = btn.dataset.filter;
+        this._renderFiltered(content, which);
+      });
+    });
+    this._bindListActions(resultsEl, filtered);
   },
 
   _listPanel(title, items, opts) {
@@ -180,39 +246,50 @@ const PrisonerLettersView = {
   },
 
   // ── Compose ──────────────────────────────────────────────────
+  // The prisoner is picked from the registry via a searchable dropdown
+  // (file number, ID card number, name, address all match), with an
+  // inline "New Prisoner" form for someone not registered yet. The
+  // letter itself is typically a scanned document — files are attached
+  // on the detail page right after submitting.
   async _openComposeModal() {
-    let sections, orgs;
+    let prisoners, orgs;
     try {
-      [sections, orgs] = await Promise.all([
-        RequestsAPI.mySections(),
+      [prisoners, orgs] = await Promise.all([
+        PrisonersAPI.list(),
         AdminAPI.listOrganizations(),
       ]);
     } catch (err) {
       console.error('CorLink: failed to load compose form data', err);
       return;
     }
-
     const authorityOrgs = orgs.filter(o => o.type === 'authority' && o.is_active);
+    this._prisoners = prisoners;
+    this._selectedPrisoner = null;
 
-    if (sections.length === 0) {
-      this._openModal(`
-        <h3>New Prisoner Letter</h3>
-        <div class="alert alert-info">You don't have a section assignment yet — contact your admin.</div>
-        <div class="modal-actions"><button class="btn btn-secondary" data-close-modal>Close</button></div>
-      `);
-      return;
-    }
-
+    const prisonOptions = ['Maafushi Prison', 'Asseyri Prison', 'Hulhumale Prison'];
     this._openModal(`
       <h3>New Prisoner Letter</h3>
       <form id="compose-letter-form" class="modal-form">
         <div class="field-group">
-          <label class="field-label">Prisoner ID</label>
-          <input class="field-input-plain" name="prisonerId" required />
-        </div>
-        <div class="field-group">
-          <label class="field-label">Prisoner Name</label>
-          <input class="field-input-plain" name="prisonerName" required />
+          <div class="field-group-row">
+            <label class="field-label">Prisoner</label>
+            <button type="button" class="btn btn-secondary btn-xs" id="toggle-new-prisoner"><i class="ti ti-user-plus"></i> New Prisoner</button>
+          </div>
+          <div class="prisoner-picker" id="prisoner-picker">
+            <input class="field-input-plain" id="prisoner-search" placeholder="Search by file no, ID card, name or address…" autocomplete="off" />
+            <div class="prisoner-picker-list hidden" id="prisoner-picker-list"></div>
+            <div class="prisoner-selected hidden" id="prisoner-selected"></div>
+          </div>
+          <div id="new-prisoner-form" class="new-prisoner-form hidden">
+            <div class="field-group"><label class="field-label">File Number</label><input class="field-input-plain" id="np-file" placeholder="e.g. 1-2026" /></div>
+            <div class="field-group"><label class="field-label">ID Card Number</label><input class="field-input-plain" id="np-idcard" placeholder="e.g. A000000" /></div>
+            <div class="field-group"><label class="field-label">Full Name</label><input class="field-input-plain" id="np-name" /></div>
+            <div class="field-group"><label class="field-label">Address</label><input class="field-input-plain" id="np-address" /></div>
+            <div class="field-group"><label class="field-label">Prison</label>
+              <select class="field-select" id="np-prison">${prisonOptions.map(p => `<option>${p}</option>`).join('')}</select>
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" id="save-new-prisoner">Save Prisoner</button>
+          </div>
         </div>
         <div class="field-group">
           <label class="field-label">To Organization</label>
@@ -220,16 +297,9 @@ const PrisonerLettersView = {
             ${authorityOrgs.map(o => `<option value="${o.id}">${o.name}</option>`).join('')}
           </select>
         </div>
-        ${sections.length > 1 ? `
         <div class="field-group">
-          <label class="field-label">Submitting Section</label>
-          <select class="field-select" name="referenceSectionId">
-            ${sections.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
-          </select>
-        </div>` : `<input type="hidden" name="referenceSectionId" value="${sections[0].id}" />`}
-        <div class="field-group">
-          <label class="field-label">Letter</label>
-          <textarea class="field-input-plain" name="body" rows="6" required placeholder="Transcribe the prisoner's letter…"></textarea>
+          <label class="field-label">Letter / Notes</label>
+          <textarea class="field-input-plain" name="body" rows="6" required placeholder="Transcribe or summarise the prisoner's letter — the scanned letter itself can be attached on the next screen…"></textarea>
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
@@ -237,21 +307,103 @@ const PrisonerLettersView = {
           <button type="submit" class="btn btn-primary">Submit</button>
         </div>
       </form>
-    `);
+    `, { large: true });
 
     const form = document.getElementById('compose-letter-form');
+    const search = document.getElementById('prisoner-search');
+    const listEl = document.getElementById('prisoner-picker-list');
+    const selectedEl = document.getElementById('prisoner-selected');
+    const errEl = form.querySelector('.modal-error');
+
+    const showMatches = () => {
+      const q = search.value.trim().toLowerCase();
+      const matches = (this._prisoners || []).filter(p =>
+        !q
+        || p.file_number.toLowerCase().includes(q)
+        || p.id_card_number.toLowerCase().includes(q)
+        || p.full_name.toLowerCase().includes(q)
+        || (p.address || '').toLowerCase().includes(q)
+      ).slice(0, 8);
+      listEl.innerHTML = matches.length
+        ? matches.map(p => `
+            <button type="button" class="prisoner-option" data-prisoner="${p.id}">
+              <strong>${this._escapeHtml(p.full_name)}</strong>
+              <span>${this._escapeHtml(p.file_number)} · ${this._escapeHtml(p.id_card_number)} · ${this._escapeHtml(p.prison)}</span>
+            </button>`).join('')
+        : `<div class="structure-empty" style="padding: 8px 10px;">No matching prisoner — use "New Prisoner".</div>`;
+      listEl.classList.remove('hidden');
+      listEl.querySelectorAll('[data-prisoner]').forEach(btn => {
+        btn.addEventListener('click', () => selectPrisoner(btn.dataset.prisoner));
+      });
+    };
+
+    const selectPrisoner = (id) => {
+      this._selectedPrisoner = (this._prisoners || []).find(p => p.id === id) || null;
+      if (!this._selectedPrisoner) return;
+      const p = this._selectedPrisoner;
+      listEl.classList.add('hidden');
+      search.classList.add('hidden');
+      selectedEl.classList.remove('hidden');
+      selectedEl.innerHTML = `
+        <div>
+          <strong>${this._escapeHtml(p.full_name)}</strong>
+          <span class="structure-empty">${this._escapeHtml(p.file_number)} · ${this._escapeHtml(p.id_card_number)} · ${this._escapeHtml(p.prison)}</span><br/>
+          <span class="structure-empty">${this._escapeHtml(p.address)}</span>
+        </div>
+        <button type="button" class="btn btn-secondary btn-xs" id="clear-prisoner">Change</button>
+      `;
+      selectedEl.querySelector('#clear-prisoner').addEventListener('click', () => {
+        this._selectedPrisoner = null;
+        selectedEl.classList.add('hidden');
+        search.classList.remove('hidden');
+        search.value = '';
+        search.focus();
+      });
+    };
+
+    search.addEventListener('input', showMatches);
+    search.addEventListener('focus', showMatches);
+
+    document.getElementById('toggle-new-prisoner').addEventListener('click', () => {
+      document.getElementById('new-prisoner-form').classList.toggle('hidden');
+    });
+    document.getElementById('save-new-prisoner').addEventListener('click', async () => {
+      const fileNumber = document.getElementById('np-file').value.trim();
+      const idCardNumber = document.getElementById('np-idcard').value.trim();
+      const fullName = document.getElementById('np-name').value.trim();
+      const address = document.getElementById('np-address').value.trim();
+      const prison = document.getElementById('np-prison').value;
+      if (!fileNumber || !idCardNumber || !fullName || !address) {
+        errEl.textContent = 'Fill in all prisoner fields (file number, ID card, name, address).';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      try {
+        const created = await PrisonersAPI.create({ fileNumber, idCardNumber, fullName, address, prison, orgId: this._user.org_id });
+        this._prisoners.push(created);
+        document.getElementById('new-prisoner-form').classList.add('hidden');
+        errEl.classList.add('hidden');
+        selectPrisoner(created.id);
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
-      const errEl = form.querySelector('.modal-error');
+      if (!this._selectedPrisoner) {
+        errEl.textContent = 'Select a prisoner from the list (or add a new one) first.';
+        errEl.classList.remove('hidden');
+        return;
+      }
       try {
         const result = await PrisonerLettersAPI.submitLetter({
-          prisonerId: fd.get('prisonerId'),
-          prisonerName: fd.get('prisonerName'),
+          prisoner: this._selectedPrisoner,
           fromOrgId: this._user.org_id,
           toOrgId: fd.get('toOrgId'),
           body: fd.get('body'),
-          referenceSectionId: fd.get('referenceSectionId'),
         });
         this._closeModal();
         Router.navigate('prisoner-letter-detail', { id: result.id });
@@ -260,6 +412,12 @@ const PrisonerLettersView = {
         errEl.classList.remove('hidden');
       }
     });
+  },
+
+  _escapeHtml(value) {
+    const div = document.createElement('div');
+    div.textContent = value == null ? '' : String(value);
+    return div.innerHTML;
   },
 
   // ── Route (assign incoming mail to a section) ───────────────────
@@ -331,11 +489,11 @@ const PrisonerLettersView = {
   },
 
   // ── Generic Modal Helpers ──────────────────────────────────────
-  _openModal(innerHtml) {
+  _openModal(innerHtml, { large = false } = {}) {
     const root = document.getElementById('modal-root');
     root.innerHTML = `
       <div class="modal-overlay" id="modal-overlay">
-        <div class="modal-box">${innerHtml}</div>
+        <div class="modal-box${large ? ' modal-box--lg' : ''}">${innerHtml}</div>
       </div>
     `;
     document.getElementById('modal-overlay').addEventListener('click', (e) => {

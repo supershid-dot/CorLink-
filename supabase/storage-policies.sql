@@ -60,7 +60,7 @@ CREATE POLICY "attachments_storage_insert" ON storage.objects
   FOR INSERT WITH CHECK (
     bucket_id = 'attachments'
     AND owner = auth.uid()
-    AND (storage.foldername(name))[1] IN ('request', 'response', 'internal_request')
+    AND (storage.foldername(name))[1] IN ('request', 'response', 'internal_request', 'prisoner_letter', 'prisoner_reply')
   );
 
 DROP POLICY IF EXISTS "attachments_storage_delete" ON storage.objects;

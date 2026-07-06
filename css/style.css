@@ -2122,6 +2122,63 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
 .attachment-dropzone i { font-size: 1.125rem; }
 .attachment-browse-link { text-decoration: underline; }
 
+/* ── Prisoner picker (letter compose modal) ──────────────────── */
+/* Searchable dropdown over the org's prisoner registry: type-ahead
+   input, match list, then a summary card once one is chosen. Bound in
+   js/views/prisoner-letters.js. */
+.prisoner-picker { position: relative; }
+.prisoner-picker-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  max-height: 260px;
+  overflow-y: auto;
+}
+.prisoner-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  border: none;
+  border-bottom: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: background var(--transition);
+}
+.prisoner-option:last-child { border-bottom: none; }
+.prisoner-option:hover { background: var(--color-primary-light); }
+.prisoner-option strong { display: block; }
+.prisoner-option span { color: var(--color-text-muted); font-size: 0.8125rem; }
+.prisoner-selected {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  font-size: 0.875rem;
+}
+.new-prisoner-form {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 /* ── Round sections (multi-round conversation grouping) ──────── */
 /* Each request/response round-trip renders inside one bordered
    container so it's visually obvious where one round ends and the
