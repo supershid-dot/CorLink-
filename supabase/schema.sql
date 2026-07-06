@@ -91,6 +91,12 @@ CREATE TABLE sections (
 ALTER TABLE organizations
   ADD COLUMN default_receiving_section_id UUID REFERENCES sections(id);
 
+-- Same shape, for the prisoner registry: which section (if any) is
+-- allowed to add/edit prisoners (see is_prisoner_registry_manager() /
+-- prisoners_insert in rls.sql). NULL = any org member, as before.
+ALTER TABLE organizations
+  ADD COLUMN prisoner_registry_section_id UUID REFERENCES sections(id);
+
 -- ─── Designations (job titles / positions within an organization) ──
 -- Org-specific picklist (e.g. "Legal Officer", "Case Manager") — the
 -- organization's own admin manages this list, same as they manage

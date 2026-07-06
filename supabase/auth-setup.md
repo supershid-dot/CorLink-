@@ -50,6 +50,12 @@ match what changed since, instead of re-running the full files:
   source for letters), letter read receipts, per-letter PL- reference numbers, and
   attachments on letters/replies — also re-run `supabase/storage-policies.sql` OR this
   patch (it updates the storage insert policy's allowed folders too)
+- `supabase/patch-prisoner-registry-section.sql` — restricts adding/editing the
+  prisoner registry to a designated section (configurable per-org, same shape as
+  Default Receiving Section — falls back to any org member if left unset), and
+  closes a gap where an authority-org member could insert a prisoner_letter directly
+  via the API despite the compose button being hidden for them — letters can now
+  only ever be created MCS -> authority
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

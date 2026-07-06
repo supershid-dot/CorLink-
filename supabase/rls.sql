@@ -164,6 +164,22 @@ RETURNS BOOLEAN AS $$
   SELECT is_admin() OR has_role('supervisor');
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
+-- True if the caller may add/edit p_org_id's prisoner registry: a
+-- supervisor/admin of that org, OR (if the org has designated a
+-- section) any member of that section regardless of role, OR (if no
+-- section is set yet) any member of the org at all — same
+-- never-breaks-on-upgrade shape as is_default_section_receiver.
+CREATE OR REPLACE FUNCTION is_prisoner_registry_manager(p_org_id UUID)
+RETURNS BOOLEAN AS $$
+  SELECT
+    (get_my_org_id() = p_org_id AND is_supervisor_or_above())
+    OR CASE
+      WHEN (SELECT prisoner_registry_section_id FROM organizations WHERE id = p_org_id) IS NOT NULL
+        THEN (SELECT prisoner_registry_section_id FROM organizations WHERE id = p_org_id) IN (SELECT my_section_ids())
+      ELSE get_my_org_id() = p_org_id
+    END;
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+
 -- Shared by audit_select_own_records and users_select_audit_trail
 -- (both further down this file) — factored out rather than duplicated
 -- in both policies so the two can never silently drift apart. Defined
@@ -269,7 +285,8 @@ CREATE POLICY "orgs_update" ON organizations
 CREATE OR REPLACE FUNCTION update_org_workflow_settings(
   p_org_id UUID,
   p_default_receiving_section_id UUID,
-  p_reference_number_format TEXT
+  p_reference_number_format TEXT,
+  p_prisoner_registry_section_id UUID DEFAULT NULL
 )
 RETURNS VOID AS $$
 BEGIN
@@ -283,6 +300,12 @@ BEGIN
     RAISE EXCEPTION 'default_receiving_section_id must belong to the target organization';
   END IF;
 
+  IF p_prisoner_registry_section_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM sections WHERE id = p_prisoner_registry_section_id AND org_id = p_org_id
+  ) THEN
+    RAISE EXCEPTION 'prisoner_registry_section_id must belong to the target organization';
+  END IF;
+
   IF p_reference_number_format IS NULL OR trim(p_reference_number_format) = ''
      OR p_reference_number_format NOT LIKE '%{SEQ}%' THEN
     RAISE EXCEPTION 'reference_number_format must be non-empty and include the {SEQ} token';
@@ -290,7 +313,8 @@ BEGIN
 
   UPDATE organizations
   SET default_receiving_section_id = p_default_receiving_section_id,
-      reference_number_format = p_reference_number_format
+      reference_number_format = p_reference_number_format,
+      prisoner_registry_section_id = p_prisoner_registry_section_id
   WHERE id = p_org_id;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
@@ -1127,14 +1151,18 @@ DROP POLICY IF EXISTS "prisoners_select" ON prisoners;
 CREATE POLICY "prisoners_select" ON prisoners
   FOR SELECT USING (org_id = get_my_org_id());
 
+-- Adding/editing the registry is restricted to the org's designated
+-- prisoner_registry_section_id (is_prisoner_registry_manager, above) —
+-- select stays org-wide since every MCS staffer needs to search the
+-- registry when composing a letter, only writes are section-gated.
 DROP POLICY IF EXISTS "prisoners_insert" ON prisoners;
 CREATE POLICY "prisoners_insert" ON prisoners
-  FOR INSERT WITH CHECK (org_id = get_my_org_id());
+  FOR INSERT WITH CHECK (org_id = get_my_org_id() AND is_prisoner_registry_manager(org_id));
 
 DROP POLICY IF EXISTS "prisoners_update" ON prisoners;
 CREATE POLICY "prisoners_update" ON prisoners
-  FOR UPDATE USING (org_id = get_my_org_id())
-  WITH CHECK (org_id = get_my_org_id());
+  FOR UPDATE USING (org_id = get_my_org_id() AND is_prisoner_registry_manager(org_id))
+  WITH CHECK (org_id = get_my_org_id() AND is_prisoner_registry_manager(org_id));
 
 -- ─── prisoner_letters ────────────────────────────────────────
 -- Strict access: only submitter, assignee, supervisors, and admins.
@@ -1148,10 +1176,19 @@ CREATE POLICY "prisoner_letters_select" ON prisoner_letters
     )
   );
 
+-- Letters only ever flow MCS -> authority; the authority side only
+-- ever replies (prisoner_replies_insert, below). from_prison_id
+-- matching the submitter's own org is not enough on its own — an
+-- authority-org member's own org would otherwise pass that check too
+-- (the compose button is hidden client-side for them, but RLS is the
+-- real boundary against a direct API call) — so both orgs' types are
+-- checked explicitly here.
 CREATE POLICY "prisoner_letters_insert" ON prisoner_letters
   FOR INSERT WITH CHECK (
     submitted_by = auth.uid()
     AND from_prison_id = get_my_org_id()
+    AND EXISTS (SELECT 1 FROM organizations o WHERE o.id = from_prison_id AND o.type = 'mcs')
+    AND EXISTS (SELECT 1 FROM organizations o WHERE o.id = to_org_id AND o.type = 'authority')
   );
 
 -- The bare is_supervisor_or_above() clause (no org-membership check) let

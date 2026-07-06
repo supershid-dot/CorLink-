@@ -36,12 +36,27 @@ const PrisonerLettersView = {
   async _resolveIsMcs(user) {
     try {
       const orgs = await AdminAPI.listOrganizations();
-      const org = orgs.find(o => o.id === user.org_id);
-      return org?.type === 'mcs';
+      this._org = orgs.find(o => o.id === user.org_id) || null;
+      return this._org?.type === 'mcs';
     } catch (err) {
       console.error('CorLink: failed to resolve org type', err);
       return false;
     }
+  },
+
+  // UX gate only — prisoners_insert/update RLS (is_prisoner_registry_manager)
+  // is the real boundary. A supervisor/admin can always manage the
+  // registry; otherwise, if the org has designated a section, only a
+  // direct 'section'-scope assignment to it is checked here (a
+  // department/division/command-level assignment that happens to cover
+  // that section would also pass server-side but isn't reproduced
+  // client-side — worst case the button stays hidden and RLS is never
+  // the one surprising anybody).
+  _canManagePrisonerRegistry() {
+    if (this._isSupervisor) return true;
+    const sectionId = this._org?.prisoner_registry_section_id;
+    if (!sectionId) return true;
+    return (this._user.assignments || []).some(a => a.scope_type === 'section' && a.scope_id === sectionId);
   },
 
   _shell() {
@@ -265,6 +280,8 @@ const PrisonerLettersView = {
     const authorityOrgs = orgs.filter(o => o.type === 'authority' && o.is_active);
     this._prisoners = prisoners;
     this._selectedPrisoner = null;
+    this._pendingFiles = [];
+    const canAddPrisoner = this._canManagePrisonerRegistry();
 
     const prisonOptions = ['Maafushi Prison', 'Asseyri Prison', 'Hulhumale Prison'];
     this._openModal(`
@@ -273,13 +290,14 @@ const PrisonerLettersView = {
         <div class="field-group">
           <div class="field-group-row">
             <label class="field-label">Prisoner</label>
-            <button type="button" class="btn btn-secondary btn-xs" id="toggle-new-prisoner"><i class="ti ti-user-plus"></i> New Prisoner</button>
+            ${canAddPrisoner ? `<button type="button" class="btn btn-secondary btn-xs" id="toggle-new-prisoner"><i class="ti ti-user-plus"></i> New Prisoner</button>` : ''}
           </div>
           <div class="prisoner-picker" id="prisoner-picker">
             <input class="field-input-plain" id="prisoner-search" placeholder="Search by file no, ID card, name or address…" autocomplete="off" />
             <div class="prisoner-picker-list hidden" id="prisoner-picker-list"></div>
             <div class="prisoner-selected hidden" id="prisoner-selected"></div>
           </div>
+          ${canAddPrisoner ? `
           <div id="new-prisoner-form" class="new-prisoner-form hidden">
             <div class="field-group"><label class="field-label">File Number</label><input class="field-input-plain" id="np-file" placeholder="e.g. 1-2026" /></div>
             <div class="field-group"><label class="field-label">ID Card Number</label><input class="field-input-plain" id="np-idcard" placeholder="e.g. A000000" /></div>
@@ -289,7 +307,7 @@ const PrisonerLettersView = {
               <select class="field-select" id="np-prison">${prisonOptions.map(p => `<option>${p}</option>`).join('')}</select>
             </div>
             <button type="button" class="btn btn-primary btn-sm" id="save-new-prisoner">Save Prisoner</button>
-          </div>
+          </div>` : ''}
         </div>
         <div class="field-group">
           <label class="field-label">To Organization</label>
@@ -299,7 +317,16 @@ const PrisonerLettersView = {
         </div>
         <div class="field-group">
           <label class="field-label">Letter / Notes</label>
-          <textarea class="field-input-plain" name="body" rows="6" required placeholder="Transcribe or summarise the prisoner's letter — the scanned letter itself can be attached on the next screen…"></textarea>
+          <textarea class="field-input-plain" name="body" rows="6" required placeholder="Transcribe or summarise the prisoner's letter…"></textarea>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Attachments</label>
+          <label class="attachment-dropzone" id="compose-dropzone">
+            <i class="ti ti-cloud-upload"></i>
+            <span>Drag files here, or <span class="attachment-browse-link">browse</span></span>
+            <input type="file" multiple class="hidden" id="compose-file-input" />
+          </label>
+          <div class="attachments-list" id="compose-pending-files"></div>
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
@@ -364,10 +391,10 @@ const PrisonerLettersView = {
     search.addEventListener('input', showMatches);
     search.addEventListener('focus', showMatches);
 
-    document.getElementById('toggle-new-prisoner').addEventListener('click', () => {
+    document.getElementById('toggle-new-prisoner')?.addEventListener('click', () => {
       document.getElementById('new-prisoner-form').classList.toggle('hidden');
     });
-    document.getElementById('save-new-prisoner').addEventListener('click', async () => {
+    document.getElementById('save-new-prisoner')?.addEventListener('click', async () => {
       const fileNumber = document.getElementById('np-file').value.trim();
       const idCardNumber = document.getElementById('np-idcard').value.trim();
       const fullName = document.getElementById('np-name').value.trim();
@@ -390,6 +417,48 @@ const PrisonerLettersView = {
       }
     });
 
+    // Files chosen here queue in memory — the letter row doesn't exist
+    // yet for attachments to point at, so they're actually uploaded
+    // right after submitLetter() succeeds, before navigating away.
+    const pendingListEl = document.getElementById('compose-pending-files');
+    const renderPendingFiles = () => {
+      pendingListEl.innerHTML = this._pendingFiles.map((f, i) => `
+        <span class="attachment-chip" data-remove-pending="${i}">
+          <i class="ti ti-paperclip"></i> ${this._escapeHtml(f.name)}
+          <i class="ti ti-x"></i>
+        </span>
+      `).join('');
+      pendingListEl.querySelectorAll('[data-remove-pending]').forEach(chip => {
+        chip.addEventListener('click', () => {
+          this._pendingFiles.splice(Number(chip.dataset.removePending), 1);
+          renderPendingFiles();
+        });
+      });
+    };
+    const addPendingFiles = (files) => {
+      this._pendingFiles.push(...files);
+      renderPendingFiles();
+    };
+    const dropzone = document.getElementById('compose-dropzone');
+    const fileInput = document.getElementById('compose-file-input');
+    fileInput.addEventListener('change', () => {
+      addPendingFiles(Array.from(fileInput.files || []));
+      fileInput.value = '';
+    });
+    dropzone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropzone.classList.add('attachment-dropzone--active');
+    });
+    dropzone.addEventListener('dragleave', (e) => {
+      if (e.relatedTarget && dropzone.contains(e.relatedTarget)) return;
+      dropzone.classList.remove('attachment-dropzone--active');
+    });
+    dropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('attachment-dropzone--active');
+      addPendingFiles(Array.from(e.dataTransfer?.files || []));
+    });
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
@@ -405,8 +474,17 @@ const PrisonerLettersView = {
           toOrgId: fd.get('toOrgId'),
           body: fd.get('body'),
         });
+        const failures = [];
+        for (const file of this._pendingFiles) {
+          try {
+            await AttachmentsAPI.upload('prisoner_letter', result.id, file);
+          } catch (err) {
+            failures.push(`${file.name}: ${err.message || 'upload failed'}`);
+          }
+        }
         this._closeModal();
         Router.navigate('prisoner-letter-detail', { id: result.id });
+        if (failures.length > 0) alert(`Letter submitted, but some attachments failed to upload:\n${failures.join('\n')}`);
       } catch (err) {
         errEl.textContent = err.message;
         errEl.classList.remove('hidden');

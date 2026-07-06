@@ -611,6 +611,15 @@ const AdminView = {
             </select>
             <div class="field-hint">Incoming requests are received here first — only staff assigned as "Assigned Receiver" in this section can mark mail received and route it to whichever section should actually reply. Leave unset to let any org-wide Assigned Receiver handle incoming mail (the original behavior).</div>
           </div>
+          ${org.type === 'mcs' ? `
+          <div class="field-group">
+            <label class="field-label">Prisoner Registry Section</label>
+            <select class="field-select" name="prisonerRegistrySectionId">
+              <option value="">— None (any staff member in the org) —</option>
+              ${activeSections.map(s => `<option value="${s.id}" ${s.id === org.prisoner_registry_section_id ? 'selected' : ''}>${this._escapeHtml(s.name)}</option>`).join('')}
+            </select>
+            <div class="field-hint">Only staff in this section (plus supervisors/admins) can add or edit prisoners in the registry used by Prisoner Letters. Leave unset to let any staff member in the org manage it.</div>
+          </div>` : ''}
           <div class="field-group">
             <label class="field-label">Reference Number Format</label>
             <input class="field-input-plain" name="referenceNumberFormat" required value="${this._escapeHtml(org.reference_number_format || '{ORG}-{SECTION}-{YEAR}-{SEQ}')}" />
@@ -633,6 +642,7 @@ const AdminView = {
         await AdminAPI.updateOrgWorkflowSettings(org.id, {
           defaultReceivingSectionId: fd.get('defaultReceivingSectionId') || null,
           referenceNumberFormat: fd.get('referenceNumberFormat'),
+          prisonerRegistrySectionId: fd.get('prisonerRegistrySectionId') || null,
         });
         await this._renderTab();
       } catch (err) {
