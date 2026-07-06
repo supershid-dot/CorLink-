@@ -98,7 +98,7 @@ const PrisonerLetterDetailView = {
             <div class="thread-receipt"><i class="ti ti-circle-check"></i>
               <span>Received by <strong>${this._escapeHtml(l.received_by_user?.full_name || 'Unknown')}</strong>${l.received_by_user?.designations?.name ? ', ' + this._escapeHtml(l.received_by_user.designations.name) : ''} — ${new Date(l.received_at).toLocaleString()}</span>
             </div>` : ''}
-          ${this._renderAttachments('prisoner_letter', l.id, this._attachments, l.status !== 'delivered')}
+          ${this._renderAttachments('prisoner_letter', l.id, this._attachments, isFromOrgMember && l.status !== 'delivered')}
         </div>
 
         ${this._replies.map(r => `
@@ -109,7 +109,7 @@ const PrisonerLetterDetailView = {
               <span class="structure-empty">${new Date(r.created_at).toLocaleString()}</span>
             </div>
             <div class="thread-message-body">${this._escapeHtml(r.body)}</div>
-            ${this._renderAttachments('prisoner_reply', r.id, this._replyAttachments[r.id] || [], l.status !== 'delivered')}
+            ${this._renderAttachments('prisoner_reply', r.id, this._replyAttachments[r.id] || [], isToOrgMember && l.status !== 'delivered')}
           </div>
         `).join('')}
       </div>
@@ -166,6 +166,15 @@ const PrisonerLetterDetailView = {
           <label class="field-label">Reply</label>
           <textarea class="field-input-plain" name="body" rows="5" required id="reply-body" placeholder="Write the response…"></textarea>
         </div>
+        <div class="field-group">
+          <label class="field-label">Attachments</label>
+          <label class="attachment-dropzone" id="reply-dropzone">
+            <i class="ti ti-cloud-upload"></i>
+            <span>Drag files here, or <span class="attachment-browse-link">browse</span></span>
+            <input type="file" multiple class="hidden" id="reply-file-input" />
+          </label>
+          <div class="attachments-list" id="reply-pending-files"></div>
+        </div>
         <div class="response-error alert alert-error hidden"></div>
         <button type="submit" class="btn btn-primary btn-sm">Save &amp; Send Reply</button>
       </form>
@@ -174,7 +183,10 @@ const PrisonerLetterDetailView = {
 
   // Same compact chips + dropzone pattern as request-detail.js. Letters
   // have no approval/lock step, so uploads stay open until the letter
-  // is delivered (the call sites pass status !== 'delivered').
+  // is delivered — but each side only uploads onto its own artifact:
+  // the sending (MCS) org onto the letter, the receiving authority onto
+  // replies (the call sites pass the org-membership check in canUpload).
+  // Chips stay visible to both sides either way.
   _renderAttachments(recordType, recordId, attachments, canUpload) {
     return `
       <div class="attachments-panel" data-attachments="${recordType}:${recordId}">
@@ -261,19 +273,73 @@ const PrisonerLetterDetailView = {
       });
     });
 
+    // Reply compose — files queue in memory (deliberately NOT the
+    // data-dropzone pattern above: the prisoner_reply row doesn't exist
+    // yet to attach onto) and upload right after createReply() succeeds,
+    // same approach as the New Letter compose modal.
     const replyForm = document.getElementById('reply-form');
-    replyForm?.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const fd = new FormData(replyForm);
-      const errEl = replyForm.querySelector('.response-error');
-      try {
-        await PrisonerLettersAPI.createReply({ letterId: this._letter.id, body: fd.get('body') });
-        await this._load();
-      } catch (err) {
-        errEl.textContent = err.message;
-        errEl.classList.remove('hidden');
-      }
-    });
+    if (replyForm) {
+      this._pendingReplyFiles = [];
+      const pendingListEl = document.getElementById('reply-pending-files');
+      const renderPendingFiles = () => {
+        pendingListEl.innerHTML = this._pendingReplyFiles.map((f, i) => `
+          <span class="attachment-chip" data-remove-pending="${i}">
+            <i class="ti ti-paperclip"></i> ${this._escapeHtml(f.name)}
+            <i class="ti ti-x"></i>
+          </span>
+        `).join('');
+        pendingListEl.querySelectorAll('[data-remove-pending]').forEach(chip => {
+          chip.addEventListener('click', () => {
+            this._pendingReplyFiles.splice(Number(chip.dataset.removePending), 1);
+            renderPendingFiles();
+          });
+        });
+      };
+      const dropzone = document.getElementById('reply-dropzone');
+      const fileInput = document.getElementById('reply-file-input');
+      fileInput.addEventListener('change', () => {
+        this._pendingReplyFiles.push(...Array.from(fileInput.files || []));
+        fileInput.value = '';
+        renderPendingFiles();
+      });
+      dropzone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropzone.classList.add('attachment-dropzone--active');
+      });
+      dropzone.addEventListener('dragleave', (e) => {
+        if (e.relatedTarget && dropzone.contains(e.relatedTarget)) return;
+        dropzone.classList.remove('attachment-dropzone--active');
+      });
+      dropzone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('attachment-dropzone--active');
+        this._pendingReplyFiles.push(...Array.from(e.dataTransfer?.files || []));
+        renderPendingFiles();
+      });
+
+      replyForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fd = new FormData(replyForm);
+        const errEl = replyForm.querySelector('.response-error');
+        try {
+          const reply = await PrisonerLettersAPI.createReply({ letterId: this._letter.id, body: fd.get('body') });
+          const failures = [];
+          for (const file of this._pendingReplyFiles) {
+            try {
+              await AttachmentsAPI.upload('prisoner_reply', reply.id, file);
+            } catch (err) {
+              failures.push(`${file.name}: ${err.message || 'upload failed'}`);
+            }
+          }
+          this._pendingReplyFiles = [];
+          await this._load();
+          if (failures.length > 0) alert(`Reply sent, but some attachments failed to upload:\n${failures.join('\n')}`);
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.classList.remove('hidden');
+        }
+      });
+    }
   },
 
   async _runAction(fn) {
