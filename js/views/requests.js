@@ -7,6 +7,7 @@
 const RequestsView = {
   _state: {
     tab: 'inbox', inboxFilter: 'all', sentFilter: 'all', teamFilter: 'all', approvalsSub: 'requests',
+    infoSub: 'mine',
     inboxWho: 'all', sentWho: 'all',
     inboxSearch: '', sentSearch: '', approvalsSearch: '', infoSearch: '', teamSearch: '',
     inboxOrg: 'all', sentOrg: 'all',
@@ -67,6 +68,9 @@ const RequestsView = {
       } else if (this._state.tab === 'sent' && this._sentFilters().some(f => f.key === params.filter)) {
         this._state.sentFilter = params.filter;
       }
+    }
+    if (this._state.tab === 'info' && ['mine', 'theirs'].includes(params.sub)) {
+      this._state.infoSub = params.sub;
     }
 
     container.innerHTML = this._shell();
@@ -602,6 +606,9 @@ const RequestsView = {
     this._renderInfoRequestsFiltered();
   },
 
+  // Same switchable-sub-tab treatment as Approvals (task #88) — the two
+  // queues sit one at a time behind "Awaiting Your Reply" / "Awaiting
+  // Their Reply" instead of stacking, each showing a live count.
   _renderInfoRequestsFiltered() {
     const resultsEl = document.getElementById('info-results');
     if (!resultsEl) return;
@@ -612,16 +619,24 @@ const RequestsView = {
     const searched = items.filter(ir => this._matchesQuery(ir.subject, ir.body, query));
     const awaitingMyReply = searched.filter(ir => mySet.has(ir.to_section_id));
     const awaitingTheirReply = searched.filter(ir => mySet.has(ir.from_section_id) && !mySet.has(ir.to_section_id));
+    const sub = this._state.infoSub === 'theirs' ? 'theirs' : 'mine';
     resultsEl.innerHTML = `
-      <div class="queue-group">
-        <div class="queue-group-title"><i class="ti ti-message-question"></i> Awaiting Your Section's Reply <span class="badge badge-outline">${awaitingMyReply.length}</span></div>
-        ${this._infoRequestPanel(awaitingMyReply)}
+      <div class="tabs tabs--sub">
+        <button class="tab-btn${sub === 'mine' ? ' tab-btn--active' : ''}" data-info-sub="mine">
+          <i class="ti ti-message-question"></i> Awaiting Your Section's Reply <span class="filter-chip-count">${awaitingMyReply.length}</span>
+        </button>
+        <button class="tab-btn${sub === 'theirs' ? ' tab-btn--active' : ''}" data-info-sub="theirs">
+          <i class="ti ti-clock"></i> Information Requested — Awaiting Their Reply <span class="filter-chip-count">${awaitingTheirReply.length}</span>
+        </button>
       </div>
-      <div class="queue-group">
-        <div class="queue-group-title"><i class="ti ti-clock"></i> Information Requested — Awaiting Their Reply <span class="badge badge-outline">${awaitingTheirReply.length}</span></div>
-        ${this._infoRequestPanel(awaitingTheirReply)}
-      </div>
+      ${this._infoRequestPanel(sub === 'mine' ? awaitingMyReply : awaitingTheirReply)}
     `;
+    resultsEl.querySelectorAll('[data-info-sub]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this._state.infoSub = btn.dataset.infoSub;
+        this._renderInfoRequestsFiltered();
+      });
+    });
   },
 
   _infoRequestPanel(items) {
@@ -845,14 +860,14 @@ const RequestsView = {
         <div class="field-group">
           <div class="field-group-row">
             <label class="field-label">Subject</label>
-            ${RichEditor.langToggleHtml('subjectLanguage', 'en')}
+            ${RichEditor.langToggleHtml('subjectLanguage', 'dv')}
           </div>
-          <input class="field-input-plain" name="subject" id="compose-subject" required />
+          <input class="field-input-plain field-divehi" name="subject" id="compose-subject" required />
         </div>
         <div class="field-group">
           <div class="field-group-row">
             <label class="field-label">Message</label>
-            ${RichEditor.langToggleHtml('language', 'en')}
+            ${RichEditor.langToggleHtml('language', 'dv')}
           </div>
           <div id="compose-body"></div>
         </div>
@@ -875,7 +890,7 @@ const RequestsView = {
     `, { large: true });
 
     const form = document.getElementById('compose-form');
-    const editor = RichEditor.create(document.getElementById('compose-body'), { language: 'en' });
+    const editor = RichEditor.create(document.getElementById('compose-body'), { language: 'dv' });
     const subjectInput = document.getElementById('compose-subject');
     const syncSubjectLang = (lang) => subjectInput.classList.toggle('field-divehi', lang === 'dv');
     RichEditor.bindLangToggle(form, 'subjectLanguage', syncSubjectLang);
