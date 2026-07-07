@@ -7,6 +7,7 @@
 const RequestsView = {
   _state: {
     tab: 'inbox', inboxFilter: 'all', sentFilter: 'all', teamFilter: 'all', approvalsSub: 'requests',
+    inboxWho: 'all', sentWho: 'all',
     inboxSearch: '', sentSearch: '', approvalsSearch: '', infoSearch: '', teamSearch: '',
     inboxOrg: 'all', sentOrg: 'all',
     teamStaffId: null,
@@ -219,16 +220,37 @@ const RequestsView = {
     ];
   },
 
-  _filterChipsHtml(filters, items, activeKey) {
+  _filterChipsHtml(filters, items, activeKey, dataAttr = 'filter') {
     return `
       <div class="filter-chips">
         ${filters.map(f => `
-          <button type="button" class="filter-chip${f.key === activeKey ? ' filter-chip--active' : ''}" data-filter="${f.key}">
+          <button type="button" class="filter-chip${f.key === activeKey ? ' filter-chip--active' : ''}" data-${dataAttr}="${f.key}">
             ${f.label} <span class="filter-chip-count">${items.filter(f.test).length}</span>
           </button>
         `).join('')}
       </div>
     `;
+  },
+
+  // ── "Show" facet (Inbox/Sent only) — WHO a row relates to, combined
+  // with the existing "Status" facet (WHAT state it's in) via AND. Two
+  // independent single-select rows rather than one row of multi-select
+  // chips: every combination stays meaningful (no "Not Assigned" +
+  // "Assigned to Me" self-contradiction to worry about), and it's just
+  // _filterChipsHtml() called a second time with its own state key.
+  // "Assigned to Me" is inbox-only — assigned_to is always someone on
+  // the RECEIVING side drafting the reply, so on Sent (my org is the
+  // sender) it would never match my own id.
+  _whoFilters(kind) {
+    const sectionIds = new Set((this._mySections || []).map(s => s.id));
+    const sectionField = kind === 'inbox' ? 'to_section_id' : 'from_section_id';
+    const base = [
+      { key: 'all', label: 'All', test: () => true },
+      { key: 'created_by_me', label: 'Created by Me', test: r => r.created_by === this._user.id },
+      ...(kind === 'inbox' ? [{ key: 'assigned_to_me', label: 'Assigned to Me', test: r => r.assigned_to === this._user.id }] : []),
+      { key: 'my_section', label: 'My Section', test: r => sectionIds.has(r[sectionField]) },
+    ];
+    return base;
   },
 
   // ── Search (Inbox / Sent / Approvals / Info Requests) ────────────
@@ -335,13 +357,32 @@ const RequestsView = {
     const query = (this._state.inboxSearch || '').trim().toLowerCase();
     const orgFiltered = this._state.inboxOrg === 'all' ? items : items.filter(r => r.from_org_id === this._state.inboxOrg);
     const searched = orgFiltered.filter(r => this._matchesQuery(r.subject, r.body, query, r.reference_number));
-    const filters = this._inboxFilters();
-    const active = filters.find(f => f.key === this._state.inboxFilter) || filters[0];
-    const filtered = searched.filter(active.test);
+
+    const whoFilters = this._whoFilters('inbox');
+    const activeWho = whoFilters.find(f => f.key === this._state.inboxWho) || whoFilters[0];
+    const statusFilters = this._inboxFilters();
+    const activeStatus = statusFilters.find(f => f.key === this._state.inboxFilter) || statusFilters[0];
+
+    // Symmetric faceted counts: each row's numbers reflect the OTHER
+    // row's current selection, not its own — so a chip's count always
+    // matches what clicking it would actually produce.
+    const whoCountBase = searched.filter(activeStatus.test);
+    const statusCountBase = searched.filter(activeWho.test);
+    const filtered = statusCountBase.filter(activeStatus.test);
+
     resultsEl.innerHTML = `
-      ${this._filterChipsHtml(filters, searched, active.key)}
+      <div class="filter-row-label">Show</div>
+      ${this._filterChipsHtml(whoFilters, whoCountBase, activeWho.key, 'who')}
+      <div class="filter-row-label">Status</div>
+      ${this._filterChipsHtml(statusFilters, statusCountBase, activeStatus.key, 'filter')}
       ${this._listPanel(null, filtered, { orgCol: 'From', orgKey: 'from_org', allowReceive: this._canReceive })}
     `;
+    resultsEl.querySelectorAll('[data-who]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this._state.inboxWho = btn.dataset.who;
+        this._renderInboxFiltered();
+      });
+    });
     resultsEl.querySelectorAll('[data-filter]').forEach(btn => {
       btn.addEventListener('click', () => {
         this._state.inboxFilter = btn.dataset.filter;
@@ -372,13 +413,29 @@ const RequestsView = {
     const query = (this._state.sentSearch || '').trim().toLowerCase();
     const orgFiltered = this._state.sentOrg === 'all' ? items : items.filter(r => r.to_org_id === this._state.sentOrg);
     const searched = orgFiltered.filter(r => this._matchesQuery(r.subject, r.body, query, r.reference_number));
-    const filters = this._sentFilters();
-    const active = filters.find(f => f.key === this._state.sentFilter) || filters[0];
-    const filtered = searched.filter(active.test);
+
+    const whoFilters = this._whoFilters('sent');
+    const activeWho = whoFilters.find(f => f.key === this._state.sentWho) || whoFilters[0];
+    const statusFilters = this._sentFilters();
+    const activeStatus = statusFilters.find(f => f.key === this._state.sentFilter) || statusFilters[0];
+
+    const whoCountBase = searched.filter(activeStatus.test);
+    const statusCountBase = searched.filter(activeWho.test);
+    const filtered = statusCountBase.filter(activeStatus.test);
+
     resultsEl.innerHTML = `
-      ${this._filterChipsHtml(filters, searched, active.key)}
+      <div class="filter-row-label">Show</div>
+      ${this._filterChipsHtml(whoFilters, whoCountBase, activeWho.key, 'who')}
+      <div class="filter-row-label">Status</div>
+      ${this._filterChipsHtml(statusFilters, statusCountBase, activeStatus.key, 'filter')}
       ${this._listPanel(null, filtered, { orgCol: 'To', orgKey: 'to_org' })}
     `;
+    resultsEl.querySelectorAll('[data-who]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this._state.sentWho = btn.dataset.who;
+        this._renderSentFiltered();
+      });
+    });
     resultsEl.querySelectorAll('[data-filter]').forEach(btn => {
       btn.addEventListener('click', () => {
         this._state.sentFilter = btn.dataset.filter;

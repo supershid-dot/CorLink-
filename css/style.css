@@ -1347,6 +1347,17 @@ input.field-divehi, textarea.field-divehi, select.field-divehi {
    since the full set won't always fit on mobile, but visually a step
    down (pill buttons, not underlined) so it reads as "narrowing the
    current tab" rather than a second row of tabs. */
+/* Sits directly above a .filter-chips row when a tab has more than
+   one facet (e.g. Inbox/Sent's "Show" who-facet stacked over the
+   existing "Status" facet) — a plain small caption, not a chip itself. */
+.filter-row-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--color-text-light);
+  margin-bottom: 6px;
+}
 .filter-chips {
   display: flex;
   gap: 8px;
