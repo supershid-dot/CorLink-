@@ -6,7 +6,7 @@
 
 const RequestsView = {
   _state: {
-    tab: 'inbox', inboxFilter: 'all', sentFilter: 'all', teamFilter: 'all',
+    tab: 'inbox', inboxFilter: 'all', sentFilter: 'all', teamFilter: 'all', approvalsSub: 'requests',
     inboxSearch: '', sentSearch: '', approvalsSearch: '', infoSearch: '', teamSearch: '',
     inboxOrg: 'all', sentOrg: 'all',
     teamStaffId: null,
@@ -472,6 +472,9 @@ const RequestsView = {
     this._renderApprovalsFiltered();
   },
 
+  // The two approval queues render as switchable sub-tabs (one visible
+  // at a time) rather than stacked sections — no scrolling past one
+  // queue to find the other; each sub-tab shows its live count.
   _renderApprovalsFiltered() {
     const resultsEl = document.getElementById('approvals-results');
     if (!resultsEl) return;
@@ -479,17 +482,27 @@ const RequestsView = {
     const query = (this._state.approvalsSearch || '').trim().toLowerCase();
     const filteredRequests = requestApprovals.filter(r => this._matchesQuery(r.subject, r.body, query, r.reference_number));
     const filteredResponses = responseApprovals.filter(resp => this._matchesQuery(resp.request?.subject, resp.body, query, resp.reference_number));
+    const sub = this._state.approvalsSub === 'responses' ? 'responses' : 'requests';
     resultsEl.innerHTML = `
-      <div class="queue-group">
-        <div class="queue-group-title"><i class="ti ti-file-check"></i> Requests Awaiting Your Approval <span class="badge badge-outline">${filteredRequests.length}</span></div>
-        ${this._listPanel(null, filteredRequests, { orgCol: 'To', orgKey: 'to_org' })}
+      <div class="tabs tabs--sub">
+        <button class="tab-btn${sub === 'requests' ? ' tab-btn--active' : ''}" data-approvals-sub="requests">
+          <i class="ti ti-file-check"></i> Requests Awaiting Your Approval <span class="filter-chip-count">${filteredRequests.length}</span>
+        </button>
+        <button class="tab-btn${sub === 'responses' ? ' tab-btn--active' : ''}" data-approvals-sub="responses">
+          <i class="ti ti-message-check"></i> Responses Awaiting Your Approval <span class="filter-chip-count">${filteredResponses.length}</span>
+        </button>
       </div>
-      <div class="queue-group">
-        <div class="queue-group-title"><i class="ti ti-message-check"></i> Responses Awaiting Your Approval <span class="badge badge-outline">${filteredResponses.length}</span></div>
-        ${this._responseApprovalPanel(filteredResponses)}
-      </div>
+      ${sub === 'requests'
+        ? this._listPanel(null, filteredRequests, { orgCol: 'To', orgKey: 'to_org' })
+        : this._responseApprovalPanel(filteredResponses)}
     `;
-    this._bindListActions(resultsEl, filteredRequests);
+    resultsEl.querySelectorAll('[data-approvals-sub]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this._state.approvalsSub = btn.dataset.approvalsSub;
+        this._renderApprovalsFiltered();
+      });
+    });
+    if (sub === 'requests') this._bindListActions(resultsEl, filteredRequests);
   },
 
   _responseApprovalPanel(items) {
@@ -503,7 +516,7 @@ const RequestsView = {
             ${items.map(resp => `
               <tr>
                 <td data-label="Reference">${resp.request?.reference_number || '—'}</td>
-                <td data-label="Request Subject"><span class="${resp.request?.subject_language === 'dv' ? 'field-divehi' : ''}">${resp.request?.subject || ''}</span></td>
+                <td data-label="Request Subject"><span class="${RichEditor.dvClass(resp.request?.subject, resp.request?.subject_language)}">${resp.request?.subject || ''}</span></td>
                 <td data-label="From">${resp.request?.from_org?.name || ''}</td>
                 <td data-label="Submitted">${new Date(resp.created_at).toLocaleDateString()}</td>
                 <td data-label="Actions"><a class="btn btn-secondary btn-xs" href="#request-detail?id=${resp.request?.id}">View</a></td>
@@ -565,7 +578,7 @@ const RequestsView = {
             ${items.map(ir => `
               <tr>
                 <td data-label="Case">${ir.parent_request?.reference_number || ir.parent_request?.subject || '—'}</td>
-                <td data-label="Subject"><span class="${ir.subject_language === 'dv' ? 'field-divehi' : ''}">${ir.subject}</span></td>
+                <td data-label="Subject"><span class="${RichEditor.dvClass(ir.subject, ir.subject_language)}">${ir.subject}</span></td>
                 <td data-label="From → To">${ir.from_section?.name || ''} → ${ir.to_section?.name || ''}</td>
                 <td data-label="Status"><span class="badge badge-outline">${ir.status.replace(/_/g, ' ')}</span></td>
                 <td data-label="Sent">${new Date(ir.created_at).toLocaleDateString()}</td>
@@ -612,10 +625,10 @@ const RequestsView = {
     return `
       <tr>
         <td data-label="Reference">${r.reference_number || '<span class="structure-empty">Draft</span>'}</td>
-        <td data-label="Subject"><span class="${r.subject_language === 'dv' ? 'field-divehi' : ''}">${r.subject}</span></td>
+        <td data-label="Subject"><span class="${RichEditor.dvClass(r.subject, r.subject_language)}">${r.subject}</span></td>
         <td data-label="${opts.orgCol}">${orgName}</td>
         <td data-label="Status">${this._statusBadge(r.status, r.deadline)}</td>
-        <td data-label="Deadline">${r.deadline || '—'}</td>
+        <td data-label="Deadline">${this._deadlineCell(r.deadline, r.status)}</td>
         <td data-label="Actions">
           <a class="btn btn-secondary btn-xs" href="#request-detail?id=${r.id}">View</a>
           ${needsReceiving ? `<button class="btn btn-primary btn-xs" data-mark-received="${r.id}">Mark Received</button>` : ''}
@@ -663,6 +676,73 @@ const RequestsView = {
     };
     const [label, cls] = map[status] || [status, 'badge-outline'];
     return `<span class="badge ${cls}">${label}</span>`;
+  },
+
+  // ── Deadline helpers (shared with request-detail.js, same pattern
+  //    as _statusBadge) ─────────────────────────────────────────────
+  // The deadline can be typed as a NUMBER OF DAYS or picked as an end
+  // DATE — the two inputs stay in sync (days fills the date, the date
+  // computes the days) and only the date input carries the form value,
+  // so submit handlers keep reading fd.get('deadline') unchanged.
+  _deadlineFieldHtml(value = '') {
+    return `
+      <div class="field-group">
+        <label class="field-label">Deadline (optional)</label>
+        <div class="deadline-input-row">
+          <input class="field-input-plain deadline-days-input" type="number" min="1" max="365" placeholder="Days" data-deadline-days />
+          <span class="deadline-input-or">or</span>
+          <input class="field-input-plain" type="date" name="deadline" value="${value}" data-deadline-date />
+        </div>
+        <div class="field-hint" data-deadline-hint>Enter a number of days or pick an end date.</div>
+      </div>
+    `;
+  },
+
+  _bindDeadlineField(form) {
+    const daysEl = form.querySelector('[data-deadline-days]');
+    const dateEl = form.querySelector('[data-deadline-date]');
+    const hintEl = form.querySelector('[data-deadline-hint]');
+    if (!daysEl || !dateEl) return;
+    const MS_DAY = 86400000;
+    // Same UTC-date convention as every other deadline comparison in
+    // this file (new Date().toISOString().slice(0, 10)).
+    const todayStart = () => new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00');
+    const diffDays = () => Math.round((new Date(dateEl.value + 'T00:00:00') - todayStart()) / MS_DAY);
+    const updateHint = () => {
+      if (!dateEl.value) { hintEl.textContent = 'Enter a number of days or pick an end date.'; return; }
+      const diff = diffDays();
+      hintEl.textContent = diff < 0
+        ? `That date is ${-diff} day${-diff === 1 ? '' : 's'} in the past.`
+        : `Due ${dateEl.value} — ${diff === 0 ? 'today' : `${diff} day${diff === 1 ? '' : 's'} from today`}.`;
+    };
+    daysEl.addEventListener('input', () => {
+      const days = parseInt(daysEl.value, 10);
+      if (!days || days < 1) { updateHint(); return; }
+      dateEl.value = new Date(todayStart().getTime() + days * MS_DAY).toISOString().slice(0, 10);
+      updateHint();
+    });
+    dateEl.addEventListener('change', () => {
+      if (dateEl.value) {
+        const diff = diffDays();
+        daysEl.value = diff > 0 ? diff : '';
+      }
+      updateHint();
+    });
+    // Pre-fill days + hint when editing a draft that already has one.
+    if (dateEl.value) dateEl.dispatchEvent(new Event('change'));
+  },
+
+  // Date + a compact "Xd left / due today / overdue Xd" chip for list
+  // cells and detail headers; closed/responded items show the bare
+  // date (nothing is "remaining" on a finished case).
+  _deadlineCell(deadline, status) {
+    if (!deadline) return '—';
+    if (['closed', 'responded'].includes(status)) return deadline;
+    const today = new Date().toISOString().slice(0, 10);
+    const diff = Math.round((new Date(deadline + 'T00:00:00') - new Date(today + 'T00:00:00')) / 86400000);
+    const label = diff < 0 ? `overdue ${-diff}d` : diff === 0 ? 'due today' : `${diff}d left`;
+    const cls = diff < 0 ? ' deadline-remaining--overdue' : diff <= 2 ? ' deadline-remaining--soon' : '';
+    return `${deadline} <span class="deadline-remaining${cls}">${label}</span>`;
   },
 
   // ── Compose ──────────────────────────────────────────────────
@@ -719,9 +799,15 @@ const RequestsView = {
           </div>
           <div id="compose-body"></div>
         </div>
+        ${this._deadlineFieldHtml()}
         <div class="field-group">
-          <label class="field-label">Deadline (optional)</label>
-          <input class="field-input-plain" type="date" name="deadline" />
+          <label class="field-label">Attachments</label>
+          <label class="attachment-dropzone" id="compose-dropzone">
+            <i class="ti ti-cloud-upload"></i>
+            <span>Drag files here, or <span class="attachment-browse-link">browse</span></span>
+            <input type="file" multiple class="hidden" id="compose-file-input" />
+          </label>
+          <div class="attachments-list" id="compose-pending-files"></div>
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
@@ -734,8 +820,52 @@ const RequestsView = {
     const form = document.getElementById('compose-form');
     const editor = RichEditor.create(document.getElementById('compose-body'), { language: 'en' });
     const subjectInput = document.getElementById('compose-subject');
-    RichEditor.bindLangToggle(form, 'subjectLanguage', (lang) => subjectInput.classList.toggle('field-divehi', lang === 'dv'));
+    const syncSubjectLang = (lang) => subjectInput.classList.toggle('field-divehi', lang === 'dv');
+    RichEditor.bindLangToggle(form, 'subjectLanguage', syncSubjectLang);
+    RichEditor.bindAutoDetect(subjectInput, form, 'subjectLanguage', syncSubjectLang);
     RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
+    this._bindDeadlineField(form);
+
+    // Files chosen here queue in memory — the request row doesn't exist
+    // yet for attachments to point at, so they're actually uploaded
+    // right after createRequest() succeeds, before navigating away.
+    this._pendingFiles = [];
+    const pendingListEl = document.getElementById('compose-pending-files');
+    const renderPendingFiles = () => {
+      pendingListEl.innerHTML = this._pendingFiles.map((f, i) => `
+        <span class="attachment-chip" data-remove-pending="${i}">
+          <i class="ti ti-paperclip"></i> ${this._escapeHtml(f.name)}
+          <i class="ti ti-x"></i>
+        </span>
+      `).join('');
+      pendingListEl.querySelectorAll('[data-remove-pending]').forEach(chip => {
+        chip.addEventListener('click', () => {
+          this._pendingFiles.splice(Number(chip.dataset.removePending), 1);
+          renderPendingFiles();
+        });
+      });
+    };
+    const dropzone = document.getElementById('compose-dropzone');
+    const fileInput = document.getElementById('compose-file-input');
+    fileInput.addEventListener('change', () => {
+      this._pendingFiles.push(...Array.from(fileInput.files || []));
+      fileInput.value = '';
+      renderPendingFiles();
+    });
+    dropzone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropzone.classList.add('attachment-dropzone--active');
+    });
+    dropzone.addEventListener('dragleave', (e) => {
+      if (e.relatedTarget && dropzone.contains(e.relatedTarget)) return;
+      dropzone.classList.remove('attachment-dropzone--active');
+    });
+    dropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropzone.classList.remove('attachment-dropzone--active');
+      this._pendingFiles.push(...Array.from(e.dataTransfer?.files || []));
+      renderPendingFiles();
+    });
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -758,8 +888,17 @@ const RequestsView = {
           language: fd.get('language'),
           deadline: fd.get('deadline') || null,
         });
+        const failures = [];
+        for (const file of this._pendingFiles) {
+          try {
+            await AttachmentsAPI.upload('request', result.id, file);
+          } catch (err) {
+            failures.push(`${file.name}: ${err.message || 'upload failed'}`);
+          }
+        }
         this._closeModal();
         Router.navigate('request-detail', { id: result.id });
+        if (failures.length > 0) alert(`Draft saved, but some attachments failed to upload:\n${failures.join('\n')}`);
       } catch (err) {
         errEl.textContent = err.message;
         errEl.classList.remove('hidden');

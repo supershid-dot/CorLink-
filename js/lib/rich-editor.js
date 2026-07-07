@@ -499,5 +499,51 @@ const RichEditor = (() => {
         });
       });
     },
+
+    // ── Thaana / Divehi auto-detection ─────────────────────────────
+    // U+0780–U+07BF is the Thaana block. Text render sites use
+    // isDivehi(text, lang) so Divehi content aligns right BY DEFAULT
+    // even when the row predates the language toggle or the author
+    // never clicked it — the stored language wins when set to 'dv',
+    // detection covers everything else.
+    containsThaana(text) {
+      return /[ހ-޿]/.test(text || '');
+    },
+
+    isDivehi(textOrHtml, lang) {
+      if (lang === 'dv') return true;
+      return this.containsThaana(String(textOrHtml || '').replace(/<[^>]+>/g, ''));
+    },
+
+    // ' field-divehi' (leading space, ready for class-attr interpolation)
+    // when the text should render RTL, '' otherwise.
+    dvClass(textOrHtml, lang) {
+      return this.isDivehi(textOrHtml, lang) ? ' field-divehi' : '';
+    },
+
+    // Programmatically flips a langToggleHtml() instance (hidden input +
+    // active pill) without simulating a click.
+    setLangToggle(container, name, lang) {
+      const toggle = container.querySelector(`[data-lang-toggle="${name}"]`);
+      if (!toggle) return;
+      toggle.querySelector('input[type="hidden"]').value = lang;
+      toggle.querySelectorAll('.lang-toggle-btn').forEach(b => b.classList.toggle('lang-toggle-btn--active', b.dataset.value === lang));
+    },
+
+    // Auto-syncs a toggle from what the user actually types: Thaana in
+    // the field flips it to Divehi (RTL, Faruma), clearing back to
+    // Latin flips it to English — no manual toggle click needed. The
+    // pill stays clickable as a manual override; it just re-syncs on
+    // the next keystroke that changes the script.
+    bindAutoDetect(inputEl, container, name, onChange) {
+      inputEl.addEventListener('input', () => {
+        const lang = this.containsThaana(inputEl.value) ? 'dv' : 'en';
+        const hidden = container.querySelector(`[data-lang-toggle="${name}"] input[type="hidden"]`);
+        if (hidden && hidden.value !== lang) {
+          this.setLangToggle(container, name, lang);
+          onChange(lang);
+        }
+      });
+    },
   };
 })();

@@ -129,10 +129,11 @@ const DashboardView = {
   async _loadActionNeeded(user) {
     const listEl = document.getElementById('action-list');
     try {
-      const [inbox, sent, mySections] = await Promise.all([
+      const [inbox, sent, mySections, returnedApprovals] = await Promise.all([
         RequestsAPI.listInbox(user.org_id),
         RequestsAPI.listSent(user.org_id),
         RequestsAPI.mySections(),
+        RequestsAPI.listReturnedApprovals(),
       ]);
 
       const rows = [];
@@ -152,6 +153,18 @@ const DashboardView = {
 
       const responseNotStarted = inbox.filter(r => r.status === 'in_progress' && (r.responses || []).length === 0).length;
       rows.push({ icon: 'ti-edit-off', label: 'Response Not Started', count: responseNotStarted, href: '#requests?tab=inbox&filter=response_not_started' });
+
+      // Drafts a supervisor bounced back to ME that I haven't
+      // resubmitted yet — request drafts live in my Sent list, response
+      // drafts ride embedded on Inbox items (my org is the responder).
+      // Once resubmitted (pending_approval) or approved they drop out.
+      const returnedReq = new Set(returnedApprovals.filter(a => a.record_type === 'request').map(a => a.record_id));
+      const returnedResp = new Set(returnedApprovals.filter(a => a.record_type === 'response').map(a => a.record_id));
+      const returnedForCorrection =
+        sent.filter(r => r.status === 'draft' && r.created_by === user.id && returnedReq.has(r.id)).length
+        + inbox.reduce((sum, r) => sum + (r.responses || []).filter(resp =>
+            resp.status === 'draft' && resp.created_by === user.id && returnedResp.has(resp.id)).length, 0);
+      rows.push({ icon: 'ti-corner-up-left', label: 'Returned for Correction', count: returnedForCorrection, href: '#requests?tab=sent&filter=drafts' });
 
       if (this._isSupervisor) {
         const [requestApprovals, responseApprovals] = await Promise.all([
@@ -284,7 +297,7 @@ const DashboardView = {
           </div>
           <div class="deadline-row-body">
             <div class="deadline-row-ref">${r.reference_number || 'Draft'}</div>
-            <div class="deadline-row-subject"><span class="${r.subject_language === 'dv' ? 'field-divehi' : ''}">${r.subject}</span></div>
+            <div class="deadline-row-subject"><span class="${RichEditor.dvClass(r.subject, r.subject_language)}">${r.subject}</span></div>
           </div>
           <span class="deadline-row-status deadline-row-status--${urgency}">${statusLabel}</span>
         </a>
