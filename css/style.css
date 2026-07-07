@@ -1700,8 +1700,8 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
 /* Writing-heavy modals (compose request, draft/edit a response or an
    internal reply) get real room to work in — the 440px default is for
    small pick-one forms like route/assign. */
-.modal-box--lg { max-width: 780px; }
-.modal-box--lg .rich-editor-body { min-height: 260px; }
+.modal-box--lg { max-width: 960px; width: 94vw; max-height: 94vh; }
+.modal-box--lg .rich-editor-body { min-height: 360px; }
 .modal-box h3 { margin-bottom: 16px; }
 .modal-form {
   display: flex;
