@@ -165,7 +165,8 @@ const RequestDetailView = {
           </div>
 
           ${this._renderApprovalHistory(entry.approvals, ctx.isFromOrgMember)}
-          ${this._renderAttachments('request', r.id, entry.attachments, ctx.isFromOrgMember || ctx.isToOrgMember,
+          ${this._renderAttachments('request', r.id, entry.attachments,
+            (ctx.isFromOrgMember || ctx.isToOrgMember) && !(r.status === 'draft' && !ctx.isCreator),
             r.is_locked || (r.status === 'pending_approval' && !ctx.isCreator))}
         </div>
 
@@ -323,7 +324,7 @@ const RequestDetailView = {
       </form>
     `, { large: true });
     const form = document.getElementById('review-comment-form');
-    const editor = RichEditor.create(document.getElementById('review-comment-body'), { language: 'en' });
+    const editor = RichEditor.create(document.getElementById('review-comment-body'), { language: 'dv' });
     RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -369,6 +370,10 @@ const RequestDetailView = {
 
   _renderResponse(rd, request) {
     const resp = rd.response;
+    // Same "resolve every open comment before resubmitting" gate as the
+    // request side (_renderActions) — computed once here for both the
+    // count text and the button-vs-note branch below.
+    const openRespComments = (rd.reviewComments || []).filter(c => !c.resolved_at).length;
     return `
       <div class="thread-message thread-message--response">
         <div class="thread-message-kind">Response</div>
@@ -384,12 +389,17 @@ const RequestDetailView = {
         ${['draft', 'pending_approval'].includes(resp.status) && resp.created_by === this._user.id ? `
           <div class="thread-message-actions">
             <button class="btn btn-secondary btn-xs" data-edit-response="${resp.id}">Edit Draft</button>
-            ${resp.status === 'draft' ? `<button class="btn btn-primary btn-xs" data-submit-response="${resp.id}" data-section="${request.to_section_id}">Submit for Approval</button>` : ''}
+            ${resp.status === 'draft' ? (
+              openRespComments > 0
+                ? `<div class="field-hint"><i class="ti ti-message-2"></i> Resolve ${openRespComments} open review comment${openRespComments === 1 ? '' : 's'} above before resubmitting for approval.</div>`
+                : `<button class="btn btn-primary btn-xs" data-submit-response="${resp.id}" data-section="${request.to_section_id}">Submit for Approval</button>`
+            ) : ''}
           </div>
         ` : ''}
       </div>
       ${this._renderApprovalHistory(rd.approvals, this._user.org_id === request.to_org_id)}
-      ${this._renderAttachments('response', resp.id, rd.attachments, true,
+      ${this._renderAttachments('response', resp.id, rd.attachments,
+        !(resp.status === 'draft' && resp.created_by !== this._user.id),
         resp.is_locked || (resp.status === 'pending_approval' && resp.created_by !== this._user.id))}
       ${resp.status === 'sent' && !resp.received_at && request.from_org_id === this._user.org_id && this._canReceive ? `
         <div class="thread-message-actions">
@@ -557,8 +567,17 @@ const RequestDetailView = {
     if (['draft', 'pending_approval'].includes(r.status) && ctx.isCreator) {
       blocks.push(`<button class="btn btn-secondary btn-sm" data-edit-request="${r.id}">Edit Draft</button>`);
     }
+    // Every comment a supervisor left has to be marked resolved before
+    // the creator can send this back for approval again — otherwise
+    // nothing stops a resubmission that never actually addressed the
+    // feedback. Same open-comment count shown to the supervisor on the
+    // approval side (_renderApprovalHistory's gate); here it blocks the
+    // OTHER end of the same loop.
     if (r.status === 'draft' && ctx.isCreator) {
-      blocks.push(`<button class="btn btn-primary btn-sm" data-submit-request="${r.id}" data-section="${r.from_section_id}">Submit for Approval</button>`);
+      const openReqComments = (entry.reviewComments || []).filter(c => !c.resolved_at).length;
+      blocks.push(openReqComments > 0
+        ? `<div class="field-hint"><i class="ti ti-message-2"></i> Resolve ${openReqComments} open review comment${openReqComments === 1 ? '' : 's'} above before resubmitting for approval.</div>`
+        : `<button class="btn btn-primary btn-sm" data-submit-request="${r.id}" data-section="${r.from_section_id}">Submit for Approval</button>`);
     }
 
     // Requester-side supervisor approving/returning. While ANY review
@@ -659,7 +678,7 @@ const RequestDetailView = {
     // Response compose forms — one RichEditor instance per form.
     main.querySelectorAll('.response-form').forEach(form => {
       const requestId = form.dataset.responseForm;
-      const editor = RichEditor.create(form.querySelector('.response-body'), { language: 'en' });
+      const editor = RichEditor.create(form.querySelector('.response-body'), { language: 'dv' });
       RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -881,10 +900,10 @@ const RequestDetailView = {
       <form id="comment-form" class="modal-form">
         <div class="field-group field-group-row">
           <label class="field-label">Comment${required ? '' : ' (optional)'}</label>
-          ${RichEditor.langToggleHtml('language', 'en')}
+          ${RichEditor.langToggleHtml('language', 'dv')}
         </div>
         <div class="field-group">
-          <textarea class="field-input-plain" name="comment" id="comment-textarea" rows="4" ${required ? 'required placeholder="Explain what needs to change"' : ''}></textarea>
+          <textarea class="field-input-plain field-divehi" name="comment" id="comment-textarea" rows="4" ${required ? 'required placeholder="Explain what needs to change"' : ''}></textarea>
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
@@ -1205,14 +1224,14 @@ const RequestDetailView = {
         <div class="field-group">
           <div class="field-group-row">
             <label class="field-label">Subject</label>
-            ${RichEditor.langToggleHtml('subjectLanguage', 'en')}
+            ${RichEditor.langToggleHtml('subjectLanguage', 'dv')}
           </div>
-          <input class="field-input-plain" name="subject" id="followup-subject" required value="Re: ${r.subject}" />
+          <input class="field-input-plain field-divehi" name="subject" id="followup-subject" required value="Re: ${r.subject}" />
         </div>
         <div class="field-group">
           <div class="field-group-row">
             <label class="field-label">Message</label>
-            ${RichEditor.langToggleHtml('language', 'en')}
+            ${RichEditor.langToggleHtml('language', 'dv')}
           </div>
           <div id="followup-body"></div>
         </div>
@@ -1225,7 +1244,7 @@ const RequestDetailView = {
       </form>
     `, { large: true });
     const form = document.getElementById('followup-form');
-    const editor = RichEditor.create(document.getElementById('followup-body'), { language: 'en' });
+    const editor = RichEditor.create(document.getElementById('followup-body'), { language: 'dv' });
     const followupSubject = document.getElementById('followup-subject');
     RequestsView._bindDeadlineField(form);
     const syncFollowupSubjectLang = (lang) => followupSubject.classList.toggle('field-divehi', lang === 'dv');
@@ -1289,14 +1308,14 @@ const RequestDetailView = {
         <div class="field-group">
           <div class="field-group-row">
             <label class="field-label">Subject</label>
-            ${RichEditor.langToggleHtml('subjectLanguage', 'en')}
+            ${RichEditor.langToggleHtml('subjectLanguage', 'dv')}
           </div>
-          <input class="field-input-plain" name="subject" id="internal-subject" required />
+          <input class="field-input-plain field-divehi" name="subject" id="internal-subject" required />
         </div>
         <div class="field-group">
           <div class="field-group-row">
             <label class="field-label">Message</label>
-            ${RichEditor.langToggleHtml('language', 'en')}
+            ${RichEditor.langToggleHtml('language', 'dv')}
           </div>
           <div id="internal-body"></div>
         </div>
@@ -1308,7 +1327,7 @@ const RequestDetailView = {
       </form>
     `, { large: true });
     const form = document.getElementById('internal-form');
-    const editor = RichEditor.create(document.getElementById('internal-body'), { language: 'en' });
+    const editor = RichEditor.create(document.getElementById('internal-body'), { language: 'dv' });
     const internalSubject = document.getElementById('internal-subject');
     const syncInternalSubjectLang = (lang) => internalSubject.classList.toggle('field-divehi', lang === 'dv');
     RichEditor.bindLangToggle(form, 'subjectLanguage', syncInternalSubjectLang);
@@ -1421,7 +1440,7 @@ const RequestDetailView = {
         <div class="field-group">
           <div class="field-group-row">
             <label class="field-label">Reply</label>
-            ${RichEditor.langToggleHtml('language', existing?.language || 'en')}
+            ${RichEditor.langToggleHtml('language', existing?.language || 'dv')}
           </div>
           <div id="internal-reply-body"></div>
         </div>
@@ -1432,7 +1451,7 @@ const RequestDetailView = {
         </div>
       </form>
     `, { large: true });
-    const editor = RichEditor.create(document.getElementById('internal-reply-body'), { language: existing?.language || 'en' });
+    const editor = RichEditor.create(document.getElementById('internal-reply-body'), { language: existing?.language || 'dv' });
     if (existing) editor.setHTML(existing.body);
     const form = document.getElementById('internal-reply-form');
     RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));

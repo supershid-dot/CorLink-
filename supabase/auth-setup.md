@@ -56,6 +56,11 @@ match what changed since, instead of re-running the full files:
   closes a gap where an authority-org member could insert a prisoner_letter directly
   via the API despite the compose button being hidden for them — letters can now
   only ever be created MCS -> authority
+- `supabase/patch-approvals-visibility-fix.sql` — fixes `approvals_select`, which
+  previously only let the reviewer, any org's admin (unscoped), or the record's
+  literal creator see an approval row — hiding the "approved by [Supervisor]" banner
+  from the receiving organization's supervisors/section members. Now mirrors
+  requests_select/responses_select's visibility shape exactly.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 
