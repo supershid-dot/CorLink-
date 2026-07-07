@@ -176,6 +176,8 @@ const RequestDetailView = {
 
         ${this._renderInternalCollab(entry)}
 
+        ${this._renderDraftResponseBox(r, ctx, entry)}
+
         ${entry.responseDetails.length > 0 ? `
           <div class="thread">
             ${entry.responseDetails.map(rd => this._renderResponse(rd, r)).join('')}
@@ -622,17 +624,6 @@ const RequestDetailView = {
       blocks.push(`<button class="btn btn-secondary btn-sm" data-route-request="${r.id}">Route to Another Section</button>`);
     }
 
-    // Recipient-side composing the response — only AFTER the section
-    // has assigned a staff member (receive -> route -> assign -> draft;
-    // an unassigned request shows Assign/Route actions instead of a
-    // premature drafting box). Visible to the assignee and to
-    // supervisors. Only one response per request in this first pass —
-    // once it exists, further action happens on that response instead.
-    if (['in_progress'].includes(r.status) && ctx.isToOrgMember && entry.responseDetails.length === 0
-        && r.assigned_to && (ctx.isAssignee || this._isSupervisor)) {
-      blocks.push(this._composeResponseHtml(r.id));
-    }
-
     // Recipient-side supervisor approving/returning the response —
     // same open-comments gate as the request-side approval above.
     const pendingResponse = entry.responseDetails.find(rd => rd.response.status === 'pending_approval');
@@ -656,12 +647,35 @@ const RequestDetailView = {
     return `<div class="panel"><h3>Actions</h3><div class="detail-actions">${blocks.join('')}</div></div>`;
   },
 
+  // Rendered as its own panel AFTER Internal Collaboration (see
+  // _renderRequestBlock) rather than inside _renderActions above it —
+  // drafting the actual reply always comes below the info-gathering
+  // step, never above it, regardless of whether Internal Collaboration
+  // has anything in it yet for this case.
+  _renderDraftResponseBox(r, ctx, entry) {
+    // Only AFTER the section has assigned a staff member (receive ->
+    // route -> assign -> draft; an unassigned request shows Assign/
+    // Route actions instead of a premature drafting box). Visible ONLY
+    // to the assigned staff member — a supervisor who is NOT the
+    // assignee sees the case (routing/assignment/approval actions) but
+    // not this drafting box; a supervisor who assigned the response to
+    // themselves still sees it, since that's exactly what
+    // ctx.isAssignee already covers. Only one response per request in
+    // this first pass — once it exists, further action happens on
+    // that response instead.
+    if (!(['in_progress'].includes(r.status) && ctx.isToOrgMember && entry.responseDetails.length === 0
+        && r.assigned_to && ctx.isAssignee)) {
+      return '';
+    }
+    return `<div class="panel">${this._composeResponseHtml(r.id)}</div>`;
+  },
+
   _composeResponseHtml(requestId) {
     return `
       <form class="modal-form response-form" data-response-form="${requestId}">
         <div class="field-group field-group-row">
           <label class="field-label">Draft a Response</label>
-          ${RichEditor.langToggleHtml('language', 'en')}
+          ${RichEditor.langToggleHtml('language', 'dv')}
         </div>
         <div class="field-group">
           <div class="response-body"></div>
@@ -1279,6 +1293,12 @@ const RequestDetailView = {
 
   async _openInternalRequestModal(parentRequestId) {
     const entry = this._conversation.find(e => e.request.id === parentRequestId);
+    // Prefilled with the ORIGINAL request's own subject (and its actual
+    // language, not the new-compose Divehi default) — looping in a
+    // section is about the same case, so it starts on the same subject
+    // rather than a blank field the drafter has to retype.
+    const origSubject = entry.request.subject;
+    const origSubjectLang = entry.request.subject_language === 'dv' ? 'dv' : 'en';
     const fromSectionId = entry.request.to_section_id;
     let sections;
     try {
@@ -1308,9 +1328,9 @@ const RequestDetailView = {
         <div class="field-group">
           <div class="field-group-row">
             <label class="field-label">Subject</label>
-            ${RichEditor.langToggleHtml('subjectLanguage', 'dv')}
+            ${RichEditor.langToggleHtml('subjectLanguage', origSubjectLang)}
           </div>
-          <input class="field-input-plain field-divehi" name="subject" id="internal-subject" required />
+          <input class="field-input-plain${origSubjectLang === 'dv' ? ' field-divehi' : ''}" name="subject" id="internal-subject" required value="${this._escapeHtml(origSubject)}" />
         </div>
         <div class="field-group">
           <div class="field-group-row">
