@@ -577,7 +577,7 @@ const RequestsView = {
             ${items.map(resp => `
               <tr>
                 <td data-label="Reference">${resp.request?.reference_number || '—'}</td>
-                <td data-label="Request Subject"><span class="${RichEditor.dvClass(resp.request?.subject, resp.request?.subject_language)}">${resp.request?.subject || ''}</span></td>
+                <td data-label="Request Subject" class="${RichEditor.dvClass(resp.request?.subject, resp.request?.subject_language)}">${resp.request?.subject || ''}</td>
                 <td data-label="From">${resp.request?.from_org?.name || ''}</td>
                 <td data-label="Submitted">${new Date(resp.created_at).toLocaleDateString()}</td>
                 <td data-label="Actions"><a class="btn btn-secondary btn-xs" href="#request-detail?id=${resp.request?.id}">View</a></td>
@@ -650,7 +650,7 @@ const RequestsView = {
             ${items.map(ir => `
               <tr>
                 <td data-label="Case">${ir.parent_request?.reference_number || ir.parent_request?.subject || '—'}</td>
-                <td data-label="Subject"><span class="${RichEditor.dvClass(ir.subject, ir.subject_language)}">${ir.subject}</span></td>
+                <td data-label="Subject" class="${RichEditor.dvClass(ir.subject, ir.subject_language)}">${ir.subject}</td>
                 <td data-label="From → To">${ir.from_section?.name || ''} → ${ir.to_section?.name || ''}</td>
                 <td data-label="Status"><span class="badge badge-outline">${ir.status.replace(/_/g, ' ')}</span></td>
                 <td data-label="Sent">${new Date(ir.created_at).toLocaleDateString()}</td>
@@ -697,7 +697,7 @@ const RequestsView = {
     return `
       <tr>
         <td data-label="Reference">${r.reference_number || '<span class="structure-empty">Draft</span>'}</td>
-        <td data-label="Subject"><span class="${RichEditor.dvClass(r.subject, r.subject_language)}">${r.subject}</span></td>
+        <td data-label="Subject" class="${RichEditor.dvClass(r.subject, r.subject_language)}">${r.subject}</td>
         <td data-label="${opts.orgCol}">${orgName}</td>
         <td data-label="Status">${this._statusBadge(r.status, r.deadline)}</td>
         <td data-label="Deadline">${this._deadlineCell(r.deadline, r.status)}</td>
