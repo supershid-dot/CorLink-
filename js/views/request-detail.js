@@ -97,7 +97,7 @@ const RequestDetailView = {
       <div class="detail-header">
         <a href="#requests" class="btn btn-secondary btn-sm"><i class="ti ti-arrow-left"></i> Back</a>
         <div class="detail-header-title">
-          <h2 class="page-title${root.subject_language === 'dv' ? ' field-divehi' : ''}">${root.subject}</h2>
+          <h2 class="page-title${RichEditor.dvClass(root.subject, root.subject_language)}">${root.subject}</h2>
           ${multiRound ? `<span class="badge badge-outline">${this._conversation.length} round-trips</span>` : ''}
         </div>
       </div>
@@ -138,7 +138,7 @@ const RequestDetailView = {
             <span class="round-badge">Round ${index + 1}</span>
             ${RequestsView._statusBadge(r.status, r.deadline)}
             ${r.reference_number ? `<span class="round-header-meta">${r.reference_number}</span>` : ''}
-            ${r.deadline ? `<span class="round-header-meta">Due ${r.deadline}</span>` : ''}
+            ${r.deadline ? `<span class="round-header-meta">Due ${RequestsView._deadlineCell(r.deadline, r.status)}</span>` : ''}
           </div>
         ` : ''}
 
@@ -147,7 +147,7 @@ const RequestDetailView = {
           ${!multiRound && r.reference_number ? `<span class="structure-empty">${r.reference_number}</span>` : ''}
           ${isToOrgMember ? `<span class="structure-empty">${r.to_section ? 'Routed to ' + r.to_section.name : 'Not yet routed'}</span>` : ''}
           ${isToOrgMember ? `<span class="structure-empty">Assigned: ${r.assigned_to_user?.full_name || 'Unassigned'}</span>` : ''}
-          ${!multiRound && r.deadline ? `<span class="structure-empty">Due ${r.deadline}</span>` : ''}
+          ${!multiRound && r.deadline ? `<span class="structure-empty">Due ${RequestsView._deadlineCell(r.deadline, r.status)}</span>` : ''}
         </div>
 
         <div class="thread">
@@ -165,7 +165,8 @@ const RequestDetailView = {
           </div>
 
           ${this._renderApprovalHistory(entry.approvals, ctx.isFromOrgMember)}
-          ${this._renderAttachments('request', r.id, entry.attachments, ctx.isFromOrgMember || ctx.isToOrgMember, r.is_locked)}
+          ${this._renderAttachments('request', r.id, entry.attachments, ctx.isFromOrgMember || ctx.isToOrgMember,
+            r.is_locked || (r.status === 'pending_approval' && !ctx.isCreator))}
         </div>
 
         <div class="detail-actions-panel" data-request-block="${r.id}">
@@ -253,10 +254,17 @@ const RequestDetailView = {
           ${unresolved > 0 ? `<span class="badge badge-warning">${unresolved} open</span>` : ''}
           ${canComment ? `<button class="btn btn-secondary btn-xs" data-add-comment-type="${recordType}" data-add-comment-id="${record.id}">Add Comment</button>` : ''}
         </div>
+        ${canComment ? `
+          <div class="field-hint review-comments-hint"><i class="ti ti-bulb"></i>
+            How to comment: highlight a passage in the draft above, then click
+            “Add Comment” — the selected text is quoted with your note, like a
+            Word comment. The drafter makes the correction, marks each comment
+            resolved, and resubmits; the draft can only be approved once every
+            comment is resolved.</div>` : ''}
         ${comments.map(c => `
           <div class="review-comment${c.resolved_at ? ' review-comment--resolved' : ''}">
-            ${c.quoted_text ? `<div class="review-comment-quote">“${this._escapeHtml(c.quoted_text)}”</div>` : ''}
-            <div class="review-comment-text">${this._escapeHtml(c.comment)}</div>
+            ${c.quoted_text ? `<div class="review-comment-quote${RichEditor.dvClass(c.quoted_text)}">“${this._escapeHtml(c.quoted_text)}”</div>` : ''}
+            <div class="review-comment-text${RichEditor.dvClass(c.comment)}">${RichEditor.sanitize(c.comment)}</div>
             <div class="review-comment-meta">
               <span><strong>${this._escapeHtml(c.created_by_user?.full_name || 'Unknown')}</strong>${c.created_by_user?.designations?.name ? ', ' + this._escapeHtml(c.created_by_user.designations.name) : ''} — ${new Date(c.created_at).toLocaleString()}</span>
               ${c.resolved_at
@@ -285,6 +293,10 @@ const RequestDetailView = {
     return null;
   },
 
+  // Comment body is a full RichEditor (bold/lists/tables, EN/Dhivehi
+  // toggle) — same writing surface as requests and responses, so a
+  // supervisor can comment in Divehi with correct RTL. Stored as
+  // sanitized HTML; the render site sanitizes again read-time.
   _openAddCommentModal(recordType, recordId, quotedText) {
     const target = this._findCommentTarget(recordType, recordId);
     this._openModal(`
@@ -293,12 +305,15 @@ const RequestDetailView = {
         ${quotedText ? `
           <div class="field-group">
             <label class="field-label">Selected text</label>
-            <div class="review-comment-quote">“${this._escapeHtml(quotedText)}”</div>
+            <div class="review-comment-quote${RichEditor.dvClass(quotedText)}">“${this._escapeHtml(quotedText)}”</div>
           </div>` : `
           <div class="field-hint">Tip: select a passage of the draft first to quote it in your comment.</div>`}
         <div class="field-group">
-          <label class="field-label">Comment</label>
-          <textarea class="field-input-plain" name="comment" rows="4" required placeholder="e.g. Reword this paragraph; add the inmate's case number"></textarea>
+          <div class="field-group-row">
+            <label class="field-label">Comment</label>
+            ${RichEditor.langToggleHtml('language', 'en')}
+          </div>
+          <div id="review-comment-body"></div>
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
@@ -306,16 +321,23 @@ const RequestDetailView = {
           <button type="submit" class="btn btn-primary">Add Comment</button>
         </div>
       </form>
-    `);
+    `, { large: true });
     const form = document.getElementById('review-comment-form');
+    const editor = RichEditor.create(document.getElementById('review-comment-body'), { language: 'en' });
+    RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const fd = new FormData(form);
       const errEl = form.querySelector('.modal-error');
+      const comment = editor.getHTML();
+      if (!comment || comment === '<p><br></p>') {
+        errEl.textContent = 'Comment cannot be empty.';
+        errEl.classList.remove('hidden');
+        return;
+      }
       try {
         await ReviewCommentsAPI.add({
           recordType, recordId, quotedText,
-          comment: fd.get('comment'),
+          comment,
           notifyUserId: target?.creator,
           navRecordId: target?.requestId,
           subject: target?.subject || '',
@@ -367,7 +389,8 @@ const RequestDetailView = {
         ` : ''}
       </div>
       ${this._renderApprovalHistory(rd.approvals, this._user.org_id === request.to_org_id)}
-      ${this._renderAttachments('response', resp.id, rd.attachments, true, resp.is_locked)}
+      ${this._renderAttachments('response', resp.id, rd.attachments, true,
+        resp.is_locked || (resp.status === 'pending_approval' && resp.created_by !== this._user.id))}
       ${resp.status === 'sent' && !resp.received_at && request.from_org_id === this._user.org_id && this._canReceive ? `
         <div class="thread-message-actions">
           <button class="btn btn-secondary btn-xs" data-mark-response-received="${resp.id}">Mark Received</button>
@@ -469,7 +492,7 @@ const RequestDetailView = {
     return `
       <div class="internal-request-row" data-internal-request="${ir.id}">
         <div class="thread-message-header">
-          <strong class="${ir.subject_language === 'dv' ? 'field-divehi' : ''}">${ir.subject}</strong>
+          <strong class="${RichEditor.dvClass(ir.subject, ir.subject_language)}">${ir.subject}</strong>
           <span class="structure-empty">${ir.from_section?.name || ''} → ${ir.to_section?.name || ''}</span>
           <span class="badge ${statusBadge[1]}">${statusBadge[0]}</span>
         </div>
@@ -538,10 +561,18 @@ const RequestDetailView = {
       blocks.push(`<button class="btn btn-primary btn-sm" data-submit-request="${r.id}" data-section="${r.from_section_id}">Submit for Approval</button>`);
     }
 
-    // Requester-side supervisor approving/returning.
+    // Requester-side supervisor approving/returning. While ANY review
+    // comment is still open, Approve & Send is withheld entirely (not
+    // just disabled) — the review loop has to finish first; only
+    // Return is offered. RLS doesn't enforce this (a comment is
+    // advisory), but the UI making approval impossible with open
+    // comments is the whole point of the loop.
     if (r.status === 'pending_approval' && ctx.isFromOrgMember && this._isSupervisor) {
+      const openComments = (entry.reviewComments || []).filter(c => !c.resolved_at).length;
       blocks.push(`
-        <button class="btn btn-primary btn-sm" data-approve-request="${r.id}">Approve &amp; Send</button>
+        ${openComments > 0 ? `
+          <div class="field-hint"><i class="ti ti-message-2"></i> ${openComments} open review comment${openComments === 1 ? '' : 's'} — the drafter must resolve ${openComments === 1 ? 'it' : 'them'} before this can be approved.</div>` : `
+          <button class="btn btn-primary btn-sm" data-approve-request="${r.id}">Approve &amp; Send</button>`}
         <button class="btn btn-secondary btn-sm" data-return-request="${r.id}">Return</button>
       `);
     }
@@ -583,12 +614,16 @@ const RequestDetailView = {
       blocks.push(this._composeResponseHtml(r.id));
     }
 
-    // Recipient-side supervisor approving/returning the response.
+    // Recipient-side supervisor approving/returning the response —
+    // same open-comments gate as the request-side approval above.
     const pendingResponse = entry.responseDetails.find(rd => rd.response.status === 'pending_approval');
     if (pendingResponse && ctx.isToOrgMember && this._isSupervisor) {
+      const openRespComments = (pendingResponse.reviewComments || []).filter(c => !c.resolved_at).length;
       blocks.push(`
         <div class="field-hint">Response awaiting approval:</div>
-        <button class="btn btn-primary btn-sm" data-approve-response="${pendingResponse.response.id}" data-request="${r.id}">Approve &amp; Send Response</button>
+        ${openRespComments > 0 ? `
+          <div class="field-hint"><i class="ti ti-message-2"></i> ${openRespComments} open review comment${openRespComments === 1 ? '' : 's'} — the drafter must resolve ${openRespComments === 1 ? 'it' : 'them'} before this can be approved.</div>` : `
+          <button class="btn btn-primary btn-sm" data-approve-response="${pendingResponse.response.id}" data-request="${r.id}">Approve &amp; Send Response</button>`}
         <button class="btn btn-secondary btn-sm" data-return-response="${pendingResponse.response.id}">Return Response</button>
       `);
     }
@@ -1052,10 +1087,7 @@ const RequestDetailView = {
           </div>
           <div id="edit-request-body"></div>
         </div>
-        <div class="field-group">
-          <label class="field-label">Deadline (optional)</label>
-          <input class="field-input-plain" type="date" name="deadline" value="${r.deadline || ''}" />
-        </div>
+        ${RequestsView._deadlineFieldHtml(r.deadline || '')}
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
@@ -1068,7 +1100,10 @@ const RequestDetailView = {
     editor.setHTML(r.body);
     const editSubject = document.getElementById('edit-request-subject');
     if (r.subject_language === 'dv') editSubject.classList.add('field-divehi');
-    RichEditor.bindLangToggle(form, 'subjectLanguage', (lang) => editSubject.classList.toggle('field-divehi', lang === 'dv'));
+    RequestsView._bindDeadlineField(form);
+    const syncEditSubjectLang = (lang) => editSubject.classList.toggle('field-divehi', lang === 'dv');
+    RichEditor.bindLangToggle(form, 'subjectLanguage', syncEditSubjectLang);
+    RichEditor.bindAutoDetect(editSubject, form, 'subjectLanguage', syncEditSubjectLang);
     RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -1181,10 +1216,7 @@ const RequestDetailView = {
           </div>
           <div id="followup-body"></div>
         </div>
-        <div class="field-group">
-          <label class="field-label">Deadline (optional)</label>
-          <input class="field-input-plain" type="date" name="deadline" />
-        </div>
+        ${RequestsView._deadlineFieldHtml()}
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
@@ -1195,7 +1227,10 @@ const RequestDetailView = {
     const form = document.getElementById('followup-form');
     const editor = RichEditor.create(document.getElementById('followup-body'), { language: 'en' });
     const followupSubject = document.getElementById('followup-subject');
-    RichEditor.bindLangToggle(form, 'subjectLanguage', (lang) => followupSubject.classList.toggle('field-divehi', lang === 'dv'));
+    RequestsView._bindDeadlineField(form);
+    const syncFollowupSubjectLang = (lang) => followupSubject.classList.toggle('field-divehi', lang === 'dv');
+    RichEditor.bindLangToggle(form, 'subjectLanguage', syncFollowupSubjectLang);
+    RichEditor.bindAutoDetect(followupSubject, form, 'subjectLanguage', syncFollowupSubjectLang);
     RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -1275,7 +1310,9 @@ const RequestDetailView = {
     const form = document.getElementById('internal-form');
     const editor = RichEditor.create(document.getElementById('internal-body'), { language: 'en' });
     const internalSubject = document.getElementById('internal-subject');
-    RichEditor.bindLangToggle(form, 'subjectLanguage', (lang) => internalSubject.classList.toggle('field-divehi', lang === 'dv'));
+    const syncInternalSubjectLang = (lang) => internalSubject.classList.toggle('field-divehi', lang === 'dv');
+    RichEditor.bindLangToggle(form, 'subjectLanguage', syncInternalSubjectLang);
+    RichEditor.bindAutoDetect(internalSubject, form, 'subjectLanguage', syncInternalSubjectLang);
     RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();

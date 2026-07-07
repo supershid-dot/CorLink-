@@ -77,7 +77,7 @@ const RequestsAPI = (() => {
     async listInbox(orgId) {
       const db = getSupabase();
       const { data, error } = await db.from('requests')
-        .select('*, from_org:organizations!requests_from_org_id_fkey(name, code), responses(status, received_at)')
+        .select('*, from_org:organizations!requests_from_org_id_fkey(name, code), responses(id, status, received_at, created_by)')
         .eq('to_org_id', orgId)
         .order('created_at', { ascending: false });
       if (error) throw wrapRowError(error);
@@ -90,6 +90,21 @@ const RequestsAPI = (() => {
         .select('*, to_org:organizations!requests_to_org_id_fkey(name, code), responses(status, received_at)')
         .eq('from_org_id', orgId)
         .order('created_at', { ascending: false });
+      if (error) throw wrapRowError(error);
+      return data;
+    },
+
+    // Every approvals row with decision='returned' that RLS lets me see —
+    // the dashboard matches these (record_type, record_id) pairs against
+    // my own still-draft requests/responses to surface "Returned for
+    // Correction". Lightweight two-column select; approvals has no FK
+    // embed onto requests (record_id is polymorphic), so matching
+    // happens client-side against already-fetched lists.
+    async listReturnedApprovals() {
+      const db = getSupabase();
+      const { data, error } = await db.from('approvals')
+        .select('record_type, record_id')
+        .eq('decision', 'returned');
       if (error) throw wrapRowError(error);
       return data;
     },

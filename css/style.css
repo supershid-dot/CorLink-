@@ -1247,6 +1247,53 @@ input.field-divehi, textarea.field-divehi, select.field-divehi {
 .tab-btn:hover { color: var(--color-text); }
 .tab-btn--active { color: var(--color-primary-dark); border-bottom-color: var(--color-primary); }
 
+/* Sub-tabs INSIDE a tab (Approvals: Requests | Responses) — same
+   control, slightly smaller, sitting under the search box rather than
+   at the top of the page. The count pill reuses .filter-chip-count. */
+.tabs--sub { margin-bottom: 16px; }
+.tabs--sub .tab-btn {
+  padding: 8px 12px;
+  font-size: 0.875rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ── Deadline entry: days OR end date, kept in sync ──────────── */
+.deadline-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.deadline-days-input { max-width: 110px; }
+.deadline-input-or {
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+  flex-shrink: 0;
+}
+/* "5d left / due today / overdue 3d" chip next to a deadline date */
+.deadline-remaining {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+.deadline-remaining--soon {
+  background: var(--color-warning-bg);
+  border-color: transparent;
+  color: var(--color-warning-dark);
+}
+.deadline-remaining--overdue {
+  background: var(--color-error-bg);
+  border-color: transparent;
+  color: var(--color-error-dark);
+}
+
 .tab-loading {
   display: flex; align-items: center; gap: 8px;
   color: var(--color-text-muted);
@@ -1849,7 +1896,30 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
   background: var(--color-warning-bg);
   border-radius: var(--radius-sm);
 }
+/* Comment bodies are sanitized rich HTML now (RichEditor in the Add
+   Comment modal) — restore block spacing the same way
+   .thread-message-body does, and flip RTL via .field-divehi when the
+   comment is Divehi (auto-detected at render). */
 .review-comment-text { line-height: 1.5; }
+.review-comment-text p,
+.review-comment-text ul,
+.review-comment-text ol { margin-bottom: 6px; }
+.review-comment-text p:last-child,
+.review-comment-text ul:last-child,
+.review-comment-text ol:last-child { margin-bottom: 0; }
+.review-comment-text ul, .review-comment-text ol { padding-inline-start: 1.5em; }
+/* One-time "how to comment" note shown to the reviewing supervisor */
+.review-comments-hint {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  background: var(--color-bg);
+  border-radius: var(--radius-md);
+  line-height: 1.5;
+}
+.review-comments-hint i { flex-shrink: 0; margin-top: 2px; }
 .review-comment-meta {
   display: flex;
   align-items: center;
