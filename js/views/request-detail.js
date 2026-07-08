@@ -174,7 +174,7 @@ const RequestDetailView = {
           ${this._renderActions(r, ctx, entry)}
         </div>
 
-        ${this._renderInternalCollab(entry)}
+        ${this._renderInternalCollab(entry, ctx)}
 
         ${this._renderDraftResponseBox(r, ctx, entry)}
 
@@ -439,18 +439,17 @@ const RequestDetailView = {
     `;
   },
 
-  _renderInternalCollab(entry) {
+  _renderInternalCollab(entry, ctx) {
     const r = entry.request;
     if (!r.to_section_id) return '';
-    // Internal collaboration is a TO-org-only mechanism — a FROM-org
-    // supervisor happening to also be `this._isSupervisor` globally
-    // shouldn't see "Loop in a Section" for a section in a different
-    // org; the RLS insert check would reject it anyway
-    // (scope_org_id('section', from_section_id) = get_my_org_id()),
-    // but the button shouldn't invite a click that can only fail.
-    const isToOrgMember = this._user.org_id === r.to_org_id;
-    const inMySections = this._mySections.some(s => s.id === r.to_section_id);
-    const canStart = isToOrgMember && (inMySections || this._isSupervisor);
+    // Only the request's actual assigned staff member starts Internal
+    // Collaboration — not any member of the owning section, and not
+    // any org supervisor. Previously any org-wide supervisor (or any
+    // member of the section the request is routed to) saw "Loop in a
+    // Section" here, which let a section that had only been looped in
+    // on an earlier round start yet another round it has no business
+    // starting.
+    const canStart = ctx.isAssignee;
     if (entry.internalRequestDetails.length === 0 && !canStart) return '';
 
     // Deliberately visually distinct from the external thread above it
@@ -477,16 +476,21 @@ const RequestDetailView = {
   _renderInternalRequestRow(ird) {
     const ir = ird.internalRequest;
     const inToSection = this._mySections.some(s => s.id === ir.to_section_id);
-    // internal_requests_update (mark received/assign) has a supervisor
-    // bypass; internal_request_replies_insert does not — only a literal
-    // member of the receiving section can draft a reply. Showing Draft
-    // Reply to a supervisor who isn't in that section would be a
-    // button that always fails.
-    const canReceive = inToSection || this._isSupervisor;
-    // internal_requests_update lets section members and org supervisors
-    // update; assignment is surfaced only to supervisors (mirrors the
-    // external Assign/Reassign gate).
-    const canAssign = this._isSupervisor;
+    // internal_requests_update RLS still has a supervisor bypass (any
+    // org supervisor CAN mark received via a direct API call), but the
+    // UI intentionally doesn't offer that here — Mark Received/Upload
+    // are section business, not something an unrelated supervisor
+    // elsewhere in the org should be invited to click into. Narrowed
+    // to actual receiving-section membership only, same "assignee/
+    // section-only, not blanket supervisor" pattern used throughout
+    // this app's action gating.
+    const canReceive = inToSection;
+    // Section-scoped, same fix already applied to the external
+    // Assign/Reassign gate (this._mySupervisedSections, not the blanket
+    // this._isSupervisor) — a supervisor of an unrelated section
+    // shouldn't see Assign/Reassign on an internal_request routed
+    // somewhere else.
+    const canAssign = AppShell.isAdmin(this._user) || this._mySupervisedSections.some(s => s.id === ir.to_section_id);
     const canReply = inToSection;
     const isCreatorSide = ir.created_by === this._user.id;
     const statusBadge = {
@@ -514,7 +518,7 @@ const RequestDetailView = {
           <div class="thread-receipt"><i class="ti ti-user-check"></i>
             Assigned to <strong>${this._escapeHtml(ir.assigned_to_user.full_name)}</strong>${ir.assigned_to_user.designations?.name ? ', ' + this._escapeHtml(ir.assigned_to_user.designations.name) : ''}
           </div>` : ''}
-        ${this._renderAttachments('internal_request', ir.id, ird.attachments, true)}
+        ${this._renderAttachments('internal_request', ir.id, ird.attachments, inToSection)}
         <div class="internal-request-replies">
           ${ird.replies.map(reply => this._renderInternalReply(ir, reply)).join('')}
         </div>
