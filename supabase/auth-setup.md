@@ -65,6 +65,12 @@ match what changed since, instead of re-running the full files:
   CC list on a specific request or response, picked at compose time (New Request,
   Follow-up, Draft Response). New `cc_recipients` table + policies, plus additive
   visibility grants on `requests`/`responses`/`attachments` for whoever's CC'd.
+- `supabase/patch-internal-collab-audit-visibility.sql` — fixes
+  `can_view_case_audit_record()`, which had no branch at all for
+  `record_type = 'internal_request'` — the Internal Collaboration panel's new
+  routing-history timeline (received/routed/received/assigned across a
+  re-route) would have silently shown nothing to anyone, including the
+  internal request's own creator or section members.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

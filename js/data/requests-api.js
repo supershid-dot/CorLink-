@@ -550,21 +550,32 @@ const RequestsAPI = (() => {
 
     // ── Case timeline ────────────────────────────────────────────
     // Every logAudit() entry against this conversation's requests/
-    // responses — request-detail.js uses this to show "Routed to X by
-    // Y — [time]" / "Assigned to X by Y — [time]" inline in the thread,
-    // alongside the receipt/approval timestamps that already exist.
-    // audit_select_own_records RLS (supabase/rls.sql) is what makes this
-    // visible to plain staff/supervisors, not just org admins.
-    async listCaseAuditTrail(requestIds, responseIds) {
+    // responses/internal_requests — request-detail.js uses this to show
+    // "Routed to X by Y — [time]" / "Assigned to X by Y — [time]" inline
+    // in the thread, alongside the receipt/approval timestamps that
+    // already exist. audit_select_own_records RLS (supabase/rls.sql) is
+    // what makes this visible to plain staff/supervisors, not just org
+    // admins.
+    //
+    // internal_requests especially needs this: reroute() (see
+    // internal-requests-api.js) fully resets one row's received_by/
+    // received_at/assigned_to on every re-route, so those columns alone
+    // only ever show the LATEST leg — the audit trail is the only place
+    // the full received-then-routed-then-received-again history survives.
+    async listCaseAuditTrail(requestIds, responseIds, internalRequestIds = []) {
       const db = getSupabase();
       const queries = [];
       if (requestIds.length) {
-        queries.push(db.from('audit_logs').select('*, user:users(full_name)')
+        queries.push(db.from('audit_logs').select('*, user:users(full_name, designations(name))')
           .eq('record_type', 'request').in('record_id', requestIds));
       }
       if (responseIds.length) {
-        queries.push(db.from('audit_logs').select('*, user:users(full_name)')
+        queries.push(db.from('audit_logs').select('*, user:users(full_name, designations(name))')
           .eq('record_type', 'response').in('record_id', responseIds));
+      }
+      if (internalRequestIds.length) {
+        queries.push(db.from('audit_logs').select('*, user:users(full_name, designations(name))')
+          .eq('record_type', 'internal_request').in('record_id', internalRequestIds));
       }
       if (!queries.length) return [];
       const results = await Promise.all(queries);
