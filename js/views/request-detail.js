@@ -19,6 +19,10 @@ const RequestDetailView = {
     this._requestId = params.id;
     this._isSupervisor = AppShell.isSupervisorOrAbove(user);
     this._canReceive = this._isSupervisor || AppShell.hasRole(user, 'assigned_receiver');
+    // internal_request ids with an inline "Draft Reply" box currently
+    // expanded — pure UI state, not persisted, reset on every fresh
+    // page load like every other open/closed panel in this view.
+    this._openInternalReplyIds = new Set();
 
     container.innerHTML = `
       <div class="app-layout">
@@ -74,11 +78,18 @@ const RequestDetailView = {
           reviewComments: await ReviewCommentsAPI.list('response', response.id),
           ccRecipients: await CCRecipientsAPI.list('response', response.id),
         })));
-        const internalRequestDetails = await Promise.all(internalRequests.map(async (ir) => ({
-          internalRequest: ir,
-          replies: await InternalRequestsAPI.listReplies(ir.id),
-          attachments: await AttachmentsAPI.list('internal_request', ir.id),
-        })));
+        const internalRequestDetails = await Promise.all(internalRequests.map(async (ir) => {
+          const replies = await InternalRequestsAPI.listReplies(ir.id);
+          const replyDetails = await Promise.all(replies.map(async (reply) => ({
+            reply,
+            attachments: await AttachmentsAPI.list('internal_reply', reply.id),
+          })));
+          return {
+            internalRequest: ir,
+            replyDetails,
+            attachments: await AttachmentsAPI.list('internal_request', ir.id),
+          };
+        }));
         return { request, responseDetails, approvals, internalRequestDetails, attachments, reviewComments, ccRecipients };
       }));
       const requestIds = this._conversation.map(entry => entry.request.id);
@@ -111,6 +122,14 @@ const RequestDetailView = {
       console.error('CorLink: failed to load request', err);
       main.innerHTML = `<div class="alert alert-error"><i class="ti ti-alert-triangle"></i> Couldn't load this request: ${err.message || 'unknown error'}.</div>`;
     }
+  },
+
+  // Re-renders from already-fetched state (no network round-trip) —
+  // for pure UI-state toggles like expanding/collapsing the inline
+  // Draft Reply box, where re-fetching everything would be wasteful.
+  _rerender() {
+    document.getElementById('detail-main').innerHTML = this._renderContent();
+    this._bindActions();
   },
 
   _renderContent() {
@@ -556,7 +575,9 @@ const RequestDetailView = {
     // One reply draft at a time — mirrors the one-open-response rule on
     // the external side; a fresh draft only becomes possible again once
     // the current one is approved & sent.
-    const openReply = ird.replies.find(rep => rep.status !== 'sent');
+    const openReply = ird.replyDetails.find(rd => rd.reply.status !== 'sent');
+    const canReplyNow = canReply && !openReply && ir.status === 'in_progress' && (ir.assigned_to === this._user.id || this._isSupervisor);
+    const replyComposeOpen = this._openInternalReplyIds.has(ir.id);
 
     return `
       <div class="internal-request-row" data-internal-request="${ir.id}">
@@ -573,21 +594,57 @@ const RequestDetailView = {
         ${this._renderAuditEvents('internal_request', ir.id, ['received', 'routed', 'assigned'])}
         ${this._renderAttachments('internal_request', ir.id, ird.attachments, inToSection)}
         <div class="internal-request-replies">
-          ${ird.replies.map(reply => this._renderInternalReply(ir, reply)).join('')}
+          ${ird.replyDetails.map(rd => this._renderInternalReply(ir, rd.reply, rd.attachments)).join('')}
         </div>
+        ${replyComposeOpen && canReplyNow ? this._composeInternalReplyHtml(ir) : ''}
         <div class="detail-actions">
           ${ir.status === 'sent' && !ir.received_at && canReceive ? `<button class="btn btn-primary btn-xs" data-mark-internal-received="${ir.id}">Mark Received</button>` : ''}
           ${['received', 'in_progress'].includes(ir.status) && canAssign ? `<button class="btn btn-secondary btn-xs" data-assign-internal="${ir.id}">${ir.assigned_to ? 'Reassign' : 'Assign to Staff'}</button>` : ''}
           ${['received', 'in_progress'].includes(ir.status) && canAssign ? `<button class="btn btn-secondary btn-xs" data-reroute-internal="${ir.id}">Route to Another Section</button>` : ''}
-          ${canReply && !openReply && ir.status === 'in_progress' && (ir.assigned_to === this._user.id || this._isSupervisor) ? `<button class="btn btn-primary btn-xs" data-reply-internal="${ir.id}">Draft Reply</button>` : ''}
+          ${canReplyNow && !replyComposeOpen ? `<button class="btn btn-primary btn-xs" data-reply-internal="${ir.id}">Draft Reply</button>` : ''}
           ${isCreatorSide && ir.status === 'responded' ? `<button class="btn btn-secondary btn-xs" data-close-internal="${ir.id}">Close</button>` : ''}
         </div>
       </div>
     `;
   },
 
-  _renderInternalReply(ir, reply) {
+  // Inline expand, not a modal — matches _composeResponseHtml's shape
+  // (the external Draft-a-Response box). Attachments use the same
+  // "queue in memory, upload after the row exists" pattern as the
+  // reply compose forms elsewhere (prisoner-letter-detail.js), since
+  // internal_request_replies.id doesn't exist until draftReply()
+  // actually creates it.
+  _composeInternalReplyHtml(ir) {
+    return `
+      <form class="modal-form internal-reply-form" data-internal-reply-form="${ir.id}">
+        <div class="field-group field-group-row">
+          <label class="field-label">Draft Reply</label>
+          ${RichEditor.langToggleHtml('language', 'dv')}
+        </div>
+        <div class="field-group">
+          <div class="internal-reply-body"></div>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Attachments</label>
+          <label class="attachment-dropzone" data-internal-reply-dropzone="${ir.id}">
+            <i class="ti ti-cloud-upload"></i>
+            <span>Drag files here, or <span class="attachment-browse-link">browse</span></span>
+            <input type="file" multiple class="hidden" data-internal-reply-file-input="${ir.id}" />
+          </label>
+          <div class="attachments-list" data-internal-reply-pending="${ir.id}"></div>
+        </div>
+        <div class="response-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-cancel-internal-reply="${ir.id}">Cancel</button>
+          <button type="submit" class="btn btn-primary btn-sm">Save Draft</button>
+        </div>
+      </form>
+    `;
+  },
+
+  _renderInternalReply(ir, reply, attachments) {
     const isMine = reply.created_by === this._user.id;
+    const canUpload = isMine && ['draft', 'pending_approval'].includes(reply.status);
     const badge = {
       draft:            ['Draft', 'badge-muted'],
       pending_approval: ['Pending Approval', 'badge-warning'],
@@ -606,6 +663,7 @@ const RequestDetailView = {
             Approved &amp; sent by <strong>${this._escapeHtml(reply.approved_by_user.full_name)}</strong>${reply.approved_by_user.designations?.name ? ', ' + this._escapeHtml(reply.approved_by_user.designations.name) : ''}
             ${reply.approved_at ? ' — ' + new Date(reply.approved_at).toLocaleString() : ''}
           </div>` : ''}
+        ${this._renderAttachments('internal_reply', reply.id, attachments || [], canUpload)}
         <div class="detail-actions">
           ${['draft', 'pending_approval'].includes(reply.status) && isMine ? `<button class="btn btn-secondary btn-xs" data-edit-internal-reply="${reply.id}" data-ir="${ir.id}">Edit Draft</button>` : ''}
           ${reply.status === 'draft' && isMine ? `<button class="btn btn-primary btn-xs" data-submit-internal-reply="${reply.id}" data-ir="${ir.id}">Submit for Approval</button>` : ''}
@@ -872,7 +930,7 @@ const RequestDetailView = {
       btn.addEventListener('click', () => this._runAction(() => InternalRequestsAPI.close(btn.dataset.closeInternal)));
     });
     main.querySelectorAll('[data-edit-internal-reply]').forEach(btn => {
-      btn.addEventListener('click', () => this._openInternalReplyModal(btn.dataset.ir, btn.dataset.editInternalReply));
+      btn.addEventListener('click', () => this._openInternalReplyEditModal(btn.dataset.ir, btn.dataset.editInternalReply));
     });
     main.querySelectorAll('[data-submit-internal-reply]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -893,7 +951,93 @@ const RequestDetailView = {
       });
     });
     main.querySelectorAll('[data-reply-internal]').forEach(btn => {
-      btn.addEventListener('click', () => this._openInternalReplyModal(btn.dataset.replyInternal));
+      btn.addEventListener('click', () => {
+        this._openInternalReplyIds.add(btn.dataset.replyInternal);
+        this._rerender();
+      });
+    });
+    main.querySelectorAll('[data-cancel-internal-reply]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this._openInternalReplyIds.delete(btn.dataset.cancelInternalReply);
+        this._rerender();
+      });
+    });
+
+    // Internal reply compose forms — one RichEditor instance per open
+    // form, plus a pending-file queue uploaded only after draftReply()
+    // actually creates the row (internal_request_replies.id doesn't
+    // exist beforehand).
+    main.querySelectorAll('.internal-reply-form').forEach(form => {
+      const internalRequestId = form.dataset.internalReplyForm;
+      const editor = RichEditor.create(form.querySelector('.internal-reply-body'), { language: 'dv' });
+      RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
+
+      const pendingFiles = [];
+      const pendingListEl = form.querySelector(`[data-internal-reply-pending="${internalRequestId}"]`);
+      const renderPendingFiles = () => {
+        pendingListEl.innerHTML = pendingFiles.map((f, i) => `
+          <span class="attachment-chip" data-remove-pending="${i}">
+            <i class="ti ti-paperclip"></i> ${this._escapeHtml(f.name)}
+            <i class="ti ti-x"></i>
+          </span>
+        `).join('');
+        pendingListEl.querySelectorAll('[data-remove-pending]').forEach(chip => {
+          chip.addEventListener('click', () => {
+            pendingFiles.splice(Number(chip.dataset.removePending), 1);
+            renderPendingFiles();
+          });
+        });
+      };
+      const dropzone = form.querySelector(`[data-internal-reply-dropzone="${internalRequestId}"]`);
+      const fileInput = form.querySelector(`[data-internal-reply-file-input="${internalRequestId}"]`);
+      fileInput.addEventListener('change', () => {
+        pendingFiles.push(...Array.from(fileInput.files || []));
+        fileInput.value = '';
+        renderPendingFiles();
+      });
+      dropzone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropzone.classList.add('attachment-dropzone--active');
+      });
+      dropzone.addEventListener('dragleave', (e) => {
+        if (e.relatedTarget && dropzone.contains(e.relatedTarget)) return;
+        dropzone.classList.remove('attachment-dropzone--active');
+      });
+      dropzone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('attachment-dropzone--active');
+        pendingFiles.push(...Array.from(e.dataTransfer?.files || []));
+        renderPendingFiles();
+      });
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fd = new FormData(form);
+        const errEl = form.querySelector('.response-error');
+        const body = editor.getHTML();
+        if (!body || body === '<p><br></p>') {
+          errEl.textContent = 'Reply cannot be empty.';
+          errEl.classList.remove('hidden');
+          return;
+        }
+        try {
+          const reply = await InternalRequestsAPI.draftReply({ internalRequestId, body, language: fd.get('language') });
+          const failures = [];
+          for (const file of pendingFiles) {
+            try {
+              await AttachmentsAPI.upload('internal_reply', reply.id, file);
+            } catch (err) {
+              failures.push(`${file.name}: ${err.message || 'upload failed'}`);
+            }
+          }
+          this._openInternalReplyIds.delete(internalRequestId);
+          await this._load();
+          if (failures.length > 0) alert(`Reply drafted, but some attachments failed to upload:\n${failures.join('\n')}`);
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.classList.remove('hidden');
+        }
+      });
     });
 
     // Attachments — upload one at a time (sequential, not Promise.all)
@@ -1510,21 +1654,21 @@ const RequestDetailView = {
     return null;
   },
 
-  // Creates a reply DRAFT (replyId null) or edits an existing one —
-  // sending now happens only through a supervisor's Approve & Send,
-  // the same lifecycle as an external response.
-  _openInternalReplyModal(internalRequestId, replyId = null) {
+  // Edits an existing draft/pending-approval reply. A FRESH reply is no
+  // longer drafted here — it's an inline expand under the internal
+  // request row instead (_composeInternalReplyHtml), matching the
+  // external Draft-a-Response box. Editing an already-existing draft
+  // stays a modal, same as the external side's Edit Draft action.
+  _openInternalReplyEditModal(internalRequestId, replyId) {
     let existing = null;
-    if (replyId) {
-      for (const entry of this._conversation) {
-        for (const ird of entry.internalRequestDetails) {
-          const hit = ird.replies.find(rep => rep.id === replyId);
-          if (hit) existing = hit;
-        }
+    for (const entry of this._conversation) {
+      for (const ird of entry.internalRequestDetails) {
+        const hit = ird.replyDetails.find(rd => rd.reply.id === replyId);
+        if (hit) existing = hit.reply;
       }
     }
     this._openModal(`
-      <h3>${replyId ? 'Edit Draft Reply' : 'Draft Reply'}</h3>
+      <h3>Edit Draft Reply</h3>
       <form id="internal-reply-form" class="modal-form">
         <div class="field-group">
           <div class="field-group-row">
@@ -1555,11 +1699,7 @@ const RequestDetailView = {
         return;
       }
       try {
-        if (replyId) {
-          await InternalRequestsAPI.updateReplyDraft(replyId, { body, language: fd.get('language') });
-        } else {
-          await InternalRequestsAPI.draftReply({ internalRequestId, body, language: fd.get('language') });
-        }
+        await InternalRequestsAPI.updateReplyDraft(replyId, { body, language: fd.get('language') });
         this._closeModal();
         await this._load();
       } catch (err) {

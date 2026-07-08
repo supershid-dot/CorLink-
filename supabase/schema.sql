@@ -383,7 +383,7 @@ CREATE TABLE cc_recipients (
 -- Allowed types: pdf, docx, xlsx, jpg, png  |  Max: 20 MB each, 100 MB total
 CREATE TABLE attachments (
   id            UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
-  record_type   TEXT    NOT NULL CHECK (record_type IN ('request', 'response', 'prisoner_letter', 'internal_request', 'prisoner_reply')),
+  record_type   TEXT    NOT NULL CHECK (record_type IN ('request', 'response', 'prisoner_letter', 'internal_request', 'prisoner_reply', 'internal_reply')),
   record_id     UUID    NOT NULL,
   filename      TEXT    NOT NULL,
   storage_path  TEXT    NOT NULL,   -- Path within Supabase Storage bucket

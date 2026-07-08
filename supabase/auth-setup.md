@@ -74,6 +74,10 @@ match what changed since, instead of re-running the full files:
 - `supabase/patch-internal-collab-deadline.sql` — adds `internal_requests.deadline`
   and enforces (server-side, in `internal_requests_insert`) that it can't be later
   than the parent request's own deadline.
+- `supabase/patch-internal-reply-attachments.sql` — adds a new `internal_reply`
+  attachments record type (mirroring `internal_request_replies_select`'s own
+  visibility shape) so a Draft Reply in Internal Collaboration can attach files,
+  same as every other draft/compose flow in the app.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

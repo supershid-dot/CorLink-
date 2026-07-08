@@ -1289,6 +1289,25 @@ CREATE POLICY "attachments_select" ON attachments
         AND (pl.submitted_by = auth.uid() OR pl.assigned_to = auth.uid()
              OR pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
     ))
+    -- Mirrors internal_request_replies_select's own shape exactly —
+    -- same section/creator/supervisor conditions, plus the "not visible
+    -- until sent" rule for the asking side (a reply still being
+    -- drafted is invisible to the section that asked for it, same as
+    -- the reply body itself).
+    OR (record_type = 'internal_reply' AND EXISTS (
+      SELECT 1 FROM internal_request_replies irr
+      JOIN internal_requests ir ON ir.id = irr.internal_request_id
+      WHERE irr.id = record_id
+        AND (
+          ir.to_section_id IN (SELECT my_section_ids())
+          OR irr.created_by = auth.uid()
+          OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', ir.to_section_id))
+          OR (
+            irr.status = 'sent'
+            AND (ir.from_section_id IN (SELECT my_section_ids()) OR ir.created_by = auth.uid())
+          )
+        )
+    ))
   );
 
 -- Additive: a CC'd viewer can see files attached to the specific
@@ -1346,6 +1365,15 @@ CREATE POLICY "attachments_insert" ON attachments
         SELECT 1 FROM prisoner_replies pr JOIN prisoner_letters pl ON pl.id = pr.letter_id
         WHERE pr.id = record_id
           AND (pr.replied_by = auth.uid() OR pl.to_org_id = get_my_org_id())
+      ))
+      -- Only the reply's own drafter, only while it's still editable
+      -- (draft/pending_approval — same "editable-until-actually-
+      -- approved" rule internal_request_replies_update already
+      -- enforces) — once sent, the file list is closed, same shape as
+      -- request/response's is_locked check above.
+      OR (record_type = 'internal_reply' AND EXISTS (
+        SELECT 1 FROM internal_request_replies irr WHERE irr.id = record_id
+          AND irr.created_by = auth.uid() AND irr.status IN ('draft', 'pending_approval')
       ))
     )
   );
