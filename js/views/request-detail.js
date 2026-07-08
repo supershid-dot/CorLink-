@@ -214,10 +214,6 @@ const RequestDetailView = {
             r.is_locked || (r.status === 'pending_approval' && !ctx.isCreator))}
         </div>
 
-        <div class="detail-actions-panel" data-request-block="${r.id}">
-          ${this._renderActions(r, ctx, entry)}
-        </div>
-
         ${this._renderInternalCollab(entry, ctx)}
 
         ${this._renderDraftResponseBox(r, ctx, entry)}
@@ -227,6 +223,10 @@ const RequestDetailView = {
             ${entry.responseDetails.map(rd => this._renderResponse(rd, r)).join('')}
           </div>
         ` : ''}
+
+        <div class="detail-actions-panel" data-request-block="${r.id}">
+          ${this._renderActions(r, ctx, entry)}
+        </div>
 
         ${isLast && ['responded', 'closed'].includes(r.status) && isFromOrgMember ? `
           <div class="followup-row">
@@ -824,6 +824,15 @@ const RequestDetailView = {
           <div class="response-body"></div>
         </div>
         ${RequestsView._loopInFieldHtml(this._toOrgUsers)}
+        <div class="field-group">
+          <label class="field-label">Attachments</label>
+          <label class="attachment-dropzone" data-response-dropzone="${requestId}">
+            <i class="ti ti-cloud-upload"></i>
+            <span>Drag files here, or <span class="attachment-browse-link">browse</span></span>
+            <input type="file" multiple class="hidden" data-response-file-input="${requestId}" />
+          </label>
+          <div class="attachments-list" data-response-pending="${requestId}"></div>
+        </div>
         <div class="response-error alert alert-error hidden"></div>
         <button type="submit" class="btn btn-primary btn-sm">Save &amp; Send Draft Response</button>
       </form>
@@ -833,11 +842,53 @@ const RequestDetailView = {
   _bindActions() {
     const main = document.getElementById('detail-main');
 
-    // Response compose forms — one RichEditor instance per form.
+    // Response compose forms — one RichEditor instance per form, plus a
+    // pending-file queue uploaded only after createResponse() actually
+    // creates the row (responses.id doesn't exist beforehand), same
+    // pattern as the internal reply compose form above.
     main.querySelectorAll('.response-form').forEach(form => {
       const requestId = form.dataset.responseForm;
       const editor = RichEditor.create(form.querySelector('.response-body'), { language: 'dv' });
       RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
+
+      const pendingFiles = [];
+      const pendingListEl = form.querySelector(`[data-response-pending="${requestId}"]`);
+      const renderPendingFiles = () => {
+        pendingListEl.innerHTML = pendingFiles.map((f, i) => `
+          <span class="attachment-chip" data-remove-pending="${i}">
+            <i class="ti ti-paperclip"></i> ${this._escapeHtml(f.name)}
+            <i class="ti ti-x"></i>
+          </span>
+        `).join('');
+        pendingListEl.querySelectorAll('[data-remove-pending]').forEach(chip => {
+          chip.addEventListener('click', () => {
+            pendingFiles.splice(Number(chip.dataset.removePending), 1);
+            renderPendingFiles();
+          });
+        });
+      };
+      const dropzone = form.querySelector(`[data-response-dropzone="${requestId}"]`);
+      const fileInput = form.querySelector(`[data-response-file-input="${requestId}"]`);
+      fileInput.addEventListener('change', () => {
+        pendingFiles.push(...Array.from(fileInput.files || []));
+        fileInput.value = '';
+        renderPendingFiles();
+      });
+      dropzone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropzone.classList.add('attachment-dropzone--active');
+      });
+      dropzone.addEventListener('dragleave', (e) => {
+        if (e.relatedTarget && dropzone.contains(e.relatedTarget)) return;
+        dropzone.classList.remove('attachment-dropzone--active');
+      });
+      dropzone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('attachment-dropzone--active');
+        pendingFiles.push(...Array.from(e.dataTransfer?.files || []));
+        renderPendingFiles();
+      });
+
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
         const fd = new FormData(form);
@@ -851,7 +902,16 @@ const RequestDetailView = {
         try {
           const response = await RequestsAPI.createResponse({ requestId, body, language: fd.get('language') });
           await CCRecipientsAPI.add('response', response.id, fd.getAll('loopInUserIds'));
+          const failures = [];
+          for (const file of pendingFiles) {
+            try {
+              await AttachmentsAPI.upload('response', response.id, file);
+            } catch (err) {
+              failures.push(`${file.name}: ${err.message || 'upload failed'}`);
+            }
+          }
           await this._load();
+          if (failures.length > 0) alert(`Response sent, but some attachments failed to upload:\n${failures.join('\n')}`);
         } catch (err) {
           errEl.textContent = err.message;
           errEl.classList.remove('hidden');
