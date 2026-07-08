@@ -845,22 +845,94 @@ const RequestsView = {
 
   // ── Loop In Staff (CC) ──────────────────────────────────────────
   // Shared by New Request, Follow-up (both requests.js/request-detail.js
-  // createRequest call sites), and Draft Response — a same-org, read-
-  // only CC list picked at compose time. `users` is pre-filtered to
-  // active + excluding the current user by each call site (the org
-  // differs: sender's own org for a request, responder's own org for
-  // a response).
+  // createRequest call sites), Draft Response, and Loop in a Section —
+  // a same-org, read-only CC list picked at compose time. `users` is
+  // pre-filtered to active + excluding the current user by each call
+  // site (the org differs: sender's own org for a request, responder's
+  // own org for a response).
+  //
+  // Search-and-add instead of a plain <select multiple> — holding Ctrl/
+  // Cmd to multi-select doesn't work at all on a touchscreen, and even
+  // on desktop a bare name list is unusable once an org has more than a
+  // handful of staff. data-loop-in-field is a plain marker (not an id)
+  // since a page can have more than one of these live at once (a multi-
+  // round case can show more than one Draft Response box) — _bindLoopInField
+  // is always called scoped to one form, same pattern as the response-
+  // form/internal-reply-form bindings elsewhere in this app.
   _loopInFieldHtml(users) {
     if (!users || users.length === 0) return '';
     return `
-      <div class="field-group">
+      <div class="field-group loop-in-field" data-loop-in-field>
         <label class="field-label">Loop In Staff (optional)</label>
-        <select class="field-select loop-in-select" name="loopInUserIds" multiple size="${Math.min(users.length, 5)}">
-          ${users.map(u => `<option value="${u.id}">${this._escapeHtml(u.full_name)}</option>`).join('')}
-        </select>
-        <div class="field-hint">Hold Ctrl (Cmd on Mac) to select more than one. Looped-in staff can view this but can't reply or take any action — like CC in email.</div>
+        <div class="loop-in-chips" data-loop-in-chips></div>
+        <input type="text" class="field-input-plain" placeholder="Search by name or service no…" data-loop-in-search autocomplete="off" />
+        <div class="loop-in-results" data-loop-in-results></div>
+        <div class="field-hint">Looped-in staff can view this but can't reply or take any action — like CC in email.</div>
       </div>
     `;
+  },
+
+  // root = the form (or any ancestor) containing exactly one
+  // .loop-in-field rendered by _loopInFieldHtml above. Owns its own
+  // local "selected" list — nothing global, so multiple instances on
+  // the same page (e.g. two Draft Response boxes) don't interfere.
+  _bindLoopInField(root, users) {
+    const field = root.querySelector('[data-loop-in-field]');
+    if (!field) return;
+    const chipsEl = field.querySelector('[data-loop-in-chips]');
+    const searchEl = field.querySelector('[data-loop-in-search]');
+    const resultsEl = field.querySelector('[data-loop-in-results]');
+    const selected = [];
+    const esc = (s) => this._escapeHtml(s);
+
+    const renderChips = () => {
+      chipsEl.innerHTML = selected.map(u => `
+        <span class="attachment-chip" data-remove-selected="${u.id}">
+          <i class="ti ti-user"></i> ${esc(u.full_name)}
+          <i class="ti ti-x"></i>
+          <input type="hidden" name="loopInUserIds" value="${u.id}" />
+        </span>
+      `).join('');
+      chipsEl.querySelectorAll('[data-remove-selected]').forEach(chip => {
+        chip.addEventListener('click', () => {
+          const id = chip.dataset.removeSelected;
+          const idx = selected.findIndex(u => u.id === id);
+          if (idx !== -1) selected.splice(idx, 1);
+          renderChips();
+          renderResults();
+        });
+      });
+    };
+
+    const renderResults = () => {
+      const selectedIds = new Set(selected.map(u => u.id));
+      const query = searchEl.value.trim().toLowerCase();
+      const available = users.filter(u => !selectedIds.has(u.id));
+      const matches = query
+        ? available.filter(u => u.full_name.toLowerCase().includes(query) || (u.service_number || '').toLowerCase().includes(query))
+        : available;
+      resultsEl.innerHTML = matches.slice(0, 8).map(u => `
+        <div class="loop-in-result-row">
+          <span class="loop-in-result-name">${esc(u.full_name)}${u.service_number ? ` <span class="loop-in-result-meta">· ${esc(u.service_number)}</span>` : ''}</span>
+          <button type="button" class="btn btn-secondary btn-xs" data-add-loop-in="${u.id}"><i class="ti ti-plus"></i> Add</button>
+        </div>
+      `).join('') || (available.length === 0
+        ? `<div class="loop-in-result-empty">Everyone's already looped in.</div>`
+        : `<div class="loop-in-result-empty">No match for "${esc(searchEl.value.trim())}".</div>`);
+      resultsEl.querySelectorAll('[data-add-loop-in]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const u = users.find(x => x.id === btn.dataset.addLoopIn);
+          if (u) selected.push(u);
+          searchEl.value = '';
+          renderChips();
+          renderResults();
+        });
+      });
+    };
+
+    searchEl.addEventListener('input', renderResults);
+    renderChips();
+    renderResults();
   },
 
   // ── Compose ──────────────────────────────────────────────────
@@ -946,6 +1018,7 @@ const RequestsView = {
     RichEditor.bindAutoDetect(subjectInput, form, 'subjectLanguage', syncSubjectLang);
     RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
     this._bindDeadlineField(form);
+    this._bindLoopInField(form, loopInUsers);
 
     // Files chosen here queue in memory — the request row doesn't exist
     // yet for attachments to point at, so they're actually uploaded

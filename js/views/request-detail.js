@@ -850,6 +850,7 @@ const RequestDetailView = {
       const requestId = form.dataset.responseForm;
       const editor = RichEditor.create(form.querySelector('.response-body'), { language: 'dv' });
       RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
+      RequestsView._bindLoopInField(form, this._toOrgUsers);
 
       const pendingFiles = [];
       const pendingListEl = form.querySelector(`[data-response-pending="${requestId}"]`);
@@ -1553,6 +1554,7 @@ const RequestDetailView = {
     const editor = RichEditor.create(document.getElementById('followup-body'), { language: 'dv' });
     const followupSubject = document.getElementById('followup-subject');
     RequestsView._bindDeadlineField(form);
+    RequestsView._bindLoopInField(form, this._fromOrgUsers);
     const syncFollowupSubjectLang = (lang) => followupSubject.classList.toggle('field-divehi', lang === 'dv');
     RichEditor.bindLangToggle(form, 'subjectLanguage', syncFollowupSubjectLang);
     RichEditor.bindAutoDetect(followupSubject, form, 'subjectLanguage', syncFollowupSubjectLang);
