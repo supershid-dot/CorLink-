@@ -979,7 +979,7 @@ p  { line-height: 1.6; }
   width: 24px;
   text-align: center;
 }
-.action-row-label { flex: 1; font-size: 0.9375rem; font-weight: 500; min-width: 0; }
+.action-row-label { flex: 1; font-size: 0.9375rem; font-weight: 500; min-width: 0; overflow-wrap: break-word; }
 .action-row-count { flex-shrink: 0; }
 .action-row-chevron { color: var(--color-text-light); flex-shrink: 0; }
 .action-list-empty {
@@ -1044,7 +1044,7 @@ p  { line-height: 1.6; }
   padding: 5px 0;
   font-size: 0.8125rem;
 }
-.workload-label { width: 40%; min-width: 0; color: var(--color-text-muted); }
+.workload-label { width: 40%; min-width: 0; color: var(--color-text-muted); overflow-wrap: break-word; }
 .workload-bar {
   flex: 1;
   height: 8px;
@@ -1161,10 +1161,23 @@ p  { line-height: 1.6; }
   .main-content { padding: 20px 16px calc(76px + env(safe-area-inset-bottom)); }
   .topbar { padding: 0 16px; gap: 10px; }
   /* Organisation name stays visible on phones, just bounded — it can
-     be long ("Maldives Correctional Service"). */
+     be long ("Maldives Correctional Service"). Was a flat 46vw, which
+     on real phone widths (360-412px) left .topbar-actions (theme
+     toggle + notification bell + user avatar/chevron — all three
+     flex-shrink: 0, same as .topbar-brand, with .topbar-nav hidden
+     below this breakpoint so NOTHING in the row can give way) pushed
+     past the viewport edge entirely, silently clipped by html/body's
+     overflow-x: hidden — the notification bell and user menu became
+     untappable on an ordinary phone. calc() against the actions
+     block's own fixed width (36px theme toggle + 36px notif bell +
+     ~72px user-menu-btn with .user-name-short hidden, + three 8px
+     topbar-actions gaps, + this rule's own 16px/16px topbar padding
+     and 32px logo + 10px gap) makes the two guaranteed to fit at any
+     viewport width, not just the ones this was eyeballed against.
+     Confirmed via a real browser measurement at 360/390/412px. */
   .topbar-appname {
     font-size: 0.875rem;
-    max-width: 46vw;
+    max-width: calc(100vw - 260px);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
