@@ -83,6 +83,7 @@ const RequestDetailView = {
           const replyDetails = await Promise.all(replies.map(async (reply) => ({
             reply,
             attachments: await AttachmentsAPI.list('internal_reply', reply.id),
+            reviewComments: await ReviewCommentsAPI.list('internal_reply', reply.id),
           })));
           return {
             internalRequest: ir,
@@ -352,8 +353,11 @@ const RequestDetailView = {
   },
 
   // Resolves the request row + draft creator + subject for a comment
-  // target ('request'/'response' + id) from the already-loaded
-  // conversation — used by the Add Comment modal for notifications.
+  // target ('request'/'response'/'internal_reply' + id) from the
+  // already-loaded conversation — used by the Add Comment modal for
+  // notifications. internal_reply's notification still routes through
+  // the PARENT request (there's no separate detail page for a reply),
+  // same convention InternalRequestsAPI itself already uses.
   _findCommentTarget(recordType, recordId) {
     for (const entry of this._conversation) {
       if (recordType === 'request' && entry.request.id === recordId) {
@@ -362,6 +366,12 @@ const RequestDetailView = {
       if (recordType === 'response') {
         const rd = entry.responseDetails.find(d => d.response.id === recordId);
         if (rd) return { requestId: entry.request.id, creator: rd.response.created_by, subject: entry.request.subject };
+      }
+      if (recordType === 'internal_reply') {
+        for (const ird of entry.internalRequestDetails) {
+          const rd = ird.replyDetails.find(d => d.reply.id === recordId);
+          if (rd) return { requestId: entry.request.id, creator: rd.reply.created_by, subject: ird.internalRequest.subject };
+        }
       }
     }
     return null;
@@ -594,7 +604,7 @@ const RequestDetailView = {
         ${this._renderAuditEvents('internal_request', ir.id, ['received', 'routed', 'assigned'])}
         ${this._renderAttachments('internal_request', ir.id, ird.attachments, inToSection)}
         <div class="internal-request-replies">
-          ${ird.replyDetails.map(rd => this._renderInternalReply(ir, rd.reply, rd.attachments)).join('')}
+          ${ird.replyDetails.map(rd => this._renderInternalReply(ir, rd.reply, rd.attachments, rd.reviewComments, inToSection)).join('')}
         </div>
         ${replyComposeOpen && canReplyNow ? this._composeInternalReplyHtml(ir) : ''}
         <div class="detail-actions">
@@ -642,14 +652,25 @@ const RequestDetailView = {
     `;
   },
 
-  _renderInternalReply(ir, reply, attachments) {
+  _renderInternalReply(ir, reply, attachments, reviewComments, inToSection) {
     const isMine = reply.created_by === this._user.id;
     const canUpload = isMine && ['draft', 'pending_approval'].includes(reply.status);
+    // review_comments_insert/_update RLS lets ANY org supervisor act
+    // here (same-org match only, not section-scoped) — inToSection
+    // alone would be narrower than what's actually permitted and hide
+    // "Add Comment"/"Mark Resolved" from a supervisor who legitimately
+    // has rights but isn't literally a to_section member.
+    const sideOk = inToSection || this._isSupervisor;
     const badge = {
       draft:            ['Draft', 'badge-muted'],
       pending_approval: ['Pending Approval', 'badge-warning'],
       sent:             ['Sent', 'badge-success'],
     }[reply.status] || [reply.status, 'badge-outline'];
+    // Same force-resolve-before-resubmit rule as external requests/
+    // responses (_renderActions) — a comment left by the section's
+    // supervisor has to be marked resolved before the drafter can
+    // submit again.
+    const openReplyComments = (reviewComments || []).filter(c => !c.resolved_at).length;
     return `
       <div class="thread-message thread-message--response">
         <div class="thread-message-header">
@@ -658,6 +679,7 @@ const RequestDetailView = {
           <span class="structure-empty">${new Date(reply.created_at).toLocaleString()}</span>
         </div>
         <div class="thread-message-body${reply.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(reply.body)}</div>
+        ${this._renderReviewComments('internal_reply', reply, reviewComments, sideOk)}
         ${reply.status === 'sent' && reply.approved_by_user ? `
           <div class="thread-receipt"><i class="ti ti-circle-check"></i>
             Approved &amp; sent by <strong>${this._escapeHtml(reply.approved_by_user.full_name)}</strong>${reply.approved_by_user.designations?.name ? ', ' + this._escapeHtml(reply.approved_by_user.designations.name) : ''}
@@ -666,9 +688,15 @@ const RequestDetailView = {
         ${this._renderAttachments('internal_reply', reply.id, attachments || [], canUpload)}
         <div class="detail-actions">
           ${['draft', 'pending_approval'].includes(reply.status) && isMine ? `<button class="btn btn-secondary btn-xs" data-edit-internal-reply="${reply.id}" data-ir="${ir.id}">Edit Draft</button>` : ''}
-          ${reply.status === 'draft' && isMine ? `<button class="btn btn-primary btn-xs" data-submit-internal-reply="${reply.id}" data-ir="${ir.id}">Submit for Approval</button>` : ''}
+          ${reply.status === 'draft' && isMine ? (
+            openReplyComments > 0
+              ? `<div class="field-hint"><i class="ti ti-message-2"></i> Resolve ${openReplyComments} open review comment${openReplyComments === 1 ? '' : 's'} above before resubmitting for approval.</div>`
+              : `<button class="btn btn-primary btn-xs" data-submit-internal-reply="${reply.id}" data-ir="${ir.id}">Submit for Approval</button>`
+          ) : ''}
           ${reply.status === 'pending_approval' && this._isSupervisor ? `
-            <button class="btn btn-primary btn-xs" data-approve-internal-reply="${reply.id}" data-ir="${ir.id}">Approve &amp; Send</button>
+            ${openReplyComments > 0
+              ? `<div class="field-hint"><i class="ti ti-message-2"></i> ${openReplyComments} open review comment${openReplyComments === 1 ? '' : 's'} — the drafter must resolve ${openReplyComments === 1 ? 'it' : 'them'} before this can be approved.</div>`
+              : `<button class="btn btn-primary btn-xs" data-approve-internal-reply="${reply.id}" data-ir="${ir.id}">Approve &amp; Send</button>`}
             <button class="btn btn-secondary btn-xs" data-return-internal-reply="${reply.id}" data-ir="${ir.id}">Return</button>` : ''}
         </div>
       </div>
