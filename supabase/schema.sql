@@ -298,6 +298,11 @@ CREATE TABLE internal_requests (
   received_by       UUID        REFERENCES users(id),
   received_at       TIMESTAMPTZ,
   assigned_to       UUID        REFERENCES users(id),
+  -- Set by whoever starts the loop-in — capped at the parent request's
+  -- own deadline (enforced in internal_requests_insert's WITH CHECK,
+  -- see rls.sql — a section gathering supporting info can't give itself
+  -- more time than the case itself has).
+  deadline          DATE,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

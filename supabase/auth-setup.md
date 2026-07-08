@@ -71,6 +71,9 @@ match what changed since, instead of re-running the full files:
   routing-history timeline (received/routed/received/assigned across a
   re-route) would have silently shown nothing to anyone, including the
   internal request's own creator or section members.
+- `supabase/patch-internal-collab-deadline.sql` — adds `internal_requests.deadline`
+  and enforces (server-side, in `internal_requests_insert`) that it can't be later
+  than the parent request's own deadline.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 
