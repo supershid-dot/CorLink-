@@ -214,10 +214,6 @@ const RequestDetailView = {
             r.is_locked || (r.status === 'pending_approval' && !ctx.isCreator))}
         </div>
 
-        <div class="detail-actions-panel" data-request-block="${r.id}">
-          ${this._renderActions(r, ctx, entry)}
-        </div>
-
         ${this._renderInternalCollab(entry, ctx)}
 
         ${this._renderDraftResponseBox(r, ctx, entry)}
@@ -227,6 +223,10 @@ const RequestDetailView = {
             ${entry.responseDetails.map(rd => this._renderResponse(rd, r)).join('')}
           </div>
         ` : ''}
+
+        <div class="detail-actions-panel" data-request-block="${r.id}">
+          ${this._renderActions(r, ctx, entry)}
+        </div>
 
         ${isLast && ['responded', 'closed'].includes(r.status) && isFromOrgMember ? `
           <div class="followup-row">
