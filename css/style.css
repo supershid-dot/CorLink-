@@ -1491,11 +1491,39 @@ input.field-divehi, textarea.field-divehi, select.field-divehi {
 }
 .field-select:focus { border-color: var(--color-border-focus); }
 
-/* Loop In Staff (CC) picker — a <select multiple>, not a dropdown, so
-   the single-select's right-padding (reserved for a chevron the
-   browser never draws on a listbox) is wasted space here. */
-.loop-in-select { padding: 6px 12px; }
-.loop-in-select option { padding: 4px 6px; }
+/* Loop In Staff (CC) picker — search-and-add instead of a <select
+   multiple> (unusable on a touchscreen, and a bare name list doesn't
+   scale past a handful of staff). Selected people render as removable
+   .attachment-chip pills (same component, different icon) above the
+   search box; matches render as a scrollable list below it. */
+.loop-in-chips:empty { display: none; }
+.loop-in-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.loop-in-results:empty { display: none; }
+.loop-in-results {
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  margin-top: 8px;
+}
+.loop-in-result-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.875rem;
+}
+.loop-in-result-row:last-child { border-bottom: none; }
+.loop-in-result-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.loop-in-result-meta { color: var(--color-text-muted); font-size: 0.8125rem; }
+.loop-in-result-empty {
+  padding: 10px;
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+  text-align: center;
+}
 
 .field-input-plain {
   padding: 9px 12px;
