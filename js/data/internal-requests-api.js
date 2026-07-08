@@ -82,13 +82,16 @@ const InternalRequestsAPI = (() => {
       return data;
     },
 
-    async create({ parentRequestId, fromSectionId, toSectionId, subject, subjectLanguage, body, language }) {
+    // deadline is capped at the parent request's own deadline —
+    // enforced server-side too (internal_requests_insert's WITH CHECK,
+    // see supabase/rls.sql), this is just the UX-level pass-through.
+    async create({ parentRequestId, fromSectionId, toSectionId, subject, subjectLanguage, body, language, deadline }) {
       const db = getSupabase();
       const session = await Auth.getSession();
       const { data, error } = await db.from('internal_requests').insert({
         parent_request_id: parentRequestId, from_section_id: fromSectionId, to_section_id: toSectionId,
         created_by: session.user.id, subject, subject_language: subjectLanguage || 'en',
-        body: RichEditor.sanitize(body), language: language || 'en',
+        body: RichEditor.sanitize(body), language: language || 'en', deadline: deadline || null,
       }).select().single();
       if (error) throw error;
       await logAudit('created', data.id, `Created internal request "${subject}"`);

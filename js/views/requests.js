@@ -767,21 +767,28 @@ const RequestsView = {
   // DATE — the two inputs stay in sync (days fills the date, the date
   // computes the days) and only the date input carries the form value,
   // so submit handlers keep reading fd.get('deadline') unchanged.
-  _deadlineFieldHtml(value = '') {
+  // maxDate (YYYY-MM-DD), when passed, caps the date input natively
+  // (blocks the picker UI from going past it) — used by "Loop in a
+  // Section" so a section gathering supporting info can't give itself
+  // more time than the case itself has. _bindDeadlineField below still
+  // does its own JS-side clamping too, since the native max attribute
+  // alone doesn't stop a typed-in date or a days-derived date from
+  // exceeding it in every browser.
+  _deadlineFieldHtml(value = '', maxDate = null) {
     return `
       <div class="field-group">
         <label class="field-label">Deadline (optional)</label>
         <div class="deadline-input-row">
           <input class="field-input-plain deadline-days-input" type="number" min="1" max="365" placeholder="Days" data-deadline-days />
           <span class="deadline-input-or">or</span>
-          <input class="field-input-plain" type="date" name="deadline" value="${value}" data-deadline-date />
+          <input class="field-input-plain" type="date" name="deadline" value="${value}" data-deadline-date ${maxDate ? `max="${maxDate}"` : ''} />
         </div>
-        <div class="field-hint" data-deadline-hint>Enter a number of days or pick an end date.</div>
+        <div class="field-hint" data-deadline-hint>${maxDate ? `Enter a number of days or pick an end date, no later than ${maxDate}.` : 'Enter a number of days or pick an end date.'}</div>
       </div>
     `;
   },
 
-  _bindDeadlineField(form) {
+  _bindDeadlineField(form, maxDate = null) {
     const daysEl = form.querySelector('[data-deadline-days]');
     const dateEl = form.querySelector('[data-deadline-date]');
     const hintEl = form.querySelector('[data-deadline-hint]');
@@ -790,10 +797,15 @@ const RequestsView = {
     // Same UTC-date convention as every other deadline comparison in
     // this file (new Date().toISOString().slice(0, 10)).
     const todayStart = () => new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00');
-    const diffDays = () => Math.round((new Date(dateEl.value + 'T00:00:00') - todayStart()) / MS_DAY);
+    const diffDays = (dateStr) => Math.round((new Date(dateStr + 'T00:00:00') - todayStart()) / MS_DAY);
+    const defaultHint = maxDate ? `Enter a number of days or pick an end date, no later than ${maxDate}.` : 'Enter a number of days or pick an end date.';
     const updateHint = () => {
-      if (!dateEl.value) { hintEl.textContent = 'Enter a number of days or pick an end date.'; return; }
-      const diff = diffDays();
+      if (!dateEl.value) { hintEl.textContent = defaultHint; return; }
+      if (maxDate && dateEl.value > maxDate) {
+        hintEl.textContent = `That date is after the case's own deadline (${maxDate}) — pick an earlier date.`;
+        return;
+      }
+      const diff = diffDays(dateEl.value);
       hintEl.textContent = diff < 0
         ? `That date is ${-diff} day${-diff === 1 ? '' : 's'} in the past.`
         : `Due ${dateEl.value} — ${diff === 0 ? 'today' : `${diff} day${diff === 1 ? '' : 's'} from today`}.`;
@@ -801,12 +813,15 @@ const RequestsView = {
     daysEl.addEventListener('input', () => {
       const days = parseInt(daysEl.value, 10);
       if (!days || days < 1) { updateHint(); return; }
-      dateEl.value = new Date(todayStart().getTime() + days * MS_DAY).toISOString().slice(0, 10);
+      let candidate = new Date(todayStart().getTime() + days * MS_DAY).toISOString().slice(0, 10);
+      if (maxDate && candidate > maxDate) candidate = maxDate;
+      dateEl.value = candidate;
       updateHint();
     });
     dateEl.addEventListener('change', () => {
+      if (maxDate && dateEl.value > maxDate) dateEl.value = maxDate;
       if (dateEl.value) {
-        const diff = diffDays();
+        const diff = diffDays(dateEl.value);
         daysEl.value = diff > 0 ? diff : '';
       }
       updateHint();

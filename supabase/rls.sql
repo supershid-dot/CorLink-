@@ -1043,6 +1043,19 @@ CREATE POLICY "internal_requests_insert" ON internal_requests
       SELECT 1 FROM requests r WHERE r.id = internal_requests.parent_request_id
         AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
     )
+    -- A section gathering supporting info can't give itself more time
+    -- than the case itself has — no cap if either deadline is unset.
+    -- internal_requests.deadline is qualified (not a bare `deadline`)
+    -- for the same reason parent_request_id is qualified above: this
+    -- table has no column that would shadow it today, but staying
+    -- explicit keeps that true if one is ever added.
+    AND (
+      internal_requests.deadline IS NULL
+      OR NOT EXISTS (
+        SELECT 1 FROM requests r WHERE r.id = internal_requests.parent_request_id
+          AND r.deadline IS NOT NULL AND internal_requests.deadline > r.deadline
+      )
+    )
   );
 
 CREATE POLICY "internal_requests_update" ON internal_requests

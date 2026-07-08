@@ -564,6 +564,7 @@ const RequestDetailView = {
           <strong class="${RichEditor.dvClass(ir.subject, ir.subject_language)}">${ir.subject}</strong>
           <span class="structure-empty">${ir.from_section?.name || ''} → ${ir.to_section?.name || ''}</span>
           <span class="badge ${statusBadge[1]}">${statusBadge[0]}</span>
+          ${ir.deadline ? `<span class="structure-empty">Due ${RequestsView._deadlineCell(ir.deadline, ir.status)}</span>` : ''}
         </div>
         <div class="thread-message-body${ir.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(ir.body)}</div>
         <div class="thread-receipt"><i class="ti ti-send"></i>
@@ -1399,6 +1400,7 @@ const RequestDetailView = {
           </div>
           <div id="internal-body"></div>
         </div>
+        ${RequestsView._deadlineFieldHtml('', entry.request.deadline)}
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
@@ -1413,6 +1415,7 @@ const RequestDetailView = {
     RichEditor.bindLangToggle(form, 'subjectLanguage', syncInternalSubjectLang);
     RichEditor.bindAutoDetect(internalSubject, form, 'subjectLanguage', syncInternalSubjectLang);
     RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
+    RequestsView._bindDeadlineField(form, entry.request.deadline);
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
@@ -1423,11 +1426,17 @@ const RequestDetailView = {
         errEl.classList.remove('hidden');
         return;
       }
+      const deadline = fd.get('deadline') || null;
+      if (deadline && entry.request.deadline && deadline > entry.request.deadline) {
+        errEl.textContent = `Deadline can't be later than the case's own deadline (${entry.request.deadline}).`;
+        errEl.classList.remove('hidden');
+        return;
+      }
       try {
         await InternalRequestsAPI.create({
           parentRequestId, fromSectionId, toSectionId: fd.get('toSectionId'),
           subject: fd.get('subject'), subjectLanguage: fd.get('subjectLanguage'),
-          body, language: fd.get('language'),
+          body, language: fd.get('language'), deadline,
         });
         this._closeModal();
         await this._load();
