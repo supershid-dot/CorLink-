@@ -1442,6 +1442,12 @@ input.field-divehi, textarea.field-divehi, select.field-divehi {
 }
 .field-select:focus { border-color: var(--color-border-focus); }
 
+/* Loop In Staff (CC) picker — a <select multiple>, not a dropdown, so
+   the single-select's right-padding (reserved for a chevron the
+   browser never draws on a listbox) is wasted space here. */
+.loop-in-select { padding: 6px 12px; }
+.loop-in-select option { padding: 4px 6px; }
+
 .field-input-plain {
   padding: 9px 12px;
   border: 1px solid var(--color-border);
