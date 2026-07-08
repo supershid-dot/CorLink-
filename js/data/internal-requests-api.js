@@ -32,7 +32,7 @@ const InternalRequestsAPI = (() => {
           *,
           from_section:sections!internal_requests_from_section_id_fkey(name, code),
           to_section:sections!internal_requests_to_section_id_fkey(name, code),
-          created_by_user:users!internal_requests_created_by_fkey(full_name, service_number),
+          created_by_user:users!internal_requests_created_by_fkey(full_name, service_number, designations(name)),
           received_by_user:users!internal_requests_received_by_fkey(full_name, designations(name)),
           assigned_to_user:users!internal_requests_assigned_to_fkey(full_name, designations(name))
         `)

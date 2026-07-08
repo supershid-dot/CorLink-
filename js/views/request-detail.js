@@ -83,7 +83,8 @@ const RequestDetailView = {
       }));
       const requestIds = this._conversation.map(entry => entry.request.id);
       const responseIds = this._conversation.flatMap(entry => entry.responseDetails.map(rd => rd.response.id));
-      this._auditTrail = await RequestsAPI.listCaseAuditTrail(requestIds, responseIds);
+      const internalRequestIds = this._conversation.flatMap(entry => entry.internalRequestDetails.map(ird => ird.internalRequest.id));
+      this._auditTrail = await RequestsAPI.listCaseAuditTrail(requestIds, responseIds, internalRequestIds);
 
       // Prefetched once per page load (not per round — a follow-up
       // keeps the same to_org_id as the case it continues) so
@@ -266,15 +267,28 @@ const RequestDetailView = {
   // _renderReceipt() so the whole case reads as one dated timeline
   // rather than routing/assignment being the only undated steps in it.
   _renderProcessEvents(requestId) {
+    return this._renderAuditEvents('request', requestId, ['routed', 'assigned']);
+  },
+
+  // Shared by the external request timeline above and the internal
+  // collaboration row below — same audit_logs shape, same rendering,
+  // just a different record_type/action set.
+  _renderAuditEvents(recordType, recordId, actions) {
     const events = (this._auditTrail || [])
-      .filter(e => e.record_type === 'request' && e.record_id === requestId && ['routed', 'assigned'].includes(e.action));
+      .filter(e => e.record_type === recordType && e.record_id === recordId && actions.includes(e.action));
     if (!events.length) return '';
-    return events.map(e => `
-      <div class="thread-receipt">
-        <i class="ti ${e.action === 'routed' ? 'ti-arrow-forward-up' : 'ti-user-check'}"></i>
-        <span>${this._escapeHtml(e.notes || (e.action === 'routed' ? 'Routed' : 'Assigned'))} by <strong>${this._escapeHtml(e.user?.full_name || 'Unknown')}</strong> — ${new Date(e.created_at).toLocaleString()}</span>
-      </div>
-    `).join('');
+    const icons = { routed: 'ti-arrow-forward-up', assigned: 'ti-user-check', received: 'ti-circle-check' };
+    const labels = { routed: 'Routed', assigned: 'Assigned', received: 'Received' };
+    return events.map(e => {
+      const name = this._escapeHtml(e.user?.full_name || 'Unknown');
+      const designation = e.user?.designations?.name;
+      return `
+        <div class="thread-receipt">
+          <i class="ti ${icons[e.action] || 'ti-clock'}"></i>
+          <span>${this._escapeHtml(e.notes || labels[e.action] || e.action)} by <strong>${name}</strong>${designation ? `, ${this._escapeHtml(designation)}` : ''} — ${new Date(e.created_at).toLocaleString()}</span>
+        </div>
+      `;
+    }).join('');
   },
 
   // Word-style review loop on a draft awaiting approval (Option B —
@@ -552,11 +566,10 @@ const RequestDetailView = {
           <span class="badge ${statusBadge[1]}">${statusBadge[0]}</span>
         </div>
         <div class="thread-message-body${ir.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(ir.body)}</div>
-        ${this._renderReceipt(ir)}
-        ${ir.assigned_to_user ? `
-          <div class="thread-receipt"><i class="ti ti-user-check"></i>
-            Assigned to <strong>${this._escapeHtml(ir.assigned_to_user.full_name)}</strong>${ir.assigned_to_user.designations?.name ? ', ' + this._escapeHtml(ir.assigned_to_user.designations.name) : ''}
-          </div>` : ''}
+        <div class="thread-receipt"><i class="ti ti-send"></i>
+          <span>Sent by <strong>${this._escapeHtml(ir.created_by_user?.full_name || 'Unknown')}</strong>${ir.created_by_user?.designations?.name ? ', ' + this._escapeHtml(ir.created_by_user.designations.name) : ''} — ${new Date(ir.created_at).toLocaleString()}</span>
+        </div>
+        ${this._renderAuditEvents('internal_request', ir.id, ['received', 'routed', 'assigned'])}
         ${this._renderAttachments('internal_request', ir.id, ird.attachments, inToSection)}
         <div class="internal-request-replies">
           ${ird.replies.map(reply => this._renderInternalReply(ir, reply)).join('')}
