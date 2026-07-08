@@ -93,7 +93,7 @@ const PrisonerLetterDetailView = {
             <strong>${l.submitted_by_user?.full_name || 'Unknown'}</strong>
             <span class="structure-empty">${new Date(l.created_at).toLocaleString()}</span>
           </div>
-          <div class="thread-message-body">${this._escapeHtml(l.body)}</div>
+          <div class="thread-message-body${RichEditor.dvClass(l.body)}">${this._escapeHtml(l.body)}</div>
           ${l.received_at ? `
             <div class="thread-receipt"><i class="ti ti-circle-check"></i>
               <span>Received by <strong>${this._escapeHtml(l.received_by_user?.full_name || 'Unknown')}</strong>${l.received_by_user?.designations?.name ? ', ' + this._escapeHtml(l.received_by_user.designations.name) : ''} — ${new Date(l.received_at).toLocaleString()}</span>
@@ -108,7 +108,7 @@ const PrisonerLetterDetailView = {
               <strong>${r.replied_by_user?.full_name || 'Unknown'}</strong>
               <span class="structure-empty">${new Date(r.created_at).toLocaleString()}</span>
             </div>
-            <div class="thread-message-body">${this._escapeHtml(r.body)}</div>
+            <div class="thread-message-body${RichEditor.dvClass(r.body)}">${this._escapeHtml(r.body)}</div>
             ${this._renderAttachments('prisoner_reply', r.id, this._replyAttachments[r.id] || [], isToOrgMember && l.status !== 'delivered')}
           </div>
         `).join('')}
