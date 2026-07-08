@@ -357,6 +357,22 @@ CREATE TABLE review_comments (
   created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- ─── CC / Loop-In Staff (like CC in email) ──────────────────
+-- Read-only visibility for a same-org colleague on a specific request
+-- or response, added at compose time. Distinct from "Loop in a
+-- Section" (internal_requests) — that routes a whole section extra
+-- info to gather and reply to; this just gives one named person a
+-- read-only window onto the exact artifact they were CC'd on.
+CREATE TABLE cc_recipients (
+  id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  record_type TEXT        NOT NULL CHECK (record_type IN ('request', 'response')),
+  record_id   UUID        NOT NULL,
+  user_id     UUID        NOT NULL REFERENCES users(id),
+  added_by    UUID        NOT NULL REFERENCES users(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (record_type, record_id, user_id)
+);
+
 -- ─── Attachments ────────────────────────────────────────────
 -- Supabase Storage handles the actual files. storage_path is the bucket path.
 -- Allowed types: pdf, docx, xlsx, jpg, png  |  Max: 20 MB each, 100 MB total

@@ -61,6 +61,10 @@ match what changed since, instead of re-running the full files:
   literal creator see an approval row — hiding the "approved by [Supervisor]" banner
   from the receiving organization's supervisors/section members. Now mirrors
   requests_select/responses_select's visibility shape exactly.
+- `supabase/patch-cc-recipients.sql` — adds "Loop In Staff": a same-org, read-only
+  CC list on a specific request or response, picked at compose time (New Request,
+  Follow-up, Draft Response). New `cc_recipients` table + policies, plus additive
+  visibility grants on `requests`/`responses`/`attachments` for whoever's CC'd.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

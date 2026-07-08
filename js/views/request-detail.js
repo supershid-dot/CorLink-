@@ -59,29 +59,51 @@ const RequestDetailView = {
     try {
       const conversation = await RequestsAPI.getConversation(this._requestId);
       this._conversation = await Promise.all(conversation.map(async (request) => {
-        const [responses, approvals, internalRequests, attachments, reviewComments] = await Promise.all([
+        const [responses, approvals, internalRequests, attachments, reviewComments, ccRecipients] = await Promise.all([
           RequestsAPI.listResponses(request.id),
           RequestsAPI.listApprovals('request', request.id),
           InternalRequestsAPI.list(request.id),
           AttachmentsAPI.list('request', request.id),
           ReviewCommentsAPI.list('request', request.id),
+          CCRecipientsAPI.list('request', request.id),
         ]);
         const responseDetails = await Promise.all(responses.map(async (response) => ({
           response,
           approvals: await RequestsAPI.listApprovals('response', response.id),
           attachments: await AttachmentsAPI.list('response', response.id),
           reviewComments: await ReviewCommentsAPI.list('response', response.id),
+          ccRecipients: await CCRecipientsAPI.list('response', response.id),
         })));
         const internalRequestDetails = await Promise.all(internalRequests.map(async (ir) => ({
           internalRequest: ir,
           replies: await InternalRequestsAPI.listReplies(ir.id),
           attachments: await AttachmentsAPI.list('internal_request', ir.id),
         })));
-        return { request, responseDetails, approvals, internalRequestDetails, attachments, reviewComments };
+        return { request, responseDetails, approvals, internalRequestDetails, attachments, reviewComments, ccRecipients };
       }));
       const requestIds = this._conversation.map(entry => entry.request.id);
       const responseIds = this._conversation.flatMap(entry => entry.responseDetails.map(rd => rd.response.id));
       this._auditTrail = await RequestsAPI.listCaseAuditTrail(requestIds, responseIds);
+
+      // Prefetched once per page load (not per round — a follow-up
+      // keeps the same to_org_id as the case it continues) so
+      // _composeResponseHtml/_openFollowupModal's Loop In Staff picker
+      // can read from a plain sync array instead of needing its own
+      // async fetch mid-render.
+      const root = this._conversation[0].request;
+      try {
+        const [toOrgUsers, fromOrgUsers] = await Promise.all([
+          AdminAPI.listUsersByOrg(root.to_org_id),
+          AdminAPI.listUsersByOrg(root.from_org_id),
+        ]);
+        this._toOrgUsers = toOrgUsers.filter(u => u.is_active && u.id !== this._user.id);
+        this._fromOrgUsers = fromOrgUsers.filter(u => u.is_active && u.id !== this._user.id);
+      } catch (err) {
+        console.error('CorLink: failed to load org staff for Loop In Staff', err);
+        this._toOrgUsers = [];
+        this._fromOrgUsers = [];
+      }
+
       main.innerHTML = this._renderContent();
       this._bindActions();
     } catch (err) {
@@ -160,6 +182,7 @@ const RequestDetailView = {
             <div class="thread-message-body${r.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(r.body)}</div>
             ${this._renderReviewComments('request', r, entry.reviewComments, ctx.isFromOrgMember)}
             ${this._renderReceipt(r)}
+            ${this._renderLoopedIn(entry.ccRecipients)}
             ${this._renderPendingApprovalNote(r)}
             ${ctx.isToOrgMember ? this._renderProcessEvents(r.id) : ''}
           </div>
@@ -201,6 +224,21 @@ const RequestDetailView = {
       <div class="thread-receipt">
         <i class="ti ti-circle-check"></i>
         <span>Received by <strong>${name}</strong>${designation ? `, ${this._escapeHtml(designation)}` : ''} — ${new Date(record.received_at).toLocaleString()}</span>
+      </div>
+    `;
+  },
+
+  // Same-org, read-only CC list — RLS already scopes cc_recipients to
+  // whoever's on the same side of the case, so an empty array here
+  // just means "nobody CC'd" OR "the counterpart org's CC list, which
+  // I structurally never see" — either way, nothing to render.
+  _renderLoopedIn(ccRecipients) {
+    if (!ccRecipients || ccRecipients.length === 0) return '';
+    const names = ccRecipients.map(cc => this._escapeHtml(cc.user?.full_name || 'Unknown')).join(', ');
+    return `
+      <div class="thread-receipt">
+        <i class="ti ti-users"></i>
+        <span>Looped in: <strong>${names}</strong></span>
       </div>
     `;
   },
@@ -387,6 +425,7 @@ const RequestDetailView = {
         <div class="thread-message-body${resp.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(resp.body)}</div>
         ${this._renderReviewComments('response', resp, rd.reviewComments, this._user.org_id === request.to_org_id)}
         ${this._renderReceipt(resp)}
+        ${this._renderLoopedIn(rd.ccRecipients)}
         ${this._renderPendingApprovalNote(resp)}
         ${['draft', 'pending_approval'].includes(resp.status) && resp.created_by === this._user.id ? `
           <div class="thread-message-actions">
@@ -680,6 +719,7 @@ const RequestDetailView = {
         <div class="field-group">
           <div class="response-body"></div>
         </div>
+        ${RequestsView._loopInFieldHtml(this._toOrgUsers)}
         <div class="response-error alert alert-error hidden"></div>
         <button type="submit" class="btn btn-primary btn-sm">Save &amp; Send Draft Response</button>
       </form>
@@ -705,7 +745,8 @@ const RequestDetailView = {
           return;
         }
         try {
-          await RequestsAPI.createResponse({ requestId, body, language: fd.get('language') });
+          const response = await RequestsAPI.createResponse({ requestId, body, language: fd.get('language') });
+          await CCRecipientsAPI.add('response', response.id, fd.getAll('loopInUserIds'));
           await this._load();
         } catch (err) {
           errEl.textContent = err.message;
@@ -1250,6 +1291,7 @@ const RequestDetailView = {
           <div id="followup-body"></div>
         </div>
         ${RequestsView._deadlineFieldHtml()}
+        ${RequestsView._loopInFieldHtml(this._fromOrgUsers)}
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
@@ -1282,6 +1324,7 @@ const RequestDetailView = {
           body, language: fd.get('language'),
           deadline: fd.get('deadline') || null, parentRequestId: r.id,
         });
+        await CCRecipientsAPI.add('request', result.id, fd.getAll('loopInUserIds'));
         this._closeModal();
         Router.navigate('request-detail', { id: result.id });
       } catch (err) {

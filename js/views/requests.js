@@ -45,6 +45,16 @@ const RequestsView = {
     } else {
       this._mySupervisedSections = [];
     }
+    // Backs the "Looped In" chip on Inbox/Sent — a request I'm CC'd on
+    // directly, or whose response I'm CC'd on (CCRecipientsAPI resolves
+    // the latter's parent request id since cc_recipients is polymorphic
+    // and has no FK PostgREST could embed through).
+    try {
+      this._myLoopedInRequestIds = new Set(await CCRecipientsAPI.myLoopedInRequestIds());
+    } catch (err) {
+      console.error('CorLink: failed to load looped-in requests', err);
+      this._myLoopedInRequestIds = new Set();
+    }
 
     const validTabs = ['inbox', 'sent', 'approvals', 'info', 'team'];
     if (params.tab && validTabs.includes(params.tab)) {
@@ -253,6 +263,7 @@ const RequestsView = {
       { key: 'created_by_me', label: 'Created by Me', test: r => r.created_by === this._user.id },
       ...(kind === 'inbox' ? [{ key: 'assigned_to_me', label: 'Assigned to Me', test: r => r.assigned_to === this._user.id }] : []),
       { key: 'my_section', label: 'My Section', test: r => sectionIds.has(r[sectionField]) },
+      { key: 'looped_in', label: 'Looped In', test: r => (this._myLoopedInRequestIds || new Set()).has(r.id) },
     ];
     return base;
   },
@@ -817,18 +828,40 @@ const RequestsView = {
     return `${deadline} <span class="deadline-remaining${cls}">${label}</span>`;
   },
 
+  // ── Loop In Staff (CC) ──────────────────────────────────────────
+  // Shared by New Request, Follow-up (both requests.js/request-detail.js
+  // createRequest call sites), and Draft Response — a same-org, read-
+  // only CC list picked at compose time. `users` is pre-filtered to
+  // active + excluding the current user by each call site (the org
+  // differs: sender's own org for a request, responder's own org for
+  // a response).
+  _loopInFieldHtml(users) {
+    if (!users || users.length === 0) return '';
+    return `
+      <div class="field-group">
+        <label class="field-label">Loop In Staff (optional)</label>
+        <select class="field-select loop-in-select" name="loopInUserIds" multiple size="${Math.min(users.length, 5)}">
+          ${users.map(u => `<option value="${u.id}">${this._escapeHtml(u.full_name)}</option>`).join('')}
+        </select>
+        <div class="field-hint">Hold Ctrl (Cmd on Mac) to select more than one. Looped-in staff can view this but can't reply or take any action — like CC in email.</div>
+      </div>
+    `;
+  },
+
   // ── Compose ──────────────────────────────────────────────────
   async _openComposeModal() {
-    let sections, orgs;
+    let sections, orgs, orgUsers;
     try {
-      [sections, orgs] = await Promise.all([
+      [sections, orgs, orgUsers] = await Promise.all([
         RequestsAPI.mySections(),
         AdminAPI.listOrganizations(),
+        AdminAPI.listUsersByOrg(this._user.org_id),
       ]);
     } catch (err) {
       console.error('CorLink: failed to load compose form data', err);
       return;
     }
+    const loopInUsers = orgUsers.filter(u => u.is_active && u.id !== this._user.id);
 
     const otherOrgs = orgs.filter(o => o.id !== this._user.org_id && o.is_active);
 
@@ -872,6 +905,7 @@ const RequestsView = {
           <div id="compose-body"></div>
         </div>
         ${this._deadlineFieldHtml()}
+        ${this._loopInFieldHtml(loopInUsers)}
         <div class="field-group">
           <label class="field-label">Attachments</label>
           <label class="attachment-dropzone" id="compose-dropzone">
@@ -967,6 +1001,11 @@ const RequestsView = {
           } catch (err) {
             failures.push(`${file.name}: ${err.message || 'upload failed'}`);
           }
+        }
+        try {
+          await CCRecipientsAPI.add('request', result.id, fd.getAll('loopInUserIds'));
+        } catch (err) {
+          failures.push(`Loop In Staff: ${err.message || 'failed'}`);
         }
         this._closeModal();
         Router.navigate('request-detail', { id: result.id });
