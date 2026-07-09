@@ -1022,9 +1022,17 @@ const RequestsView = {
     const syncSubjectLang = (lang) => subjectInput.classList.toggle('field-divehi', lang === 'dv');
     RichEditor.bindLangToggle(form, 'subjectLanguage', syncSubjectLang);
     RichEditor.bindAutoDetect(subjectInput, form, 'subjectLanguage', syncSubjectLang);
-    RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
+    const syncMessageLang = (lang) => editor.setLanguage(lang);
+    RichEditor.bindLangToggle(form, 'language', syncMessageLang);
     this._bindDeadlineField(form);
     this._bindLoopInField(form, loopInUsers);
+    DraftAutosave.autoSaveForm(form, 'compose-request', editor, {
+      fieldNames: ['toOrgId', 'fromSectionId', 'subject', 'deadline'],
+      langToggles: [
+        { name: 'subjectLanguage', onChange: syncSubjectLang },
+        { name: 'language', onChange: syncMessageLang },
+      ],
+    });
 
     // Files chosen here queue in memory — the request row doesn't exist
     // yet for attachments to point at, so they're actually uploaded
@@ -1101,6 +1109,7 @@ const RequestsView = {
         } catch (err) {
           failures.push(`Loop In Staff: ${err.message || 'failed'}`);
         }
+        DraftAutosave.clear('compose-request');
         this._closeModal();
         Router.navigate('request-detail', { id: result.id });
         if (failures.length > 0) alert(`Draft saved, but some attachments failed to upload:\n${failures.join('\n')}`);
