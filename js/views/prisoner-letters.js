@@ -9,6 +9,26 @@ const PrisonerLettersView = {
   async render(container, params = {}) {
     const user = Auth.getCachedProfile();
     if (!user) { Router.navigate('login'); return; }
+
+    // Restricted to individually-designated staff (is_prisoner_letters_staff,
+    // granted via Admin > Manage User) — no automatic pass for supervisors/
+    // admins, matching prisoner_letters_select/etc in supabase/rls.sql
+    // exactly. Same full-shell "not permitted" pattern admin.js uses for
+    // the same reason: content without a sidebar sibling renders offset
+    // next to an empty gutter at desktop widths.
+    if (!AppShell.canAccessPrisonerLetters(user)) {
+      container.innerHTML = `
+        <div class="app-layout">
+          ${AppShell.topbarHtml(user, 'prisoner-letters')}
+          <main class="main-content">
+            <div class="alert alert-error"><i class="ti ti-lock"></i> You do not have permission to view this page.</div>
+          </main>
+          ${AppShell.bottomNavHtml(user, 'prisoner-letters')}
+        </div>`;
+      AppShell.bindTopbar();
+      return;
+    }
+
     this._user = user;
     this._isSupervisor = AppShell.isSupervisorOrAbove(user);
     this._isMcs = await this._resolveIsMcs(user);
@@ -511,7 +531,12 @@ const PrisonerLettersView = {
       return;
     }
     sections = sections.filter(s => s.is_active);
-    users = users.filter(u => u.is_active);
+    // Only staff individually designated for prisoner-letters duty can
+    // ever be assigned a letter now (prisoner_letters_update/
+    // prisoner_replies_insert RLS requires is_prisoner_letters_staff()
+    // with no exceptions) — offering anyone else here would just be an
+    // assignment nobody could act on.
+    users = users.filter(u => u.is_active && u.is_prisoner_letters_staff);
 
     if (sections.length === 0) {
       this._openModal(`
@@ -537,7 +562,9 @@ const PrisonerLettersView = {
             <option value="">— Unassigned —</option>
             ${users.map(u => `<option value="${u.id}">${u.full_name}</option>`).join('')}
           </select>
-          <div class="field-hint">Only the assigned person (or a supervisor) can reply to this letter.</div>
+          <div class="field-hint">${users.length === 0
+            ? 'No staff in this organization are designated for Prisoner Letters yet — grant access via Admin > Manage User first.'
+            : 'Only the assigned person can reply to this letter — Prisoner Letters access has no supervisor override.'}</div>
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">

@@ -28,6 +28,17 @@ const AppShell = {
     return (user.assignments || []).some(a => a.is_active && a.role === role);
   },
 
+  // Prisoner Letters is restricted to staff individually designated for
+  // that duty (users.is_prisoner_letters_staff, granted per-user via
+  // Admin > Manage User) — deliberately NOT folded into isAdmin()/
+  // isSupervisorOrAbove() above; an admin or supervisor who isn't
+  // personally flagged gets no automatic pass here, matching
+  // is_prisoner_letters_staff() in supabase/rls.sql exactly (the real
+  // enforcement — this is only the nav-link/menu-visibility mirror).
+  canAccessPrisonerLetters(user) {
+    return !!user.is_prisoner_letters_staff;
+  },
+
   initials(name) {
     return name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
   },
@@ -66,6 +77,7 @@ const AppShell = {
   // without changing its own markup.
   sidebarHtml(user, activeRoute) {
     const admin = this.isAdmin(user);
+    const canLetters = this.canAccessPrisonerLetters(user);
     const item = (route, label, icon) =>
       `<a href="#${route}" class="sidebar-link${activeRoute === route ? ' sidebar-link--active' : ''}">
         <i class="ti ${icon}"></i><span>${label}</span>
@@ -83,7 +95,7 @@ const AppShell = {
         <nav class="sidebar-nav">
           ${item('dashboard', 'Dashboard', 'ti-layout-dashboard')}
           ${item('requests', 'Requests', 'ti-inbox')}
-          ${item('prisoner-letters', 'Prisoner Letters', 'ti-mail')}
+          ${canLetters ? item('prisoner-letters', 'Prisoner Letters', 'ti-mail') : ''}
           ${admin ? item('admin', 'Administration', 'ti-settings') : ''}
         </nav>
         <div class="sidebar-user">
@@ -100,6 +112,7 @@ const AppShell = {
   topbarHtml(user, activeRoute) {
     const name = user.full_name;
     const admin = this.isAdmin(user);
+    const canLetters = this.canAccessPrisonerLetters(user);
     const link = (route, label) =>
       `<a href="#${route}" class="topbar-link${activeRoute === route ? ' topbar-link--active' : ''}">${label}</a>`;
 
@@ -113,7 +126,7 @@ const AppShell = {
         <nav class="topbar-nav" id="topbar-nav">
           ${link('dashboard', 'Dashboard')}
           ${link('requests', 'Requests')}
-          ${link('prisoner-letters', 'Letters')}
+          ${canLetters ? link('prisoner-letters', 'Letters') : ''}
           ${admin ? link('admin', 'Admin') : ''}
         </nav>
         <div class="topbar-actions">
@@ -179,6 +192,7 @@ const AppShell = {
   // the mobile breakpoint.
   bottomNavHtml(user, activeRoute) {
     const admin = this.isAdmin(user);
+    const canLetters = this.canAccessPrisonerLetters(user);
     const item = (route, label, icon) =>
       `<a href="#${route}" class="bottom-nav-item${activeRoute === route ? ' bottom-nav-item--active' : ''}">
         <i class="ti ${icon}"></i>
@@ -189,7 +203,7 @@ const AppShell = {
       <nav class="bottom-nav">
         ${item('dashboard', 'Home', 'ti-home')}
         ${item('requests', 'Requests', 'ti-inbox')}
-        ${item('prisoner-letters', 'Letters', 'ti-mail')}
+        ${canLetters ? item('prisoner-letters', 'Letters', 'ti-mail') : ''}
         ${admin ? item('admin', 'Admin', 'ti-settings') : ''}
       </nav>
     `;

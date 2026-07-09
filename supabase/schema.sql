@@ -130,6 +130,14 @@ CREATE TABLE users (
   is_super_admin       BOOLEAN NOT NULL DEFAULT FALSE,
   designation_id       UUID    REFERENCES designations(id),  -- Optional; set by the org's own admin
   preferred_language   TEXT    NOT NULL DEFAULT 'en' CHECK (preferred_language IN ('en', 'dv')),
+  -- A plain per-user flag, not a role/section assignment — prisoner
+  -- letters is a narrow duty a specific staffer is designated for,
+  -- independent of which section they otherwise belong to. Set FALSE
+  -- by default for every new user (including admins/supervisors — see
+  -- is_prisoner_letters_staff() in rls.sql for why this deliberately
+  -- has no automatic bypass), granted individually via Admin > Manage
+  -- User, same as is_active's toggle-button pattern.
+  is_prisoner_letters_staff BOOLEAN NOT NULL DEFAULT FALSE,
   is_active            BOOLEAN NOT NULL DEFAULT TRUE,
   password_changed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   password_expires_at  TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '90 days',

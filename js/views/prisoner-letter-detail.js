@@ -9,6 +9,23 @@ const PrisonerLetterDetailView = {
     if (!user) { Router.navigate('login'); return; }
     if (!params.id) { Router.navigate('prisoner-letters'); return; }
 
+    // Same is_prisoner_letters_staff gate as PrisonerLettersView.render —
+    // RLS is the real boundary (getLetter() below would just fail/return
+    // nothing for a non-flagged user), but this avoids a raw error state
+    // for what's actually a permissions issue, not a data problem.
+    if (!AppShell.canAccessPrisonerLetters(user)) {
+      container.innerHTML = `
+        <div class="app-layout">
+          ${AppShell.topbarHtml(user, 'prisoner-letters')}
+          <main class="main-content">
+            <div class="alert alert-error"><i class="ti ti-lock"></i> You do not have permission to view this page.</div>
+          </main>
+          ${AppShell.bottomNavHtml(user, 'prisoner-letters')}
+        </div>`;
+      AppShell.bindTopbar();
+      return;
+    }
+
     this._user = user;
     this._letterId = params.id;
 
@@ -443,7 +460,12 @@ const PrisonerLetterDetailView = {
       return;
     }
     sections = sections.filter(s => s.is_active);
-    users = users.filter(u => u.is_active);
+    // Only staff individually designated for prisoner-letters duty can
+    // ever be assigned a letter now (prisoner_letters_update/
+    // prisoner_replies_insert RLS requires is_prisoner_letters_staff()
+    // with no exceptions) — offering anyone else here would just be an
+    // assignment nobody could act on.
+    users = users.filter(u => u.is_active && u.is_prisoner_letters_staff);
 
     if (sections.length === 0) {
       this._openModal(`
@@ -469,7 +491,9 @@ const PrisonerLetterDetailView = {
             <option value="">— Unassigned —</option>
             ${users.map(u => `<option value="${u.id}">${u.full_name}</option>`).join('')}
           </select>
-          <div class="field-hint">Only the assigned person (or a supervisor) can reply to this letter.</div>
+          <div class="field-hint">${users.length === 0
+            ? 'No staff in this organization are designated for Prisoner Letters yet — grant access via Admin > Manage User first.'
+            : 'Only the assigned person can reply to this letter — Prisoner Letters access has no supervisor override.'}</div>
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
