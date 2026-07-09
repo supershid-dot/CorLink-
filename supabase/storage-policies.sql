@@ -55,14 +55,49 @@ CREATE POLICY "attachments_storage_select" ON storage.objects
     AND EXISTS (SELECT 1 FROM attachments a WHERE a.storage_path = storage.objects.name)
   );
 
+-- 'internal_reply' was missing from this list — added as its own
+-- attachments record_type later (patch-internal-reply-attachments.sql,
+-- for Draft Reply attachments in Internal Collaboration) but this
+-- allowlist was never updated to match, so every upload attempt for an
+-- internal reply's attachment (path internal_reply/{id}/{filename})
+-- has been silently rejected by Storage since that feature shipped.
 DROP POLICY IF EXISTS "attachments_storage_insert" ON storage.objects;
 CREATE POLICY "attachments_storage_insert" ON storage.objects
   FOR INSERT WITH CHECK (
     bucket_id = 'attachments'
     AND owner = auth.uid()
-    AND (storage.foldername(name))[1] IN ('request', 'response', 'internal_request', 'prisoner_letter', 'prisoner_reply')
+    AND (storage.foldername(name))[1] IN ('request', 'response', 'internal_request', 'prisoner_letter', 'prisoner_reply', 'internal_reply')
   );
 
 DROP POLICY IF EXISTS "attachments_storage_delete" ON storage.objects;
 CREATE POLICY "attachments_storage_delete" ON storage.objects
   FOR DELETE USING (bucket_id = 'attachments' AND owner = auth.uid());
+
+-- ─── Server-side upload limits ──────────────────────────────────
+-- js/data/attachments-api.js already checks extension/size before
+-- uploading, but that's a client-side convenience check only — a
+-- direct call to the Storage API bypasses it entirely. Setting these
+-- on the bucket row itself makes Storage reject the upload server-side
+-- regardless of which client (or lack of one) is doing the uploading.
+-- Mirrors ALLOWED_EXTENSIONS/MAX_FILE_BYTES in attachments-api.js —
+-- keep both in sync if either changes. Buckets must already exist
+-- (created manually per supabase/auth-setup.md) for these UPDATEs to
+-- affect anything; harmless no-op otherwise.
+UPDATE storage.buckets SET
+  file_size_limit = 20971520, -- 20 MB, matches MAX_FILE_BYTES
+  allowed_mime_types = ARRAY[
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'image/jpeg',
+    'image/png'
+  ]
+WHERE id = 'attachments';
+
+-- org-logos: no client-side type check exists today beyond the file
+-- input's `accept` attribute (not a security boundary) — this is the
+-- only actual enforcement.
+UPDATE storage.buckets SET
+  file_size_limit = 2097152, -- 2 MB — a logo has no business being larger
+  allowed_mime_types = ARRAY['image/png', 'image/jpeg']
+WHERE id = 'org-logos';

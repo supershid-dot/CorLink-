@@ -19,3 +19,11 @@ const PASSWORD_EXPIRY_DAYS     = 90;
 const APP_NAME    = 'CorLink';
 const APP_TAGLINE = 'Secure. Structured. Accountable.';
 const APP_VERSION = '1.0.0';
+
+// ─── List Fetch Caps ──────────────────────────────────────────
+// RequestsAPI.listInbox/listSent (most-recent-first) cap how many rows
+// a single page load pulls, rather than fetching an org's entire
+// history unbounded — see the comment above listInbox in
+// js/data/requests-api.js for why. High enough that no real org using
+// this app today will ever notice it; exists so one never can't.
+const INBOX_LIST_CAP = 1000;

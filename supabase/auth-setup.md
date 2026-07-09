@@ -102,6 +102,35 @@ match what changed since, instead of re-running the full files:
   CC'd staffer): the same-section supervisor and admin still see the
   request/its approvals/its attachments, the other section's supervisor no
   longer does, and the CC'd staffer still does via the unrelated CC policy.
+- `supabase/patch-audit-integrity.sql` — `audit_insert` previously only
+  checked `auth.uid() IS NOT NULL`, letting any authenticated user forge an
+  audit_logs row with an arbitrary `user_id` via a direct REST call (e.g.
+  "approved by [someone else]"). Now requires `user_id = auth.uid()` —
+  every real call site already sets this, so no legitimate use breaks.
+  Verified against a real local Postgres instance: a forged insert
+  (different user_id than the caller) is rejected; a self-attributed
+  insert still succeeds.
+- Re-run `supabase/storage-policies.sql` (it's idempotent, safe to re-run
+  anytime) — two fixes: (1) the `attachments` bucket's Storage INSERT
+  policy was missing `'internal_reply'` from its allowed-folder list, so
+  every attachment upload on a Draft Reply in Internal Collaboration has
+  been silently failing since that feature shipped; (2) sets
+  `file_size_limit`/`allowed_mime_types` server-side on the `attachments`
+  and `org-logos` buckets, matching the client-side checks already in
+  `attachments-api.js` — closes the gap where a direct Storage API call
+  could bypass those checks entirely.
+- `supabase/patch-workflow-transitions.sql` — RLS gates WHO can update a
+  request/response, but nothing previously stopped a legitimately-
+  authorized supervisor's UPDATE from jumping the `status` column
+  straight from `draft` to `sent` via a direct API call, skipping the
+  approvals-table record of who actually reviewed it. Adds a
+  `BEFORE UPDATE OF status` trigger on both tables validating every
+  transition against the exact set `js/data/requests-api.js` actually
+  uses. Verified against a real local Postgres instance: the full
+  legitimate chain, the return-for-correction loop, and the `overdue`
+  overlay all still work; a direct `draft` → `sent` skip and a
+  `closed` → `draft` reversal are both rejected; a non-status UPDATE
+  doesn't invoke the trigger at all.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 
@@ -152,7 +181,7 @@ Create these buckets in Supabase → Storage:
 Enable RLS on all private buckets.
 
 ## 6. Realtime & pg_cron (Phase 5 — Notifications)
-- **Realtime**: Database → Replication (or Table Editor → table → "Realtime") → enable on `notifications`, `requests`, `responses`. The notification bell subscribes to `notifications` INSERTs live; without this it still works, just requires a page reload to see new notifications.
+- **Realtime**: Database → Replication (or Table Editor → table → "Realtime") → enable on `notifications`, `requests`, `responses`, `internal_requests`, `internal_request_replies`. The notification bell subscribes to `notifications` INSERTs live; request-detail.js's "This case has been updated" toast subscribes to the other four. Without this it still works, just requires a page reload to see live updates.
 - **pg_cron**: Database → Extensions → search "pg_cron" → enable. `supabase/notifications.sql` schedules a daily job (`check_deadlines()`, 03:00 UTC) that flips requests past their deadline to `overdue` and notifies the relevant section. If you run that file before enabling the extension, re-run just the `CREATE EXTENSION`/`cron.schedule` lines at the top afterward.
 
 ## 7. Edge Functions

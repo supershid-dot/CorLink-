@@ -1529,12 +1529,18 @@ CREATE POLICY "deadline_ext_update" ON deadline_extensions
   );
 
 -- ─── audit_logs ───────────────────────────────────────────────
--- INSERT: any authenticated user (the application always logs on behalf of users).
+-- INSERT: any authenticated user, but only attributed to THEMSELVES —
+-- every logAudit() call site in js/data/*.js already sets
+-- user_id: session.user.id, so this was never actually needed for any
+-- legitimate call; without it, any authenticated user could insert a
+-- row via a direct REST call with an arbitrary user_id, forging e.g.
+-- "approved by [someone else]" in the audit trail this app's own
+-- receipt/timeline UI treats as authoritative.
 -- SELECT: super admins see everything; org admins/supervisors see only
 -- entries about users in their own organization. No UPDATE or DELETE —
 -- immutability enforced here.
 CREATE POLICY "audit_insert" ON audit_logs
-  FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+  FOR INSERT WITH CHECK (user_id = auth.uid());
 
 CREATE POLICY "audit_select" ON audit_logs
   FOR SELECT USING (

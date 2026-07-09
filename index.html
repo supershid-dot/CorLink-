@@ -11,14 +11,21 @@
        cannot set HTTP headers, so this meta tag is the enforcement point.
        Restricts script/style/connect sources to only what CorLink needs:
        self, Google Fonts, jsDelivr (Supabase JS + Tabler Icons), and the
-       Supabase project itself (REST + Realtime WebSocket). -->
+       Supabase project itself (REST + Realtime WebSocket).
+       connect-src/img-src are pinned to THIS project's own subdomain
+       (infjjroktzzhaxjvfknr.supabase.co, matching SUPABASE_URL in
+       js/config.js) rather than the broader https://*.supabase.co
+       wildcard — if a stored-XSS payload ever ran despite the rest of
+       this app's sanitization, the wildcard would let it exfiltrate
+       data to ANY Supabase project, not just this one. If you deploy
+       to a different Supabase project, update the ref here to match. -->
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
     script-src 'self' https://cdn.jsdelivr.net;
     style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net;
     font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net;
-    img-src 'self' data: https:;
-    connect-src 'self' https://*.supabase.co wss://*.supabase.co;
+    img-src 'self' data: https://infjjroktzzhaxjvfknr.supabase.co;
+    connect-src 'self' https://infjjroktzzhaxjvfknr.supabase.co wss://infjjroktzzhaxjvfknr.supabase.co;
     object-src 'none';
     base-uri 'self';
     frame-ancestors 'none';
@@ -91,6 +98,7 @@
        layer since requests-api.js/internal-requests-api.js sanitize
        bodies at write time via RichEditor.sanitize(). -->
   <script src="js/lib/rich-editor.js" defer></script>
+  <script src="js/lib/draft-autosave.js" defer></script>
 
   <!-- Data layer -->
   <script src="js/data/admin-api.js" defer></script>

@@ -308,6 +308,36 @@ p  { line-height: 1.6; }
 }
 .icon-btn-xs:hover { background: var(--color-primary-light); color: var(--color-primary); }
 
+/* Realtime "this case changed" notice (request-detail.js) — a fixed
+   toast the viewer dismisses or acts on, not an auto-reload (which
+   would blow away an in-progress compose form the instant the other
+   side does anything). Positioned above .bottom-nav's z-index so it
+   isn't hidden behind the fixed mobile tab bar. */
+.realtime-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 10px 16px;
+  background: var(--color-text);
+  color: #fff;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  font-size: 0.875rem;
+  max-width: calc(100vw - 32px);
+}
+.realtime-toast i:first-child { color: var(--color-primary-light); flex-shrink: 0; }
+.realtime-toast span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.realtime-toast .icon-btn-xs { color: rgba(255,255,255,.7); }
+.realtime-toast .icon-btn-xs:hover { background: rgba(255,255,255,.15); color: #fff; }
+@media (max-width: 640px) {
+  .realtime-toast { bottom: calc(76px + env(safe-area-inset-bottom)); }
+}
+
 /* ── Form Fields ────────────────────────────────────────────── */
 .field-group { display: flex; flex-direction: column; gap: 6px; }
 
@@ -860,6 +890,76 @@ p  { line-height: 1.6; }
   color: var(--color-text-light);
 }
 
+/* ── Global Search (topbar) ──────────────────────────────────── */
+.global-search-wrap { position: relative; }
+
+.global-search-panel {
+  position: absolute; right: 0; top: calc(100% + 6px);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  overflow: hidden;
+  z-index: 200;
+}
+.global-search-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-light);
+}
+.global-search-input-wrap input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 0.875rem;
+  color: var(--color-text);
+}
+.global-search-results {
+  max-height: 360px;
+  overflow-y: auto;
+}
+.global-search-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--color-text-light);
+  font-size: 0.875rem;
+}
+.global-search-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border);
+  transition: background var(--transition);
+  color: var(--color-text-light);
+}
+.global-search-result:last-child { border-bottom: none; }
+.global-search-result:hover { background: var(--color-bg); }
+.global-search-result-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.global-search-result-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-text);
+  white-space: normal;
+}
+.global-search-result-meta {
+  font-size: 0.75rem;
+  color: var(--color-text-light);
+}
+
 /* ── Main Content ────────────────────────────────────────────── */
 .main-content {
   flex: 1;
@@ -1348,6 +1448,36 @@ input.field-divehi, textarea.field-divehi, select.field-divehi {
   color: var(--color-text-muted);
   padding: 24px 0;
 }
+
+/* ── Empty States (Requests tabs) ────────────────────────────── */
+/* Rendered inside a <td> spanning the table, so it needs to undo the
+   cell's own text-align/vertical-align rather than relying on the
+   table's default layout. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+  padding: 40px 20px;
+  color: var(--color-text-muted);
+}
+.empty-state i {
+  font-size: 2rem;
+  color: var(--color-text-light);
+  margin-bottom: 6px;
+}
+.empty-state-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.empty-state-subtitle {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  max-width: 360px;
+}
+.empty-state .btn { margin-top: 8px; }
 
 /* ── Search Box (Requests tabs) ──────────────────────────────── */
 /* dir="auto" on the input itself (see js/views/requests.js) lets the
