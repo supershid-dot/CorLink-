@@ -926,6 +926,9 @@ const RequestDetailView = {
       const editor = RichEditor.create(form.querySelector('.response-body'), { language: 'dv' });
       RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
       RequestsView._bindLoopInField(form, this._toOrgUsers);
+      DraftAutosave.autoSaveForm(form, `response:${requestId}`, editor, {
+        langToggles: [{ name: 'language', onChange: (lang) => editor.setLanguage(lang) }],
+      });
 
       const pendingFiles = [];
       const pendingListEl = form.querySelector(`[data-response-pending="${requestId}"]`);
@@ -986,6 +989,7 @@ const RequestDetailView = {
               failures.push(`${file.name}: ${err.message || 'upload failed'}`);
             }
           }
+          DraftAutosave.clear(`response:${requestId}`);
           await this._load();
           if (failures.length > 0) alert(`Response sent, but some attachments failed to upload:\n${failures.join('\n')}`);
         } catch (err) {
@@ -1135,6 +1139,9 @@ const RequestDetailView = {
       const internalRequestId = form.dataset.internalReplyForm;
       const editor = RichEditor.create(form.querySelector('.internal-reply-body'), { language: 'dv' });
       RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
+      DraftAutosave.autoSaveForm(form, `internal-reply:${internalRequestId}`, editor, {
+        langToggles: [{ name: 'language', onChange: (lang) => editor.setLanguage(lang) }],
+      });
 
       const pendingFiles = [];
       const pendingListEl = form.querySelector(`[data-internal-reply-pending="${internalRequestId}"]`);
@@ -1194,6 +1201,7 @@ const RequestDetailView = {
               failures.push(`${file.name}: ${err.message || 'upload failed'}`);
             }
           }
+          DraftAutosave.clear(`internal-reply:${internalRequestId}`);
           this._openInternalReplyIds.delete(internalRequestId);
           await this._load();
           if (failures.length > 0) alert(`Reply drafted, but some attachments failed to upload:\n${failures.join('\n')}`);
@@ -1504,7 +1512,15 @@ const RequestDetailView = {
     const syncEditSubjectLang = (lang) => editSubject.classList.toggle('field-divehi', lang === 'dv');
     RichEditor.bindLangToggle(form, 'subjectLanguage', syncEditSubjectLang);
     RichEditor.bindAutoDetect(editSubject, form, 'subjectLanguage', syncEditSubjectLang);
-    RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
+    const syncEditMessageLang = (lang) => editor.setLanguage(lang);
+    RichEditor.bindLangToggle(form, 'language', syncEditMessageLang);
+    DraftAutosave.autoSaveForm(form, `edit-request:${requestId}`, editor, {
+      fieldNames: ['subject', 'deadline'],
+      langToggles: [
+        { name: 'subjectLanguage', onChange: syncEditSubjectLang },
+        { name: 'language', onChange: syncEditMessageLang },
+      ],
+    });
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
@@ -1521,6 +1537,7 @@ const RequestDetailView = {
           body, language: fd.get('language'),
           deadline: fd.get('deadline') || null,
         });
+        DraftAutosave.clear(`edit-request:${requestId}`);
         this._closeModal();
         await this._load();
       } catch (err) {
@@ -1559,7 +1576,11 @@ const RequestDetailView = {
     const form = document.getElementById('edit-response-form');
     const editor = RichEditor.create(document.getElementById('edit-response-body'), { language: resp.language || 'en' });
     editor.setHTML(resp.body);
-    RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
+    const syncEditRespLang = (lang) => editor.setLanguage(lang);
+    RichEditor.bindLangToggle(form, 'language', syncEditRespLang);
+    DraftAutosave.autoSaveForm(form, `edit-response:${responseId}`, editor, {
+      langToggles: [{ name: 'language', onChange: syncEditRespLang }],
+    });
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const errEl = form.querySelector('.modal-error');
@@ -1571,6 +1592,7 @@ const RequestDetailView = {
       }
       try {
         await RequestsAPI.updateResponseDraft(responseId, { body, language: new FormData(form).get('language') });
+        DraftAutosave.clear(`edit-response:${responseId}`);
         this._closeModal();
         await this._load();
       } catch (err) {
@@ -1633,7 +1655,15 @@ const RequestDetailView = {
     const syncFollowupSubjectLang = (lang) => followupSubject.classList.toggle('field-divehi', lang === 'dv');
     RichEditor.bindLangToggle(form, 'subjectLanguage', syncFollowupSubjectLang);
     RichEditor.bindAutoDetect(followupSubject, form, 'subjectLanguage', syncFollowupSubjectLang);
-    RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
+    const syncFollowupMessageLang = (lang) => editor.setLanguage(lang);
+    RichEditor.bindLangToggle(form, 'language', syncFollowupMessageLang);
+    DraftAutosave.autoSaveForm(form, `followup:${r.id}`, editor, {
+      fieldNames: ['fromSectionId', 'subject', 'deadline'],
+      langToggles: [
+        { name: 'subjectLanguage', onChange: syncFollowupSubjectLang },
+        { name: 'language', onChange: syncFollowupMessageLang },
+      ],
+    });
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
@@ -1652,6 +1682,7 @@ const RequestDetailView = {
           deadline: fd.get('deadline') || null, parentRequestId: r.id,
         });
         await CCRecipientsAPI.add('request', result.id, fd.getAll('loopInUserIds'));
+        DraftAutosave.clear(`followup:${r.id}`);
         this._closeModal();
         Router.navigate('request-detail', { id: result.id });
       } catch (err) {
@@ -1723,8 +1754,16 @@ const RequestDetailView = {
     const syncInternalSubjectLang = (lang) => internalSubject.classList.toggle('field-divehi', lang === 'dv');
     RichEditor.bindLangToggle(form, 'subjectLanguage', syncInternalSubjectLang);
     RichEditor.bindAutoDetect(internalSubject, form, 'subjectLanguage', syncInternalSubjectLang);
-    RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
+    const syncInternalMessageLang = (lang) => editor.setLanguage(lang);
+    RichEditor.bindLangToggle(form, 'language', syncInternalMessageLang);
     RequestsView._bindDeadlineField(form, entry.request.deadline);
+    DraftAutosave.autoSaveForm(form, `internal-request:${parentRequestId}`, editor, {
+      fieldNames: ['toSectionId', 'subject', 'deadline'],
+      langToggles: [
+        { name: 'subjectLanguage', onChange: syncInternalSubjectLang },
+        { name: 'language', onChange: syncInternalMessageLang },
+      ],
+    });
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
@@ -1747,6 +1786,7 @@ const RequestDetailView = {
           subject: fd.get('subject'), subjectLanguage: fd.get('subjectLanguage'),
           body, language: fd.get('language'), deadline,
         });
+        DraftAutosave.clear(`internal-request:${parentRequestId}`);
         this._closeModal();
         await this._load();
       } catch (err) {
@@ -1852,7 +1892,11 @@ const RequestDetailView = {
     const editor = RichEditor.create(document.getElementById('internal-reply-body'), { language: existing?.language || 'dv' });
     if (existing) editor.setHTML(existing.body);
     const form = document.getElementById('internal-reply-form');
-    RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
+    const syncReplyEditLang = (lang) => editor.setLanguage(lang);
+    RichEditor.bindLangToggle(form, 'language', syncReplyEditLang);
+    DraftAutosave.autoSaveForm(form, `edit-internal-reply:${replyId}`, editor, {
+      langToggles: [{ name: 'language', onChange: syncReplyEditLang }],
+    });
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const errEl = form.querySelector('.modal-error');
@@ -1865,6 +1909,7 @@ const RequestDetailView = {
       }
       try {
         await InternalRequestsAPI.updateReplyDraft(replyId, { body, language: fd.get('language') });
+        DraftAutosave.clear(`edit-internal-reply:${replyId}`);
         this._closeModal();
         await this._load();
       } catch (err) {
