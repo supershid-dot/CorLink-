@@ -14,6 +14,7 @@ const DashboardView = {
     this._isSupervisor = AppShell.isSupervisorOrAbove(user);
     this._canReceive = this._isSupervisor || AppShell.hasRole(user, 'assigned_receiver');
 
+    const dvCls = I18N.cls();
     container.innerHTML = `
       <div class="app-layout">
         ${AppShell.topbarHtml(user, 'dashboard')}
@@ -21,10 +22,10 @@ const DashboardView = {
         <main class="main-content">
           <div class="page-header page-header-row">
             <div>
-              <h2 class="page-title">${this._greeting()}, <strong>${name.split(' ')[0]}</strong> 👋</h2>
-              <p class="page-subtitle">Here's what's happening with your correspondence today.</p>
+              <h2 class="page-title"><span class="${dvCls}">${this._greeting()}</span>, <strong>${name.split(' ')[0]}</strong> 👋</h2>
+              <p class="page-subtitle${dvCls}">${I18N.t('dash_subtitle')}</p>
             </div>
-            <a href="#requests?action=compose" class="btn btn-primary btn-sm"><i class="ti ti-plus"></i> New Request</a>
+            <a href="#requests?action=compose" class="btn btn-primary btn-sm"><i class="ti ti-plus"></i> <span class="${dvCls}">${I18N.t('new_request')}</span></a>
           </div>
 
           <div class="stat-grid" id="stat-grid">
@@ -32,35 +33,35 @@ const DashboardView = {
               <div class="stat-icon-box stat-icon-box--primary"><i class="ti ti-inbox"></i></div>
               <div class="stat-card-body">
                 <div class="stat-value"><span class="spinner spinner--dark"></span></div>
-                <div class="stat-label">Inbox</div>
+                <div class="stat-label${dvCls}">${I18N.t('stat_inbox')}</div>
               </div>
             </a>
             <a href="#requests?tab=sent" class="stat-card" id="stat-sent">
               <div class="stat-icon-box stat-icon-box--secondary"><i class="ti ti-send"></i></div>
               <div class="stat-card-body">
                 <div class="stat-value"><span class="spinner spinner--dark"></span></div>
-                <div class="stat-label">Sent Requests</div>
+                <div class="stat-label${dvCls}">${I18N.t('stat_sent')}</div>
               </div>
             </a>
             <a href="#requests" class="stat-card" id="stat-overdue">
               <div class="stat-icon-box stat-icon-box--error"><i class="ti ti-alert-triangle"></i></div>
               <div class="stat-card-body">
                 <div class="stat-value"><span class="spinner spinner--dark"></span></div>
-                <div class="stat-label">Overdue</div>
+                <div class="stat-label${dvCls}">${I18N.t('stat_overdue')}</div>
               </div>
             </a>
             <a href="#prisoner-letters" class="stat-card" id="stat-letters">
               <div class="stat-icon-box stat-icon-box--warning"><i class="ti ti-mail"></i></div>
               <div class="stat-card-body">
                 <div class="stat-value"><span class="spinner spinner--dark"></span></div>
-                <div class="stat-label">Prisoner Letters</div>
+                <div class="stat-label${dvCls}">${I18N.t('stat_letters')}</div>
               </div>
             </a>
           </div>
 
           <div class="dashboard-columns">
             <div class="panel">
-              <div class="panel-header"><h3>Action Needed</h3></div>
+              <div class="panel-header"><h3 class="${dvCls}">${I18N.t('panel_action_needed')}</h3></div>
               <div class="action-list" id="action-list">
                 <div class="action-list-empty"><span class="spinner spinner--dark"></span> Loading…</div>
               </div>
@@ -68,14 +69,14 @@ const DashboardView = {
 
             <div class="dashboard-column-stack">
               <div class="panel">
-                <div class="panel-header"><h3>My Workload &amp; Efficiency</h3></div>
+                <div class="panel-header"><h3 class="${dvCls}">${I18N.t('panel_workload')}</h3></div>
                 <div id="workload-panel">
                   <div class="action-list-empty"><span class="spinner spinner--dark"></span> Loading…</div>
                 </div>
               </div>
 
               <div class="panel">
-                <div class="panel-header"><h3>Upcoming Deadlines</h3></div>
+                <div class="panel-header"><h3 class="${dvCls}">${I18N.t('panel_deadlines')}</h3></div>
                 <div class="deadline-list" id="deadline-list">
                   <div class="action-list-empty"><span class="spinner spinner--dark"></span> Loading…</div>
                 </div>
@@ -94,9 +95,9 @@ const DashboardView = {
 
   _greeting() {
     const hour = new Date().getHours();
-    if (hour < 12) return 'Good morning';
-    if (hour < 18) return 'Good afternoon';
-    return 'Good evening';
+    if (hour < 12) return I18N.t('greeting_morning');
+    if (hour < 18) return I18N.t('greeting_afternoon');
+    return I18N.t('greeting_evening');
   },
 
   async _loadStats(user) {
