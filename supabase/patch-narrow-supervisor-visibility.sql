@@ -27,6 +27,7 @@
 
 BEGIN;
 
+DROP POLICY IF EXISTS "requests_select" ON requests;
 CREATE POLICY "requests_select" ON requests
   FOR SELECT USING (
     (from_org_id = get_my_org_id() OR to_org_id = get_my_org_id())
@@ -39,6 +40,7 @@ CREATE POLICY "requests_select" ON requests
     )
   );
 
+DROP POLICY IF EXISTS "responses_select" ON responses;
 CREATE POLICY "responses_select" ON responses
   FOR SELECT USING (
     EXISTS (
@@ -85,6 +87,7 @@ RETURNS BOOLEAN AS $$
     ));
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
+DROP POLICY IF EXISTS "approvals_select" ON approvals;
 CREATE POLICY "approvals_select" ON approvals
   FOR SELECT USING (
     reviewed_by = auth.uid()
@@ -114,6 +117,7 @@ CREATE POLICY "approvals_select" ON approvals
     ))
   );
 
+DROP POLICY IF EXISTS "attachments_select" ON attachments;
 CREATE POLICY "attachments_select" ON attachments
   FOR SELECT USING (
     uploaded_by = auth.uid()
