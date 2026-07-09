@@ -384,13 +384,16 @@ const RequestsView = {
     const whoCountBase = searched.filter(activeStatus.test);
     const statusCountBase = searched.filter(activeWho.test);
     const filtered = statusCountBase.filter(activeStatus.test);
+    const emptyHtml = items.length === 0
+      ? this._emptyStateHtml(6, { icon: 'ti-inbox', title: 'No requests yet', subtitle: 'Correspondence sent to your organization will show up here.' })
+      : this._noMatchesHtml(6);
 
     resultsEl.innerHTML = `
       <div class="filter-row-label">Show</div>
       ${this._filterChipsHtml(whoFilters, whoCountBase, activeWho.key, 'who')}
       <div class="filter-row-label">Status</div>
       ${this._filterChipsHtml(statusFilters, statusCountBase, activeStatus.key, 'filter')}
-      ${this._listPanel(null, filtered, { orgCol: 'From', orgKey: 'from_org', allowReceive: this._canReceive })}
+      ${this._listPanel(null, filtered, { orgCol: 'From', orgKey: 'from_org', allowReceive: this._canReceive, emptyHtml })}
     `;
     resultsEl.querySelectorAll('[data-who]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -437,14 +440,22 @@ const RequestsView = {
     const whoCountBase = searched.filter(activeStatus.test);
     const statusCountBase = searched.filter(activeWho.test);
     const filtered = statusCountBase.filter(activeStatus.test);
+    const emptyHtml = items.length === 0
+      ? this._emptyStateHtml(6, {
+          icon: 'ti-send', title: 'No requests sent yet',
+          subtitle: 'Start a new case to send correspondence to another organization.',
+          cta: '<button type="button" class="btn btn-primary btn-sm" data-empty-compose>New Request</button>',
+        })
+      : this._noMatchesHtml(6);
 
     resultsEl.innerHTML = `
       <div class="filter-row-label">Show</div>
       ${this._filterChipsHtml(whoFilters, whoCountBase, activeWho.key, 'who')}
       <div class="filter-row-label">Status</div>
       ${this._filterChipsHtml(statusFilters, statusCountBase, activeStatus.key, 'filter')}
-      ${this._listPanel(null, filtered, { orgCol: 'To', orgKey: 'to_org' })}
+      ${this._listPanel(null, filtered, { orgCol: 'To', orgKey: 'to_org', emptyHtml })}
     `;
+    resultsEl.querySelector('[data-empty-compose]')?.addEventListener('click', () => this._openComposeModal());
     resultsEl.querySelectorAll('[data-who]').forEach(btn => {
       btn.addEventListener('click', () => {
         this._state.sentWho = btn.dataset.who;
@@ -512,9 +523,15 @@ const RequestsView = {
     const filters = this._teamFilters();
     const active = filters.find(f => f.key === this._state.teamFilter) || filters[0];
     const filtered = searched.filter(active.test);
+    const emptyHtml = items.length === 0
+      ? this._emptyStateHtml(6, {
+          icon: 'ti-briefcase', title: 'Nothing assigned yet',
+          subtitle: "Assign this staff member to a case from any request's detail page to see their workload here.",
+        })
+      : this._noMatchesHtml(6);
     resultsEl.innerHTML = `
       ${this._filterChipsHtml(filters, searched, active.key)}
-      ${this._listPanel(null, filtered, { orgCol: 'From', orgKey: 'from_org' })}
+      ${this._listPanel(null, filtered, { orgCol: 'From', orgKey: 'from_org', emptyHtml })}
     `;
     resultsEl.querySelectorAll('[data-filter]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -630,7 +647,23 @@ const RequestsView = {
     const searched = items.filter(ir => this._matchesQuery(ir.subject, ir.body, query));
     const awaitingMyReply = searched.filter(ir => mySet.has(ir.to_section_id));
     const awaitingTheirReply = searched.filter(ir => mySet.has(ir.from_section_id) && !mySet.has(ir.to_section_id));
+    // Unsearched (pre-query) counts per sub-tab, to tell "this sub-tab
+    // has genuinely never had anything" apart from "a search/filter
+    // just matched nothing" — same distinction _renderInboxFiltered/
+    // _renderSentFiltered/_renderTeamFiltered make.
+    const rawMine = items.filter(ir => mySet.has(ir.to_section_id));
+    const rawTheirs = items.filter(ir => mySet.has(ir.from_section_id) && !mySet.has(ir.to_section_id));
     const sub = this._state.infoSub === 'theirs' ? 'theirs' : 'mine';
+    const activeList = sub === 'mine' ? awaitingMyReply : awaitingTheirReply;
+    const rawEmpty = (sub === 'mine' ? rawMine : rawTheirs).length === 0;
+    const emptyHtml = rawEmpty
+      ? this._emptyStateHtml(6, {
+          icon: 'ti-messages', title: 'No information requests yet',
+          subtitle: sub === 'mine'
+            ? "When another section loops your section in on a case for supporting info, it'll show up here."
+            : 'Open any case and use "Loop in a Section" to gather info from another team — it will show up here.',
+        })
+      : this._noMatchesHtml(6);
     resultsEl.innerHTML = `
       <div class="tabs tabs--sub">
         <button class="tab-btn${sub === 'mine' ? ' tab-btn--active' : ''}" data-info-sub="mine">
@@ -640,7 +673,7 @@ const RequestsView = {
           <i class="ti ti-clock"></i> Information Requested — Awaiting Their Reply <span class="filter-chip-count">${awaitingTheirReply.length}</span>
         </button>
       </div>
-      ${this._infoRequestPanel(sub === 'mine' ? awaitingMyReply : awaitingTheirReply)}
+      ${this._infoRequestPanel(activeList, emptyHtml)}
     `;
     resultsEl.querySelectorAll('[data-info-sub]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -650,7 +683,7 @@ const RequestsView = {
     });
   },
 
-  _infoRequestPanel(items) {
+  _infoRequestPanel(items, emptyHtml) {
     return `
       <div class="panel">
         <table class="data-table">
@@ -669,7 +702,7 @@ const RequestsView = {
                   ? `<a class="btn btn-secondary btn-xs" href="#request-detail?id=${ir.parent_request.id}">View</a>`
                   : ''}</td>
               </tr>
-            `).join('') || `<tr><td colspan="6" class="structure-empty">Nothing here yet.</td></tr>`}
+            `).join('') || emptyHtml || `<tr><td colspan="6" class="structure-empty">Nothing here yet.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -692,11 +725,38 @@ const RequestsView = {
             </tr>
           </thead>
           <tbody>
-            ${items.map(r => this._listRow(r, opts)).join('') || `<tr><td colspan="6" class="structure-empty">Nothing here yet.</td></tr>`}
+            ${items.map(r => this._listRow(r, opts)).join('') || opts.emptyHtml || `<tr><td colspan="6" class="structure-empty">Nothing here yet.</td></tr>`}
           </tbody>
         </table>
       </div>
     `;
+  },
+
+  // Shared by every tab's table — a genuinely empty tab (nothing has
+  // ever landed here for this org/section/staff member) gets a real
+  // icon + explanation + next-action prompt; a search/filter that
+  // simply matched nothing gets a plainer "no matches" row instead, so
+  // an empty *filtered* view never implies there's nothing to create
+  // when there actually is data just hidden by the current filter.
+  _emptyStateHtml(colspan, { icon = 'ti-inbox', title, subtitle = '', cta = '' }) {
+    return `
+      <tr><td colspan="${colspan}">
+        <div class="empty-state">
+          <i class="ti ${icon}"></i>
+          <p class="empty-state-title">${title}</p>
+          ${subtitle ? `<p class="empty-state-subtitle">${subtitle}</p>` : ''}
+          ${cta}
+        </div>
+      </td></tr>
+    `;
+  },
+
+  _noMatchesHtml(colspan) {
+    return this._emptyStateHtml(colspan, {
+      icon: 'ti-search-off',
+      title: 'No matches',
+      subtitle: 'Try a different search term, or clear the active filters.',
+    });
   },
 
   _listRow(r, opts) {

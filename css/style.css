@@ -1349,6 +1349,36 @@ input.field-divehi, textarea.field-divehi, select.field-divehi {
   padding: 24px 0;
 }
 
+/* ── Empty States (Requests tabs) ────────────────────────────── */
+/* Rendered inside a <td> spanning the table, so it needs to undo the
+   cell's own text-align/vertical-align rather than relying on the
+   table's default layout. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+  padding: 40px 20px;
+  color: var(--color-text-muted);
+}
+.empty-state i {
+  font-size: 2rem;
+  color: var(--color-text-light);
+  margin-bottom: 6px;
+}
+.empty-state-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.empty-state-subtitle {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  max-width: 360px;
+}
+.empty-state .btn { margin-top: 8px; }
+
 /* ── Search Box (Requests tabs) ──────────────────────────────── */
 /* dir="auto" on the input itself (see js/views/requests.js) lets the
    browser flip to RTL text flow for Divehi search terms without any
