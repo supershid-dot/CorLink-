@@ -202,10 +202,9 @@ const RequestDetailView = {
             </div>
             <div class="thread-message-body${r.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(r.body)}</div>
             ${this._renderReviewComments('request', r, entry.reviewComments, ctx.isFromOrgMember)}
-            ${this._renderReceipt(r)}
             ${this._renderLoopedIn(entry.ccRecipients)}
             ${this._renderPendingApprovalNote(r)}
-            ${ctx.isToOrgMember ? this._renderProcessEvents(r.id) : ''}
+            ${this._renderActivityLog(this._renderReceipt(r) + (ctx.isToOrgMember ? this._renderProcessEvents(r.id) : ''))}
           </div>
 
           ${this._renderApprovalHistory(entry.approvals, ctx.isFromOrgMember)}
@@ -309,6 +308,29 @@ const RequestDetailView = {
         </div>
       `;
     }).join('');
+  },
+
+  // Collapses the received/routed/assigned/sent-by receipt lines
+  // (built by _renderReceipt/_renderProcessEvents/_renderAuditEvents
+  // above) behind a closed-by-default disclosure — on a case with
+  // several re-routes/reassignments these had grown into a wall of
+  // near-identical lines ahead of the actual message content.
+  // Deliberately does NOT touch _renderApprovalHistory's approved/
+  // returned banner, or _renderLoopedIn/_renderPendingApprovalNote —
+  // those aren't a growing historical log, they're current-state
+  // information, so they stay visible exactly as before. Same native
+  // <details>/<summary> pattern as .internal-collab-panel elsewhere in
+  // this file, styled to sit inline with the thread instead.
+  _renderActivityLog(html) {
+    if (!html) return '';
+    const count = (html.match(/class="thread-receipt"/g) || []).length;
+    if (count === 0) return '';
+    return `
+      <details class="activity-log">
+        <summary><i class="ti ti-history"></i> Activity Log <span class="badge badge-outline">${count}</span></summary>
+        <div class="activity-log-body">${html}</div>
+      </details>
+    `;
   },
 
   // Word-style review loop on a draft awaiting approval (Option B —
@@ -467,9 +489,9 @@ const RequestDetailView = {
         </div>
         <div class="thread-message-body${resp.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(resp.body)}</div>
         ${this._renderReviewComments('response', resp, rd.reviewComments, this._user.org_id === request.to_org_id)}
-        ${this._renderReceipt(resp)}
         ${this._renderLoopedIn(rd.ccRecipients)}
         ${this._renderPendingApprovalNote(resp)}
+        ${this._renderActivityLog(this._renderReceipt(resp))}
         ${['draft', 'pending_approval'].includes(resp.status) && resp.created_by === this._user.id ? `
           <div class="thread-message-actions">
             <button class="btn btn-secondary btn-xs" data-edit-response="${resp.id}">Edit Draft</button>
@@ -598,10 +620,12 @@ const RequestDetailView = {
           ${ir.deadline ? `<span class="structure-empty">Due ${RequestsView._deadlineCell(ir.deadline, ir.status)}</span>` : ''}
         </div>
         <div class="thread-message-body${ir.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(ir.body)}</div>
-        <div class="thread-receipt"><i class="ti ti-send"></i>
-          <span>Sent by <strong>${this._escapeHtml(ir.created_by_user?.full_name || 'Unknown')}</strong>${ir.created_by_user?.designations?.name ? ', ' + this._escapeHtml(ir.created_by_user.designations.name) : ''} — ${new Date(ir.created_at).toLocaleString()}</span>
-        </div>
-        ${this._renderAuditEvents('internal_request', ir.id, ['received', 'routed', 'assigned'])}
+        ${this._renderActivityLog(`
+          <div class="thread-receipt"><i class="ti ti-send"></i>
+            <span>Sent by <strong>${this._escapeHtml(ir.created_by_user?.full_name || 'Unknown')}</strong>${ir.created_by_user?.designations?.name ? ', ' + this._escapeHtml(ir.created_by_user.designations.name) : ''} — ${new Date(ir.created_at).toLocaleString()}</span>
+          </div>
+          ${this._renderAuditEvents('internal_request', ir.id, ['received', 'routed', 'assigned'])}
+        `)}
         ${this._renderAttachments('internal_request', ir.id, ird.attachments, inToSection)}
         <div class="internal-request-replies">
           ${ird.replyDetails.map(rd => this._renderInternalReply(ir, rd.reply, rd.attachments, rd.reviewComments, inToSection)).join('')}
