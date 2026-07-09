@@ -74,24 +74,42 @@ const RequestsAPI = (() => {
     // in getRequest below); a viewer who can't see a request's
     // responses just gets an empty array, which degrades to "no
     // response" in the filters rather than leaking anything.
-    async listInbox(orgId) {
+    //
+    // Capped at INBOX_LIST_CAP (most recent first, already ordered by
+    // created_at desc) rather than truly unbounded — dashboard.js's
+    // Action Needed/Workload/Upcoming Deadlines panels and requests.js's
+    // Inbox/Sent tabs all derive their client-side filter chips and
+    // counts from this same fetch, and an org that accumulates enough
+    // history would otherwise re-create the exact "one page load, one
+    // enormous query" shape that tripped Postgres's statement_timeout
+    // earlier (see patch-missing-indexes.sql/the query-batching fix in
+    // request-detail.js — same root cause, different screen). `{ count:
+    // 'exact' }` reports the TRUE total matching the filter regardless
+    // of the .limit() below, in the same round trip — no second query
+    // needed to know whether the cap was actually hit. Callers that
+    // only need the array can destructure `{ items }`; requests.js also
+    // reads `totalCount` to show "showing most recent N of M" when the
+    // two differ.
+    async listInbox(orgId, limit = INBOX_LIST_CAP) {
       const db = getSupabase();
-      const { data, error } = await db.from('requests')
-        .select('*, from_org:organizations!requests_from_org_id_fkey(name, code), responses(id, status, received_at, created_by)')
+      const { data, error, count } = await db.from('requests')
+        .select('*, from_org:organizations!requests_from_org_id_fkey(name, code), responses(id, status, received_at, created_by)', { count: 'exact' })
         .eq('to_org_id', orgId)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(limit);
       if (error) throw wrapRowError(error);
-      return data;
+      return { items: data, totalCount: count ?? data.length };
     },
 
-    async listSent(orgId) {
+    async listSent(orgId, limit = INBOX_LIST_CAP) {
       const db = getSupabase();
-      const { data, error } = await db.from('requests')
-        .select('*, to_org:organizations!requests_to_org_id_fkey(name, code), responses(status, received_at)')
+      const { data, error, count } = await db.from('requests')
+        .select('*, to_org:organizations!requests_to_org_id_fkey(name, code), responses(status, received_at)', { count: 'exact' })
         .eq('from_org_id', orgId)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(limit);
       if (error) throw wrapRowError(error);
-      return data;
+      return { items: data, totalCount: count ?? data.length };
     },
 
     // Every approvals row with decision='returned' that RLS lets me see —

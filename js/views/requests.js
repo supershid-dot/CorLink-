@@ -352,12 +352,15 @@ const RequestsView = {
   // cursor position — only the #inbox-results sub-container beneath
   // it gets replaced when the search term or active chip changes.
   async _renderInbox(content) {
-    this._inboxItems = await RequestsAPI.listInbox(this._user.org_id);
+    const { items, totalCount } = await RequestsAPI.listInbox(this._user.org_id);
+    this._inboxItems = items;
+    this._inboxTotalCount = totalCount;
     content.innerHTML = `
       <div class="list-toolbar">
         ${this._searchBoxHtml('inboxSearch', 'Search subject or message…', this._state.inboxSearch)}
         ${this._orgFilterHtml('inboxOrg', this._inboxItems, 'from_org')}
       </div>
+      ${totalCount > items.length ? `<div class="field-hint">Showing the ${items.length} most recent of ${totalCount} — use search to narrow further.</div>` : ''}
       <div id="inbox-results"></div>
     `;
     this._bindSearchBox(content, 'inboxSearch', () => this._renderInboxFiltered());
@@ -408,12 +411,15 @@ const RequestsView = {
   },
 
   async _renderSent(content) {
-    this._sentItems = await RequestsAPI.listSent(this._user.org_id);
+    const { items, totalCount } = await RequestsAPI.listSent(this._user.org_id);
+    this._sentItems = items;
+    this._sentTotalCount = totalCount;
     content.innerHTML = `
       <div class="list-toolbar">
         ${this._searchBoxHtml('sentSearch', 'Search subject or message…', this._state.sentSearch)}
         ${this._orgFilterHtml('sentOrg', this._sentItems, 'to_org')}
       </div>
+      ${totalCount > items.length ? `<div class="field-hint">Showing the ${items.length} most recent of ${totalCount} — use search to narrow further.</div>` : ''}
       <div id="sent-results"></div>
     `;
     this._bindSearchBox(content, 'sentSearch', () => this._renderSentFiltered());

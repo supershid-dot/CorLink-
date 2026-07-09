@@ -129,12 +129,14 @@ const DashboardView = {
   async _loadActionNeeded(user) {
     const listEl = document.getElementById('action-list');
     try {
-      const [inbox, sent, mySections, returnedApprovals] = await Promise.all([
+      const [inboxResult, sentResult, mySections, returnedApprovals] = await Promise.all([
         RequestsAPI.listInbox(user.org_id),
         RequestsAPI.listSent(user.org_id),
         RequestsAPI.mySections(),
         RequestsAPI.listReturnedApprovals(),
       ]);
+      const inbox = inboxResult.items;
+      const sent = sentResult.items;
 
       const rows = [];
       let outstanding = [];
