@@ -185,7 +185,13 @@ const InternalRequestsAPI = (() => {
         .update({ assigned_to: userId, status: userId ? 'in_progress' : 'received' })
         .eq('id', id).select().single();
       if (error) throw error;
-      await logAudit('assigned', id, userId ? 'Assigned internal request to a staff member' : 'Unassigned internal request');
+      let note = 'Unassigned';
+      if (userId) {
+        const { data: staff, error: staffErr } = await db.from('users').select('full_name').eq('id', userId).single();
+        if (staffErr) console.warn('CorLink: failed to look up staff name for assignment audit log:', staffErr.message);
+        note = `Assigned to ${staff?.full_name || 'a staff member'}`;
+      }
+      await logAudit('assigned', id, note);
       if (userId) {
         await NotificationsAPI.notify([userId], {
           type: 'new_request', recordType: 'request', recordId: data.parent_request_id,

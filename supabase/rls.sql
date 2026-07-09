@@ -590,11 +590,20 @@ CREATE POLICY "refseq_select" ON reference_sequences
 -- permanently lose access to something they formally received — this
 -- restores that visibility permanently once received, mirroring the
 -- "Received by [Name]" read-receipt already shown in the UI.
+-- Was `is_supervisor_or_above()` — any supervisor anywhere in the org
+-- saw every request the org was party to, regardless of section,
+-- including mail still sitting unrouted. Narrowed to is_admin(): a
+-- plain supervisor's visibility now comes from the same section/
+-- creator/received_by branches every other staff member relies on
+-- (plus the separate additive requests_select_cc/requests_select_
+-- assigned_receiver policies below for looped-in/front-desk cases) —
+-- org-wide admins keep full oversight, matching the "admins can route"
+-- intent already documented on requests_update_supervisor below.
 CREATE POLICY "requests_select" ON requests
   FOR SELECT USING (
     (from_org_id = get_my_org_id() OR to_org_id = get_my_org_id())
     AND (
-      is_supervisor_or_above()
+      is_admin()
       OR from_section_id IN (SELECT my_section_ids())
       OR to_section_id   IN (SELECT my_section_ids())
       OR created_by      = auth.uid()
@@ -677,6 +686,19 @@ CREATE POLICY "requests_update" ON requests
 -- check at all beyond "your org is party to this request", which would let
 -- any staff member set status/reference_number/is_locked directly and skip
 -- the approval workflow entirely.
+--
+-- Deliberately NOT narrowed to is_admin() like requests_select above —
+-- routeRequest()/markRequestReceived() (js/data/requests-api.js) share
+-- this same policy, and routing specifically targets requests with
+-- to_section_id still NULL, so a section-membership check here would
+-- make an admin unable to route unassigned mail to ANY section outside
+-- their own. requests_select's narrower visibility already keeps a
+-- plain supervisor from SEEING an out-of-section item to act on it
+-- through the UI in the first place; this UPDATE-side policy staying
+-- broad only matters for a direct API call, same "RLS is the real
+-- gate, but wider than the UI surfaces" tradeoff used throughout this
+-- file (e.g. pending_approval_by is informational-only routing, not
+-- exclusive, for the same reason).
 CREATE POLICY "requests_update_supervisor" ON requests
   FOR UPDATE USING (
     (from_org_id = get_my_org_id() OR to_org_id = get_my_org_id())
@@ -787,6 +809,9 @@ $$ LANGUAGE sql STABLE;
 -- the parent request's from/to section, so without this clause that
 -- exact call would self-reject post-update, the same bug class the
 -- requests_select fix addressed.
+-- Same narrowing as requests_select above — is_supervisor_or_above()
+-- to is_admin(), so a plain supervisor's response visibility matches
+-- their request visibility (own section/creator/received_by only).
 CREATE POLICY "responses_select" ON responses
   FOR SELECT USING (
     EXISTS (
@@ -794,7 +819,7 @@ CREATE POLICY "responses_select" ON responses
       WHERE r.id = request_id
         AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
         AND (
-          is_supervisor_or_above()
+          is_admin()
           OR r.from_section_id IN (SELECT my_section_ids())
           OR r.to_section_id   IN (SELECT my_section_ids())
           OR r.created_by      = auth.uid()
@@ -829,6 +854,10 @@ CREATE POLICY "responses_update" ON responses
     AND status IN ('draft', 'pending_approval')
   );
 
+-- Same "stays broad on purpose" reasoning as requests_update_supervisor
+-- above — responses_select's narrower visibility is what actually
+-- keeps a plain supervisor from seeing an out-of-section draft to
+-- approve it through the UI.
 CREATE POLICY "responses_update_supervisor" ON responses
   FOR UPDATE USING (
     EXISTS (
@@ -893,6 +922,10 @@ RETURNS UUID AS $$
   SELECT org_id FROM users WHERE id = p_user_id;
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
+-- Mirrors requests_select/responses_select's visibility shape exactly
+-- (same is_admin() narrowing, same reasoning) — kept in lockstep since
+-- cc_recipients_select/_insert (below) both call this instead of
+-- re-checking requests_select/responses_select directly.
 CREATE OR REPLACE FUNCTION can_view_request_or_response(p_record_type TEXT, p_record_id UUID)
 RETURNS BOOLEAN AS $$
   SELECT
@@ -900,7 +933,7 @@ RETURNS BOOLEAN AS $$
       SELECT 1 FROM requests r WHERE r.id = p_record_id
         AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
         AND (
-          is_supervisor_or_above()
+          is_admin()
           OR r.from_section_id IN (SELECT my_section_ids())
           OR r.to_section_id   IN (SELECT my_section_ids())
           OR r.created_by      = auth.uid()
@@ -912,7 +945,7 @@ RETURNS BOOLEAN AS $$
       WHERE re.id = p_record_id
         AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
         AND (
-          is_supervisor_or_above()
+          is_admin()
           OR r.from_section_id IN (SELECT my_section_ids())
           OR r.to_section_id   IN (SELECT my_section_ids())
           OR r.created_by      = auth.uid()
@@ -1200,6 +1233,9 @@ CREATE POLICY "review_comments_update" ON review_comments
 -- comments/return-rounds from the counterpart org — this policy only
 -- gates row existence, same "DB decides visibility, JS decides
 -- presentation" split used everywhere else in this file).
+-- Same is_admin() narrowing as requests_select/responses_select — see
+-- those for the full reasoning. Kept in lockstep since this policy is
+-- deliberately written to mirror their exact visibility shape.
 CREATE POLICY "approvals_select" ON approvals
   FOR SELECT USING (
     reviewed_by = auth.uid()
@@ -1207,7 +1243,7 @@ CREATE POLICY "approvals_select" ON approvals
       SELECT 1 FROM requests r WHERE r.id = record_id
         AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
         AND (
-          is_supervisor_or_above()
+          is_admin()
           OR r.from_section_id IN (SELECT my_section_ids())
           OR r.to_section_id   IN (SELECT my_section_ids())
           OR r.created_by      = auth.uid()
@@ -1219,7 +1255,7 @@ CREATE POLICY "approvals_select" ON approvals
       WHERE re.id = record_id
         AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
         AND (
-          is_supervisor_or_above()
+          is_admin()
           OR r.from_section_id IN (SELECT my_section_ids())
           OR r.to_section_id   IN (SELECT my_section_ids())
           OR r.created_by      = auth.uid()
@@ -1244,7 +1280,6 @@ CREATE POLICY "approvals_insert" ON approvals
 CREATE POLICY "attachments_select" ON attachments
   FOR SELECT USING (
     uploaded_by = auth.uid()
-    OR is_supervisor_or_above()
     OR (record_type = 'request' AND EXISTS (
       SELECT 1 FROM requests r
       WHERE r.id = record_id
@@ -1253,6 +1288,7 @@ CREATE POLICY "attachments_select" ON attachments
           r.from_section_id IN (SELECT my_section_ids())
           OR r.to_section_id IN (SELECT my_section_ids())
           OR r.created_by = auth.uid()
+          OR is_admin()
         )
     ))
     OR (record_type = 'response' AND EXISTS (
@@ -1264,6 +1300,7 @@ CREATE POLICY "attachments_select" ON attachments
           r.from_section_id IN (SELECT my_section_ids())
           OR r.to_section_id IN (SELECT my_section_ids())
           OR r.created_by = auth.uid()
+          OR is_admin()
         )
     ))
     OR (record_type = 'internal_request' AND EXISTS (
