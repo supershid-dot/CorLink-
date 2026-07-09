@@ -86,6 +86,30 @@ const PrisonerLettersAPI = (() => {
       return data;
     },
 
+    // Global topbar search — matches prisoner name OR reference number
+    // (letters have no subject field). Same two-ilike-queries-merged
+    // shape as RequestsAPI.globalSearch, for the same reason: avoids
+    // hand-building a .or() filter string from raw user input.
+    async globalSearch(query) {
+      const db = getSupabase();
+      const pattern = `%${query}%`;
+      const cols = 'id, prisoner_name, reference_number, status, created_at';
+      const [byName, byRef] = await Promise.all([
+        db.from('prisoner_letters').select(cols).ilike('prisoner_name', pattern).order('created_at', { ascending: false }).limit(8),
+        db.from('prisoner_letters').select(cols).ilike('reference_number', pattern).order('created_at', { ascending: false }).limit(8),
+      ]);
+      if (byName.error) throw wrapRowError(byName.error);
+      if (byRef.error) throw wrapRowError(byRef.error);
+      const seen = new Set();
+      const merged = [];
+      for (const row of [...byName.data, ...byRef.data]) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        merged.push(row);
+      }
+      return merged.slice(0, 8);
+    },
+
     // ── Counts (dashboard stat card) ─────────────────────────────
     async countInbox(orgId) {
       const db = getSupabase();
