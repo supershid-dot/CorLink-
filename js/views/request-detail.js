@@ -52,13 +52,93 @@ const RequestDetailView = {
     }
 
     await this._load();
+    this._subscribeRealtime(params.id);
   },
 
   bind() {
     // Binding happens inline as each section re-renders.
   },
 
+  // Live "this case changed" notice — deliberately a dismissible toast
+  // that the viewer chooses to act on, NOT an auto-reload. An auto-
+  // reload would blow away an in-progress Draft Response/reply the
+  // viewer is mid-typing (main.innerHTML gets fully replaced on every
+  // _load()) the instant the other side does anything, which is worse
+  // than just not having live updates at all. Scoped to requests/
+  // responses/internal_requests/internal_request_replies without a
+  // server-side filter — Realtime already only delivers rows the
+  // caller's own RLS lets them SELECT, so an unfiltered subscription
+  // here is bounded by the same visibility this page's own queries
+  // already respect, not a firehose of every org's traffic. Debounced
+  // since one user action (e.g. approving a response) can touch more
+  // than one of these tables in the same moment.
+  _subscribeRealtime(requestId) {
+    this._teardownRealtime();
+    const db = getSupabase();
+    let debounceTimer = null;
+    const notify = () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => this._showUpdateToast(), 500);
+    };
+    this._realtimeChannel = db.channel('request-detail-' + requestId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'requests' }, notify)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'responses' }, notify)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'internal_requests' }, notify)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'internal_request_replies' }, notify)
+      .subscribe();
+
+    // No per-view unmount hook exists in router.js (every render() just
+    // overwrites #app's innerHTML) — this is the one place a Realtime
+    // channel needs an explicit teardown or it keeps running/receiving
+    // events forever after the viewer navigates away. Reads
+    // window.location.hash directly (the same way router.js's own
+    // unexported getHash()/getParams() do) rather than asking Router
+    // for the current route — the hash is already updated by the time
+    // 'hashchange' fires, but Router's own currentRoute is only set
+    // partway through its async handleHashChange(), which runs as a
+    // SEPARATE listener on this same event; relying on it here would
+    // be racing that listener's internal awaits.
+    this._realtimeHashHandler = () => {
+      const hash = window.location.hash.slice(1);
+      const [route, query] = [hash.split('?')[0] || 'login', hash.split('?')[1]];
+      const currentId = query ? new URLSearchParams(query).get('id') : null;
+      if (route !== 'request-detail' || currentId !== requestId) {
+        this._teardownRealtime();
+      }
+    };
+    window.addEventListener('hashchange', this._realtimeHashHandler);
+  },
+
+  _teardownRealtime() {
+    if (this._realtimeChannel) {
+      getSupabase().removeChannel(this._realtimeChannel);
+      this._realtimeChannel = null;
+    }
+    if (this._realtimeHashHandler) {
+      window.removeEventListener('hashchange', this._realtimeHashHandler);
+      this._realtimeHashHandler = null;
+    }
+    document.getElementById('realtime-update-toast')?.remove();
+  },
+
+  _showUpdateToast() {
+    if (document.getElementById('realtime-update-toast')) return;
+    const toast = document.createElement('div');
+    toast.id = 'realtime-update-toast';
+    toast.className = 'realtime-toast';
+    toast.innerHTML = `
+      <i class="ti ti-refresh"></i>
+      <span>This case has been updated.</span>
+      <button type="button" class="btn btn-primary btn-xs" data-toast-refresh>Refresh</button>
+      <button type="button" class="icon-btn-xs" data-toast-dismiss aria-label="Dismiss"><i class="ti ti-x"></i></button>
+    `;
+    document.body.appendChild(toast);
+    toast.querySelector('[data-toast-refresh]').addEventListener('click', () => this._load());
+    toast.querySelector('[data-toast-dismiss]').addEventListener('click', () => toast.remove());
+  },
+
   async _load() {
+    document.getElementById('realtime-update-toast')?.remove();
     const main = document.getElementById('detail-main');
     try {
       const conversation = await RequestsAPI.getConversation(this._requestId);
