@@ -62,40 +62,91 @@ const RequestDetailView = {
     const main = document.getElementById('detail-main');
     try {
       const conversation = await RequestsAPI.getConversation(this._requestId);
-      this._conversation = await Promise.all(conversation.map(async (request) => {
-        const [responses, approvals, internalRequests, attachments, reviewComments, ccRecipients] = await Promise.all([
-          RequestsAPI.listResponses(request.id),
-          RequestsAPI.listApprovals('request', request.id),
-          InternalRequestsAPI.list(request.id),
-          AttachmentsAPI.list('request', request.id),
-          ReviewCommentsAPI.list('request', request.id),
-          CCRecipientsAPI.list('request', request.id),
-        ]);
-        const responseDetails = await Promise.all(responses.map(async (response) => ({
+      const requestIds = conversation.map(r => r.id);
+
+      // One batched query per table for the WHOLE case instead of one
+      // per request/response/internal-request/reply — a case with, say,
+      // 5 rounds and a couple of loop-ins used to fire 60-80 individual
+      // queries here (each its own Supabase round trip and connection),
+      // which was slow in aggregate and, on a big enough case, could
+      // exhaust the connection pool and trip Postgres's statement_timeout
+      // on an otherwise-fast query stuck waiting behind the pile-up.
+      // Group-by-foreign-key below reassembles the exact same nested
+      // shape the render code already expects, so nothing past this
+      // block needed to change.
+      const [responses, requestApprovals, internalRequests, requestAttachments, requestReviewComments, requestCcRecipients] = await Promise.all([
+        RequestsAPI.listResponsesForRequests(requestIds),
+        RequestsAPI.listApprovalsForRecords('request', requestIds),
+        InternalRequestsAPI.listForParents(requestIds),
+        AttachmentsAPI.listForRecords('request', requestIds),
+        ReviewCommentsAPI.listForRecords('request', requestIds),
+        CCRecipientsAPI.listForRecords('request', requestIds),
+      ]);
+
+      const responseIds = responses.map(r => r.id);
+      const internalRequestIds = internalRequests.map(ir => ir.id);
+
+      const [responseApprovals, responseAttachments, responseReviewComments, responseCcRecipients, replies, internalRequestAttachments] = await Promise.all([
+        RequestsAPI.listApprovalsForRecords('response', responseIds),
+        AttachmentsAPI.listForRecords('response', responseIds),
+        ReviewCommentsAPI.listForRecords('response', responseIds),
+        CCRecipientsAPI.listForRecords('response', responseIds),
+        InternalRequestsAPI.listRepliesForRequests(internalRequestIds),
+        AttachmentsAPI.listForRecords('internal_request', internalRequestIds),
+      ]);
+
+      const replyIds = replies.map(r => r.id);
+      const [replyAttachments, replyReviewComments] = await Promise.all([
+        AttachmentsAPI.listForRecords('internal_reply', replyIds),
+        ReviewCommentsAPI.listForRecords('internal_reply', replyIds),
+      ]);
+
+      const groupBy = (rows, key) => rows.reduce((map, row) => {
+        (map[row[key]] ||= []).push(row);
+        return map;
+      }, {});
+      const responsesByRequest = groupBy(responses, 'request_id');
+      const internalRequestsByParent = groupBy(internalRequests, 'parent_request_id');
+      const repliesByInternalRequest = groupBy(replies, 'internal_request_id');
+      const requestApprovalsById = groupBy(requestApprovals, 'record_id');
+      const requestAttachmentsById = groupBy(requestAttachments, 'record_id');
+      const requestReviewCommentsById = groupBy(requestReviewComments, 'record_id');
+      const requestCcRecipientsById = groupBy(requestCcRecipients, 'record_id');
+      const responseApprovalsById = groupBy(responseApprovals, 'record_id');
+      const responseAttachmentsById = groupBy(responseAttachments, 'record_id');
+      const responseReviewCommentsById = groupBy(responseReviewComments, 'record_id');
+      const responseCcRecipientsById = groupBy(responseCcRecipients, 'record_id');
+      const internalRequestAttachmentsById = groupBy(internalRequestAttachments, 'record_id');
+      const replyAttachmentsById = groupBy(replyAttachments, 'record_id');
+      const replyReviewCommentsById = groupBy(replyReviewComments, 'record_id');
+
+      this._conversation = conversation.map((request) => {
+        const responseDetails = (responsesByRequest[request.id] || []).map(response => ({
           response,
-          approvals: await RequestsAPI.listApprovals('response', response.id),
-          attachments: await AttachmentsAPI.list('response', response.id),
-          reviewComments: await ReviewCommentsAPI.list('response', response.id),
-          ccRecipients: await CCRecipientsAPI.list('response', response.id),
-        })));
-        const internalRequestDetails = await Promise.all(internalRequests.map(async (ir) => {
-          const replies = await InternalRequestsAPI.listReplies(ir.id);
-          const replyDetails = await Promise.all(replies.map(async (reply) => ({
-            reply,
-            attachments: await AttachmentsAPI.list('internal_reply', reply.id),
-            reviewComments: await ReviewCommentsAPI.list('internal_reply', reply.id),
-          })));
-          return {
-            internalRequest: ir,
-            replyDetails,
-            attachments: await AttachmentsAPI.list('internal_request', ir.id),
-          };
+          approvals: responseApprovalsById[response.id] || [],
+          attachments: responseAttachmentsById[response.id] || [],
+          reviewComments: responseReviewCommentsById[response.id] || [],
+          ccRecipients: responseCcRecipientsById[response.id] || [],
         }));
-        return { request, responseDetails, approvals, internalRequestDetails, attachments, reviewComments, ccRecipients };
-      }));
-      const requestIds = this._conversation.map(entry => entry.request.id);
-      const responseIds = this._conversation.flatMap(entry => entry.responseDetails.map(rd => rd.response.id));
-      const internalRequestIds = this._conversation.flatMap(entry => entry.internalRequestDetails.map(ird => ird.internalRequest.id));
+        const internalRequestDetails = (internalRequestsByParent[request.id] || []).map(ir => ({
+          internalRequest: ir,
+          replyDetails: (repliesByInternalRequest[ir.id] || []).map(reply => ({
+            reply,
+            attachments: replyAttachmentsById[reply.id] || [],
+            reviewComments: replyReviewCommentsById[reply.id] || [],
+          })),
+          attachments: internalRequestAttachmentsById[ir.id] || [],
+        }));
+        return {
+          request,
+          responseDetails,
+          approvals: requestApprovalsById[request.id] || [],
+          internalRequestDetails,
+          attachments: requestAttachmentsById[request.id] || [],
+          reviewComments: requestReviewCommentsById[request.id] || [],
+          ccRecipients: requestCcRecipientsById[request.id] || [],
+        };
+      });
       this._auditTrail = await RequestsAPI.listCaseAuditTrail(requestIds, responseIds, internalRequestIds);
 
       // Prefetched once per page load (not per round — a follow-up

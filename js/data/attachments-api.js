@@ -38,6 +38,20 @@ const AttachmentsAPI = (() => {
       return data;
     },
 
+    // Batched variant of list() above — one query for every record of a
+    // given type instead of one query per record; call sites group the
+    // flat result by record_id afterward.
+    async listForRecords(recordType, recordIds) {
+      if (!recordIds || recordIds.length === 0) return [];
+      const db = getSupabase();
+      const { data, error } = await db.from('attachments')
+        .select('*, uploaded_by_user:users!attachments_uploaded_by_fkey(full_name)')
+        .eq('record_type', recordType).in('record_id', recordIds)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      return data;
+    },
+
     async upload(recordType, recordId, file) {
       const ext = (file.name.split('.').pop() || '').toLowerCase();
       if (!ALLOWED_EXTENSIONS.includes(ext)) {

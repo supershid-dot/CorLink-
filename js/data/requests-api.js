@@ -263,6 +263,41 @@ const RequestsAPI = (() => {
       return data;
     },
 
+    // Batched variants of listResponses/listApprovals above — the
+    // request-detail conversation view used to fire one query per
+    // request/response instead of one query for the whole case, which
+    // multiplied into dozens of round trips (and dozens of concurrent
+    // connections against Supabase's pool) on any case with more than
+    // a couple of rounds. Same shape as the single-id versions, just
+    // .in(...) instead of .eq(...) — call sites group the flat result
+    // by its own foreign key afterward.
+    async listResponsesForRequests(requestIds) {
+      if (!requestIds || requestIds.length === 0) return [];
+      const db = getSupabase();
+      const { data, error } = await db.from('responses')
+        .select(`
+          *,
+          created_by_user:users!responses_created_by_fkey(full_name, service_number),
+          received_by_user:users!responses_received_by_fkey(full_name, designations(name)),
+          pending_approval_by_user:users!responses_pending_approval_by_fkey(full_name, designations(name))
+        `)
+        .in('request_id', requestIds)
+        .order('created_at', { ascending: true });
+      if (error) throw wrapRowError(error);
+      return data;
+    },
+
+    async listApprovalsForRecords(recordType, recordIds) {
+      if (!recordIds || recordIds.length === 0) return [];
+      const db = getSupabase();
+      const { data, error } = await db.from('approvals')
+        .select('*, reviewed_by_user:users!approvals_reviewed_by_fkey(full_name, service_number)')
+        .eq('record_type', recordType).in('record_id', recordIds)
+        .order('reviewed_at', { ascending: true });
+      if (error) throw wrapRowError(error);
+      return data;
+    },
+
     // ── Compose / submit ─────────────────────────────────────────
     // parentRequestId links a follow-up request to the same "case" —
     // conversation_request_ids() walks this chain both directions so

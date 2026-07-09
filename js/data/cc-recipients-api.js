@@ -17,6 +17,20 @@ const CCRecipientsAPI = (() => {
       return data;
     },
 
+    // Batched variant of list() above — one query for every record of a
+    // given type instead of one query per record; call sites group the
+    // flat result by record_id afterward.
+    async listForRecords(recordType, recordIds) {
+      if (!recordIds || recordIds.length === 0) return [];
+      const db = getSupabase();
+      const { data, error } = await db.from('cc_recipients')
+        .select('*, user:users!cc_recipients_user_id_fkey(full_name, service_number)')
+        .eq('record_type', recordType).in('record_id', recordIds)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      return data;
+    },
+
     // userIds = array of user IDs to CC — inserted one row per user.
     // No-ops (returns []) on an empty list so call sites don't need to
     // guard "did the drafter actually pick anyone" themselves.
