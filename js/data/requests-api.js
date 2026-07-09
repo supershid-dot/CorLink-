@@ -112,6 +112,36 @@ const RequestsAPI = (() => {
       return { items: data, totalCount: count ?? data.length };
     },
 
+    // Global topbar search — matches subject OR reference number. No
+    // org filter is applied here: requests_select RLS already scopes
+    // results to whatever this user can actually see, the same
+    // backstop every other list function in this file relies on. Two
+    // separate ilike() queries (merged + deduped) rather than a single
+    // .or('subject.ilike...,reference_number.ilike...') — the .or()
+    // filter DSL is a single string this app would have to hand-build
+    // from raw user input, so a search containing a comma or
+    // parenthesis could malform or retarget the filter; ilike()'s
+    // (column, pattern) args are encoded safely by supabase-js instead.
+    async globalSearch(query) {
+      const db = getSupabase();
+      const pattern = `%${query}%`;
+      const cols = 'id, subject, subject_language, reference_number, status, created_at';
+      const [bySubject, byRef] = await Promise.all([
+        db.from('requests').select(cols).ilike('subject', pattern).order('created_at', { ascending: false }).limit(8),
+        db.from('requests').select(cols).ilike('reference_number', pattern).order('created_at', { ascending: false }).limit(8),
+      ]);
+      if (bySubject.error) throw bySubject.error;
+      if (byRef.error) throw byRef.error;
+      const seen = new Set();
+      const merged = [];
+      for (const row of [...bySubject.data, ...byRef.data]) {
+        if (seen.has(row.id)) continue;
+        seen.add(row.id);
+        merged.push(row);
+      }
+      return merged.slice(0, 8);
+    },
+
     // Every approvals row with decision='returned' that RLS lets me see —
     // the dashboard matches these (record_type, record_id) pairs against
     // my own still-draft requests/responses to surface "Returned for

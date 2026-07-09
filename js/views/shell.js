@@ -117,6 +117,18 @@ const AppShell = {
           ${admin ? link('admin', 'Admin') : ''}
         </nav>
         <div class="topbar-actions">
+          <div class="global-search-wrap">
+            <button class="icon-btn" id="global-search-btn" title="Search" aria-label="Search requests and letters">
+              <i class="ti ti-search"></i>
+            </button>
+            <div class="global-search-panel hidden" id="global-search-panel">
+              <div class="global-search-input-wrap">
+                <i class="ti ti-search"></i>
+                <input type="search" id="global-search-input" placeholder="Search by reference number or subject…" autocomplete="off" />
+              </div>
+              <div id="global-search-results" class="global-search-results"></div>
+            </div>
+          </div>
           <button class="icon-btn" id="theme-toggle-btn" data-theme-toggle title="Switch to dark theme" aria-label="Switch to dark theme">
             <i class="ti ti-moon" data-theme-icon></i>
           </button>
@@ -206,10 +218,36 @@ const AppShell = {
       document.getElementById('notif-dropdown')?.classList.toggle('hidden');
     });
 
+    const searchBtn = document.getElementById('global-search-btn');
+    const searchPanel = document.getElementById('global-search-panel');
+    const searchInput = document.getElementById('global-search-input');
+    searchBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      searchPanel?.classList.toggle('hidden');
+      if (searchPanel && !searchPanel.classList.contains('hidden')) searchInput?.focus();
+    });
+    searchPanel?.addEventListener('click', (e) => e.stopPropagation());
+    let searchTimer = null;
+    searchInput?.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      const query = searchInput.value.trim();
+      const resultsEl = document.getElementById('global-search-results');
+      if (!resultsEl) return;
+      if (query.length < 2) {
+        resultsEl.innerHTML = '';
+        return;
+      }
+      searchTimer = setTimeout(() => this._runGlobalSearch(query), 300);
+    });
+    searchInput?.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') searchPanel?.classList.add('hidden');
+    });
+
     if (!this._documentClickBound) {
       document.addEventListener('click', () => {
         document.getElementById('user-menu-dropdown')?.classList.add('hidden');
         document.getElementById('notif-dropdown')?.classList.add('hidden');
+        document.getElementById('global-search-panel')?.classList.add('hidden');
       });
       this._documentClickBound = true;
     }
@@ -230,6 +268,78 @@ const AppShell = {
 
     this.loadNotifications();
     this._subscribeRealtime();
+  },
+
+  // Global topbar search — reachable from any view. Deliberately queries
+  // requests + prisoner letters in parallel rather than routing through
+  // whatever list state the current view happens to have loaded, so it
+  // finds a case regardless of which tab/filter you're currently on.
+  // RLS on both tables is the real visibility boundary; this is purely
+  // a "jump straight to it" convenience on top of what the user could
+  // already see some other way.
+  async _runGlobalSearch(query) {
+    const resultsEl = document.getElementById('global-search-results');
+    if (!resultsEl) return;
+    resultsEl.innerHTML = `<div class="global-search-empty"><span class="spinner spinner--dark"></span></div>`;
+    // A slow earlier keystroke's search could resolve after a faster
+    // later one — guard against it clobbering the newer, more complete
+    // set of results on screen.
+    const seq = (this._searchSeq = (this._searchSeq || 0) + 1);
+    try {
+      const [requests, letters] = await Promise.all([
+        RequestsAPI.globalSearch(query),
+        PrisonerLettersAPI.globalSearch(query),
+      ]);
+      if (seq !== this._searchSeq) return;
+      this._renderGlobalSearchResults(requests, letters, query);
+    } catch (err) {
+      if (seq !== this._searchSeq) return;
+      console.error('CorLink: global search failed', err);
+      resultsEl.innerHTML = `<div class="global-search-empty">Search failed. Try again.</div>`;
+    }
+  },
+
+  _renderGlobalSearchResults(requests, letters, query) {
+    const resultsEl = document.getElementById('global-search-results');
+    if (!resultsEl) return;
+
+    const items = [
+      ...requests.map(r => ({
+        type: 'request', id: r.id, title: r.subject,
+        titleClass: RichEditor.dvClass(r.subject, r.subject_language),
+        ref: r.reference_number, date: r.created_at,
+      })),
+      ...letters.map(l => ({
+        type: 'prisoner_letter', id: l.id, title: l.prisoner_name,
+        titleClass: '', ref: l.reference_number, date: l.created_at,
+      })),
+    ].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    if (items.length === 0) {
+      resultsEl.innerHTML = `<div class="global-search-empty">No matches for "${this._escapeHtml(query)}".</div>`;
+      return;
+    }
+
+    resultsEl.innerHTML = items.map(item => `
+      <button class="global-search-result" data-record-type="${item.type}" data-record-id="${item.id}">
+        <i class="ti ${item.type === 'prisoner_letter' ? 'ti-mail' : 'ti-inbox'}"></i>
+        <span class="global-search-result-body">
+          <span class="global-search-result-title${item.titleClass}">${this._escapeHtml(item.title || 'Untitled')}</span>
+          <span class="global-search-result-meta">${item.ref ? this._escapeHtml(item.ref) : 'No reference yet'} · ${new Date(item.date).toLocaleDateString()}</span>
+        </span>
+      </button>
+    `).join('');
+
+    resultsEl.querySelectorAll('[data-record-id]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.getElementById('global-search-panel')?.classList.add('hidden');
+        const input = document.getElementById('global-search-input');
+        if (input) input.value = '';
+        resultsEl.innerHTML = '';
+        const route = btn.dataset.recordType === 'prisoner_letter' ? 'prisoner-letter-detail' : 'request-detail';
+        Router.navigate(route, { id: btn.dataset.recordId });
+      });
+    });
   },
 
   async loadNotifications() {
