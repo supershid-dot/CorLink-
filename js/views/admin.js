@@ -1033,6 +1033,16 @@ const AdminView = {
       </div>
 
       <div class="field-group">
+        <label class="field-label">Prisoner Letters Access</label>
+        <div class="assignment-add-row">
+          <button class="btn ${user.is_prisoner_letters_staff ? 'btn-secondary' : 'btn-primary'} btn-sm" id="toggle-prisoner-letters-staff">
+            ${user.is_prisoner_letters_staff ? 'Revoke Prisoner Letters Access' : 'Grant Prisoner Letters Access'}
+          </button>
+        </div>
+        <div class="field-hint">Individually granted, not tied to section or role — required to see the Prisoner Letters menu or any of its data at all, even for a supervisor or admin.</div>
+      </div>
+
+      <div class="field-group">
         <label class="field-label">Current Assignments</label>
         <ul class="assignment-list">
           ${activeAssignments.map(a => `
@@ -1087,6 +1097,12 @@ const AdminView = {
 
     document.getElementById('toggle-user-active').addEventListener('click', async () => {
       await AdminAPI.updateUser(user.id, { is_active: !user.is_active });
+      this._closeModal();
+      await this._renderTab();
+    });
+
+    document.getElementById('toggle-prisoner-letters-staff').addEventListener('click', async () => {
+      await AdminAPI.updateUser(user.id, { is_prisoner_letters_staff: !user.is_prisoner_letters_staff });
       this._closeModal();
       await this._renderTab();
     });

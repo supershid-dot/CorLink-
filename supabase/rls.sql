@@ -181,6 +181,21 @@ RETURNS BOOLEAN AS $$
     END;
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
+-- True if the user has been individually designated to handle prisoner
+-- letters (users.is_prisoner_letters_staff) — a flat per-user flag, not
+-- tied to section or role, since prisoner letters correspondence is a
+-- narrow duty a specific staffer is assigned to, not a whole section's
+-- or role's job. Deliberately does NOT fall back to
+-- is_supervisor_or_above()/is_admin()/is_super_admin() the way every
+-- other "designated X" helper in this file does — a supervisor or org
+-- admin who isn't personally flagged gets no automatic access to the
+-- prisoner letters menu, its data, or its attachments. Grant/revoke via
+-- Admin > Manage User.
+CREATE OR REPLACE FUNCTION is_prisoner_letters_staff()
+RETURNS BOOLEAN AS $$
+  SELECT COALESCE((SELECT is_prisoner_letters_staff FROM users WHERE id = auth.uid()), FALSE);
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+
 -- Shared by audit_select_own_records and users_select_audit_trail
 -- (both further down this file) — factored out rather than duplicated
 -- in both policies so the two can never silently drift apart. Defined
@@ -474,16 +489,21 @@ CREATE POLICY "users_select_correspondence" ON users
           ))
         )
     )
-    OR EXISTS (
+    -- Gated by is_prisoner_letters_staff() same as the letters/replies
+    -- themselves — a non-flagged user has no path to see a prisoner
+    -- letter, so shouldn't be able to resolve its participants' names
+    -- via this policy either, even though the row would otherwise
+    -- match on org membership alone.
+    OR (is_prisoner_letters_staff() AND EXISTS (
       SELECT 1 FROM prisoner_letters pl
       WHERE (pl.submitted_by = users.id OR pl.assigned_to = users.id)
         AND (pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
-    )
-    OR EXISTS (
+    ))
+    OR (is_prisoner_letters_staff() AND EXISTS (
       SELECT 1 FROM prisoner_replies pr JOIN prisoner_letters pl2 ON pl2.id = pr.letter_id
       WHERE pr.replied_by = users.id
         AND (pl2.from_prison_id = get_my_org_id() OR pl2.to_org_id = get_my_org_id())
-    )
+    ))
   );
 
 -- Same reasoning as users_select_correspondence above, but for the case
@@ -1313,18 +1333,16 @@ CREATE POLICY "attachments_select" ON attachments
           OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', ir.to_section_id))
         )
     ))
-    OR (record_type = 'prisoner_letter' AND EXISTS (
+    OR (record_type = 'prisoner_letter' AND is_prisoner_letters_staff() AND EXISTS (
       SELECT 1 FROM prisoner_letters pl
       WHERE pl.id = record_id
-        AND (pl.submitted_by = auth.uid() OR pl.assigned_to = auth.uid()
-             OR pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
+        AND (pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
     ))
-    OR (record_type = 'prisoner_reply' AND EXISTS (
+    OR (record_type = 'prisoner_reply' AND is_prisoner_letters_staff() AND EXISTS (
       SELECT 1 FROM prisoner_replies pr
       JOIN prisoner_letters pl ON pl.id = pr.letter_id
       WHERE pr.id = record_id
-        AND (pl.submitted_by = auth.uid() OR pl.assigned_to = auth.uid()
-             OR pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
+        AND (pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
     ))
     -- Mirrors internal_request_replies_select's own shape exactly —
     -- same section/creator/supervisor conditions, plus the "not visible
@@ -1393,15 +1411,14 @@ CREATE POLICY "attachments_insert" ON attachments
             OR ir.created_by = auth.uid()
           )
       ))
-      OR (record_type = 'prisoner_letter' AND EXISTS (
+      OR (record_type = 'prisoner_letter' AND is_prisoner_letters_staff() AND EXISTS (
         SELECT 1 FROM prisoner_letters pl WHERE pl.id = record_id
-          AND (pl.submitted_by = auth.uid() OR pl.assigned_to = auth.uid()
-               OR pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
+          AND (pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
       ))
-      OR (record_type = 'prisoner_reply' AND EXISTS (
+      OR (record_type = 'prisoner_reply' AND is_prisoner_letters_staff() AND EXISTS (
         SELECT 1 FROM prisoner_replies pr JOIN prisoner_letters pl ON pl.id = pr.letter_id
         WHERE pr.id = record_id
-          AND (pr.replied_by = auth.uid() OR pl.to_org_id = get_my_org_id())
+          AND (pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
       ))
       -- Only the reply's own drafter, only while it's still editable
       -- (draft/pending_approval — same "editable-until-actually-
@@ -1419,14 +1436,21 @@ CREATE POLICY "attachments_delete" ON attachments
   FOR DELETE USING (uploaded_by = auth.uid());
 
 -- ─── prisoners (registry) ───────────────────────────────────
+-- Select used to be org-wide ("every MCS staffer needs to search the
+-- registry when composing a letter") — now that composing is itself
+-- restricted to is_prisoner_letters_staff(), that justification only
+-- covers flagged staff; registry managers (who may not personally
+-- handle letters) still need their own separate access to curate it.
 DROP POLICY IF EXISTS "prisoners_select" ON prisoners;
 CREATE POLICY "prisoners_select" ON prisoners
-  FOR SELECT USING (org_id = get_my_org_id());
+  FOR SELECT USING (
+    org_id = get_my_org_id()
+    AND (is_prisoner_letters_staff() OR is_prisoner_registry_manager(org_id))
+  );
 
 -- Adding/editing the registry is restricted to the org's designated
 -- prisoner_registry_section_id (is_prisoner_registry_manager, above) —
--- select stays org-wide since every MCS staffer needs to search the
--- registry when composing a letter, only writes are section-gated.
+-- writes are section-gated (see helper above).
 DROP POLICY IF EXISTS "prisoners_insert" ON prisoners;
 CREATE POLICY "prisoners_insert" ON prisoners
   FOR INSERT WITH CHECK (org_id = get_my_org_id() AND is_prisoner_registry_manager(org_id));
@@ -1437,15 +1461,17 @@ CREATE POLICY "prisoners_update" ON prisoners
   WITH CHECK (org_id = get_my_org_id() AND is_prisoner_registry_manager(org_id));
 
 -- ─── prisoner_letters ────────────────────────────────────────
--- Strict access: only submitter, assignee, supervisors, and admins.
+-- Strict access: only staff individually designated to handle prisoner
+-- letters (is_prisoner_letters_staff — see helper above), scoped to
+-- their own org's side of the correspondence. No submitted_by/
+-- assigned_to/supervisor fallback: this whole module is meant to be
+-- invisible to everyone except its designated staff, full stop — a
+-- deliberate change from the previous shape (which let the submitter,
+-- the assignee, or any supervisor see a letter) per this app's owner.
 CREATE POLICY "prisoner_letters_select" ON prisoner_letters
   FOR SELECT USING (
-    submitted_by = auth.uid()
-    OR assigned_to = auth.uid()
-    OR (
-      is_supervisor_or_above()
-      AND (from_prison_id = get_my_org_id() OR to_org_id = get_my_org_id())
-    )
+    is_prisoner_letters_staff()
+    AND (from_prison_id = get_my_org_id() OR to_org_id = get_my_org_id())
   );
 
 -- Letters only ever flow MCS -> authority; the authority side only
@@ -1458,34 +1484,26 @@ CREATE POLICY "prisoner_letters_select" ON prisoner_letters
 CREATE POLICY "prisoner_letters_insert" ON prisoner_letters
   FOR INSERT WITH CHECK (
     submitted_by = auth.uid()
+    AND is_prisoner_letters_staff()
     AND from_prison_id = get_my_org_id()
     AND EXISTS (SELECT 1 FROM organizations o WHERE o.id = from_prison_id AND o.type = 'mcs')
     AND EXISTS (SELECT 1 FROM organizations o WHERE o.id = to_org_id AND o.type = 'authority')
   );
 
--- The bare is_supervisor_or_above() clause (no org-membership check) let
--- ANY supervisor in ANY organization update ANY prisoner letter, including
--- ones belonging to a completely unrelated MCS/authority pair — mirrors
--- the requests_update_supervisor gap fixed in Phase 3.
 CREATE POLICY "prisoner_letters_update" ON prisoner_letters
   FOR UPDATE USING (
-    submitted_by = auth.uid()
-    OR assigned_to = auth.uid()
-    OR (
-      is_supervisor_or_above()
-      AND (from_prison_id = get_my_org_id() OR to_org_id = get_my_org_id())
-    )
+    is_prisoner_letters_staff()
+    AND (from_prison_id = get_my_org_id() OR to_org_id = get_my_org_id())
   );
 
 -- ─── prisoner_replies ────────────────────────────────────────
 CREATE POLICY "prisoner_replies_select" ON prisoner_replies
   FOR SELECT USING (
-    replied_by = auth.uid()
-    OR is_supervisor_or_above()
-    OR EXISTS (
+    is_prisoner_letters_staff()
+    AND EXISTS (
       SELECT 1 FROM prisoner_letters pl
       WHERE pl.id = letter_id
-        AND (pl.submitted_by = auth.uid() OR pl.assigned_to = auth.uid())
+        AND (pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
     )
   );
 
@@ -1497,17 +1515,11 @@ CREATE POLICY "prisoner_replies_select" ON prisoner_replies
 CREATE POLICY "prisoner_replies_insert" ON prisoner_replies
   FOR INSERT WITH CHECK (
     replied_by = auth.uid()
+    AND is_prisoner_letters_staff()
     AND EXISTS (
       SELECT 1 FROM prisoner_letters pl
       WHERE pl.id = letter_id
-        AND (
-          pl.submitted_by = auth.uid()
-          OR pl.assigned_to = auth.uid()
-          OR (
-            is_supervisor_or_above()
-            AND (pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
-          )
-        )
+        AND (pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
     )
   );
 

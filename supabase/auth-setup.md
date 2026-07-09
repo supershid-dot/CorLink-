@@ -131,6 +131,26 @@ match what changed since, instead of re-running the full files:
   overlay all still work; a direct `draft` → `sent` skip and a
   `closed` → `draft` reversal are both rejected; a non-status UPDATE
   doesn't invoke the trigger at all.
+- `supabase/patch-prisoner-letters-staff-flag.sql` — restricts the whole
+  Prisoner Letters module (menu, letters, replies, their attachments, and
+  registry search) to staff individually designated for that duty
+  (`users.is_prisoner_letters_staff`, granted per-user via Admin > Manage
+  User) — previously any org member could see the menu, and the
+  submitter/assignee/any-supervisor visibility shape every other module
+  uses applied here too. This is a deliberate exception to that shape:
+  there's **no** automatic bypass for supervisors/admins — someone in
+  either role who isn't personally flagged gets no access at all, not
+  even to letters they'd otherwise be a supervisor over. **Run this, then
+  immediately grant the flag to whoever should actually handle prisoner
+  letters (Admin → Users → Manage → Prisoner Letters Access) — until you
+  do, nobody in the organization can use this module, admins included.**
+  Verified against a real local Postgres instance (two orgs, one flagged
+  + one unflagged staffer + one unflagged supervisor on each side):
+  flagged staff see/insert/update/reply correctly; unflagged staff and
+  unflagged supervisors alike see zero letters and are rejected on every
+  insert/update/reply attempt; the patch file was applied twice with zero
+  errors (idempotent) and produces identical results whether run against
+  a fresh schema or migrated onto the pre-existing (unpatched) RLS shape.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

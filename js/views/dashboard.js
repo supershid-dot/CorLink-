@@ -13,6 +13,7 @@ const DashboardView = {
     this._user = user;
     this._isSupervisor = AppShell.isSupervisorOrAbove(user);
     this._canReceive = this._isSupervisor || AppShell.hasRole(user, 'assigned_receiver');
+    this._canLetters = AppShell.canAccessPrisonerLetters(user);
 
     container.innerHTML = `
       <div class="app-layout">
@@ -49,13 +50,14 @@ const DashboardView = {
                 <div class="stat-label">Overdue</div>
               </div>
             </a>
+            ${this._canLetters ? `
             <a href="#prisoner-letters" class="stat-card" id="stat-letters">
               <div class="stat-icon-box stat-icon-box--warning"><i class="ti ti-mail"></i></div>
               <div class="stat-card-body">
                 <div class="stat-value"><span class="spinner spinner--dark"></span></div>
                 <div class="stat-label">Prisoner Letters</div>
               </div>
-            </a>
+            </a>` : ''}
           </div>
 
           <div class="dashboard-columns">
@@ -105,11 +107,15 @@ const DashboardView = {
         RequestsAPI.countInbox(user.org_id),
         RequestsAPI.countSent(user.id),
         RequestsAPI.countOverdue(user.org_id),
-        PrisonerLettersAPI.countInbox(user.org_id),
+        // Skip the query entirely for a non-flagged user — the stat
+        // card isn't even in the DOM for them (see this._canLetters
+        // above), and prisoner_letters_select's RLS would just return
+        // 0 anyway, so there's nothing meaningful to fetch.
+        this._canLetters ? PrisonerLettersAPI.countInbox(user.org_id) : Promise.resolve(0),
       ]);
       document.querySelector('#stat-inbox .stat-value').textContent = inbox;
       document.querySelector('#stat-sent .stat-value').textContent = sent;
-      document.querySelector('#stat-letters .stat-value').textContent = letters;
+      if (this._canLetters) document.querySelector('#stat-letters .stat-value').textContent = letters;
       const overdueEl = document.querySelector('#stat-overdue .stat-value');
       overdueEl.textContent = overdue;
       if (overdue > 0) overdueEl.style.color = 'var(--color-error)';
