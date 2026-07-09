@@ -86,6 +86,22 @@ match what changed since, instead of re-running the full files:
   row, making this worse as the tables grew), eventually tripping Postgres's
   statement_timeout ("Couldn't load this request: canceling statement due to
   statement timeout"). Run this one now if you're seeing that error.
+- `supabase/patch-narrow-supervisor-visibility.sql` — a plain supervisor
+  previously saw every request/response their org was party to, regardless
+  of section, via a blanket `is_supervisor_or_above()` term in
+  `requests_select`/`responses_select`/`approvals_select`/`can_view_request_
+  or_response()` — including still-unrouted mail. Narrowed to `is_admin()`;
+  a supervisor's visibility now comes from the same section/creator/
+  received_by branches every other staff member relies on, plus the
+  separate additive Loop-In-Staff/assigned-receiver policies. Also fixes a
+  real cross-org bug found along the way: `attachments_select` had a bare
+  `OR is_supervisor_or_above()` with no org check at all, letting a
+  supervisor in ANY organization see attachments belonging to a completely
+  unrelated org's request/response. Verified against a real local Postgres
+  instance (two sections, two section supervisors, one org admin, one
+  CC'd staffer): the same-section supervisor and admin still see the
+  request/its approvals/its attachments, the other section's supervisor no
+  longer does, and the CC'd staffer still does via the unrelated CC policy.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

@@ -1125,7 +1125,7 @@ const RequestsView = {
     }
 
     this._openModal(`
-      <h3>Route — ${request.subject}</h3>
+      <h3>Route — <span class="${RichEditor.dvClass(request.subject, request.subject_language)}">${request.subject}</span></h3>
       <form id="route-form" class="modal-form">
         <div class="field-group">
           <label class="field-label">Assign to Section</label>
