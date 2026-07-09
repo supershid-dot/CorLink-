@@ -23,6 +23,25 @@ const ReviewCommentsAPI = (() => {
       return data;
     },
 
+    // Batched variant of list() above — one query for every record of a
+    // given type instead of one query per record; call sites group the
+    // flat result by record_id afterward.
+    async listForRecords(recordType, recordIds) {
+      if (!recordIds || recordIds.length === 0) return [];
+      const db = getSupabase();
+      const { data, error } = await db.from('review_comments')
+        .select(`
+          *,
+          created_by_user:users!review_comments_created_by_fkey(full_name, designations(name)),
+          resolved_by_user:users!review_comments_resolved_by_fkey(full_name)
+        `)
+        .eq('record_type', recordType)
+        .in('record_id', recordIds)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      return data;
+    },
+
     // notifyUserId = the draft's creator; navRecordId = what the
     // notification should open (the request detail page).
     async add({ recordType, recordId, quotedText, comment, notifyUserId, navRecordId, subject }) {

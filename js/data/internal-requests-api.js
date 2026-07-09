@@ -82,6 +82,45 @@ const InternalRequestsAPI = (() => {
       return data;
     },
 
+    // Batched variants of list()/listReplies() above — request-detail's
+    // conversation view used to fire one of each per request/internal-
+    // request individually, which multiplied into dozens of round trips
+    // on any case with more than a couple of rounds or loop-ins. Same
+    // shape as the single-id versions; call sites group the flat result
+    // by its own foreign key afterward.
+    async listForParents(parentRequestIds) {
+      if (!parentRequestIds || parentRequestIds.length === 0) return [];
+      const db = getSupabase();
+      const { data, error } = await db.from('internal_requests')
+        .select(`
+          *,
+          from_section:sections!internal_requests_from_section_id_fkey(name, code),
+          to_section:sections!internal_requests_to_section_id_fkey(name, code),
+          created_by_user:users!internal_requests_created_by_fkey(full_name, service_number, designations(name)),
+          received_by_user:users!internal_requests_received_by_fkey(full_name, designations(name)),
+          assigned_to_user:users!internal_requests_assigned_to_fkey(full_name, designations(name))
+        `)
+        .in('parent_request_id', parentRequestIds)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      return data;
+    },
+
+    async listRepliesForRequests(internalRequestIds) {
+      if (!internalRequestIds || internalRequestIds.length === 0) return [];
+      const db = getSupabase();
+      const { data, error } = await db.from('internal_request_replies')
+        .select(`
+          *,
+          created_by_user:users!internal_request_replies_created_by_fkey(full_name, service_number),
+          approved_by_user:users!internal_request_replies_approved_by_fkey(full_name, designations(name))
+        `)
+        .in('internal_request_id', internalRequestIds)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      return data;
+    },
+
     // deadline is capped at the parent request's own deadline —
     // enforced server-side too (internal_requests_insert's WITH CHECK,
     // see supabase/rls.sql), this is just the UX-level pass-through.

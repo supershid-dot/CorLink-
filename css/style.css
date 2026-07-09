@@ -2044,6 +2044,43 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
 }
 .thread-receipt i { color: var(--color-success-dark); margin-top: 2px; flex-shrink: 0; }
 
+/* Collapsed-by-default wrapper around a run of .thread-receipt lines
+   (received/routed/assigned/sent-by) — same native <details>/<summary>
+   pattern as .internal-collab-panel below, but styled to sit inline
+   with the thread (no dashed box) since this IS part of the same
+   conversation, just history that doesn't need to compete with the
+   actual message for attention on every open. */
+.activity-log { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--color-border); }
+.activity-log summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  list-style: none;
+}
+.activity-log summary::-webkit-details-marker { display: none; }
+.activity-log summary::before {
+  content: '';
+  width: 0; height: 0;
+  border-left: 4px solid var(--color-text-muted);
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+  transition: transform var(--transition);
+  flex-shrink: 0;
+}
+.activity-log[open] summary::before { transform: rotate(90deg); }
+/* Scoped to [open] — an unconditional `display: flex` here would beat
+   the browser's own `details:not([open]) > *:not(summary){display:none}`
+   UA rule (author styles always win over UA styles regardless of the
+   open attribute), silently defeating the collapse. Confirmed via a
+   real headless-Chromium render: getComputedStyle returned `flex` on a
+   CLOSED <details>'s body without this guard. */
+.activity-log[open] .activity-log-body { margin-top: 8px; display: flex; flex-direction: column; }
+.activity-log-body .thread-receipt { margin-top: 0; padding-top: 0; border-top: none; }
+.activity-log-body .thread-receipt + .thread-receipt { margin-top: 8px; }
+
 .thread-approval {
   display: flex;
   align-items: flex-start;
@@ -2427,7 +2464,15 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
   flex-shrink: 0;
 }
 .internal-collab-panel[open] summary::before { transform: rotate(90deg); }
-.internal-collab-body {
+/* Scoped to [open] — an unconditional `display: flex` here beats the
+   browser's own `details:not([open]) > *:not(summary){display:none}`
+   UA rule (author styles always win over UA styles regardless of the
+   open attribute), so a collapsed panel (entry.internalRequestDetails
+   is empty and canStart is true — see _renderInternalCollab) was
+   silently rendering its body anyway instead of staying closed.
+   Confirmed via a real headless-Chromium render before this fix:
+   getComputedStyle returned `block` on a CLOSED <details>'s body. */
+.internal-collab-panel[open] .internal-collab-body {
   padding: 12px 14px 14px;
   border-top: 1px dashed var(--color-border);
   display: flex;
