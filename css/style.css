@@ -308,6 +308,36 @@ p  { line-height: 1.6; }
 }
 .icon-btn-xs:hover { background: var(--color-primary-light); color: var(--color-primary); }
 
+/* Realtime "this case changed" notice (request-detail.js) — a fixed
+   toast the viewer dismisses or acts on, not an auto-reload (which
+   would blow away an in-progress compose form the instant the other
+   side does anything). Positioned above .bottom-nav's z-index so it
+   isn't hidden behind the fixed mobile tab bar. */
+.realtime-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 10px 16px;
+  background: var(--color-text);
+  color: #fff;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  font-size: 0.875rem;
+  max-width: calc(100vw - 32px);
+}
+.realtime-toast i:first-child { color: var(--color-primary-light); flex-shrink: 0; }
+.realtime-toast span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.realtime-toast .icon-btn-xs { color: rgba(255,255,255,.7); }
+.realtime-toast .icon-btn-xs:hover { background: rgba(255,255,255,.15); color: #fff; }
+@media (max-width: 640px) {
+  .realtime-toast { bottom: calc(76px + env(safe-area-inset-bottom)); }
+}
+
 /* ── Form Fields ────────────────────────────────────────────── */
 .field-group { display: flex; flex-direction: column; gap: 6px; }
 
