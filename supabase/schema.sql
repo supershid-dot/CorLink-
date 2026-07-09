@@ -538,6 +538,10 @@ CREATE INDEX idx_requests_parent        ON requests(parent_request_id) WHERE par
 CREATE INDEX idx_responses_request_id   ON responses(request_id);
 CREATE INDEX idx_approvals_record       ON approvals(record_type, record_id);
 CREATE INDEX idx_attachments_record     ON attachments(record_type, record_id);
+CREATE INDEX idx_internal_requests_parent    ON internal_requests(parent_request_id);
+CREATE INDEX idx_internal_request_replies_ir ON internal_request_replies(internal_request_id);
+CREATE INDEX idx_review_comments_record      ON review_comments(record_type, record_id);
+CREATE INDEX idx_cc_recipients_user          ON cc_recipients(user_id);
 CREATE INDEX idx_prisoner_letters_org   ON prisoner_letters(from_prison_id);
 CREATE INDEX idx_notifications_user     ON notifications(user_id, is_read);
 CREATE INDEX idx_audit_logs_user        ON audit_logs(user_id);
