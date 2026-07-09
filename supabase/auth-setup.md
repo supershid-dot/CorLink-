@@ -78,6 +78,14 @@ match what changed since, instead of re-running the full files:
   attachments record type (mirroring `internal_request_replies_select`'s own
   visibility shape) so a Draft Reply in Internal Collaboration can attach files,
   same as every other draft/compose flow in the app.
+- `supabase/patch-missing-indexes.sql` — adds indexes on
+  `internal_requests.parent_request_id`, `internal_request_replies.internal_request_id`,
+  `review_comments(record_type, record_id)`, and `cc_recipients.user_id` — none of
+  these had one, so every request-detail page load did a full table scan per
+  internal request/reply/comment lookup (RLS re-evaluates its policy per scanned
+  row, making this worse as the tables grew), eventually tripping Postgres's
+  statement_timeout ("Couldn't load this request: canceling statement due to
+  statement timeout"). Run this one now if you're seeing that error.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 
