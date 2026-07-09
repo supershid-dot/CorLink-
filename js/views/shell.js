@@ -66,9 +66,10 @@ const AppShell = {
   // without changing its own markup.
   sidebarHtml(user, activeRoute) {
     const admin = this.isAdmin(user);
+    const dvCls = I18N.cls();
     const item = (route, label, icon) =>
       `<a href="#${route}" class="sidebar-link${activeRoute === route ? ' sidebar-link--active' : ''}">
-        <i class="ti ${icon}"></i><span>${label}</span>
+        <i class="ti ${icon}"></i><span class="${dvCls}">${label}</span>
       </a>`;
 
     return `
@@ -81,10 +82,10 @@ const AppShell = {
           </div>
         </div>
         <nav class="sidebar-nav">
-          ${item('dashboard', 'Dashboard', 'ti-layout-dashboard')}
-          ${item('requests', 'Requests', 'ti-inbox')}
-          ${item('prisoner-letters', 'Prisoner Letters', 'ti-mail')}
-          ${admin ? item('admin', 'Administration', 'ti-settings') : ''}
+          ${item('dashboard', I18N.t('nav_dashboard'), 'ti-layout-dashboard')}
+          ${item('requests', I18N.t('nav_requests'), 'ti-inbox')}
+          ${item('prisoner-letters', I18N.t('nav_letters'), 'ti-mail')}
+          ${admin ? item('admin', I18N.t('nav_administration'), 'ti-settings') : ''}
         </nav>
         <div class="sidebar-user">
           <div class="avatar">${this.initials(user.full_name)}</div>
@@ -100,8 +101,10 @@ const AppShell = {
   topbarHtml(user, activeRoute) {
     const name = user.full_name;
     const admin = this.isAdmin(user);
+    const dvCls = I18N.cls();
+    const uiLang = I18N.getLang();
     const link = (route, label) =>
-      `<a href="#${route}" class="topbar-link${activeRoute === route ? ' topbar-link--active' : ''}">${label}</a>`;
+      `<a href="#${route}" class="topbar-link${activeRoute === route ? ' topbar-link--active' : ''}"><span class="${dvCls}">${label}</span></a>`;
 
     return `
       ${this.sidebarHtml(user, activeRoute)}
@@ -111,24 +114,28 @@ const AppShell = {
           <span class="topbar-appname">${user.organization?.name || APP_NAME}</span>
         </div>
         <nav class="topbar-nav" id="topbar-nav">
-          ${link('dashboard', 'Dashboard')}
-          ${link('requests', 'Requests')}
-          ${link('prisoner-letters', 'Letters')}
-          ${admin ? link('admin', 'Admin') : ''}
+          ${link('dashboard', I18N.t('nav_dashboard'))}
+          ${link('requests', I18N.t('nav_requests'))}
+          ${link('prisoner-letters', I18N.t('nav_letters_short'))}
+          ${admin ? link('admin', I18N.t('nav_admin')) : ''}
         </nav>
         <div class="topbar-actions">
+          <div class="lang-toggle" id="ui-lang-toggle" title="${I18N.t('ui_lang_toggle')}">
+            <button type="button" class="lang-toggle-btn${uiLang === 'en' ? ' lang-toggle-btn--active' : ''}" data-ui-lang="en">EN</button>
+            <button type="button" class="lang-toggle-btn${uiLang === 'dv' ? ' lang-toggle-btn--active' : ''}" data-ui-lang="dv">ދިވެހި</button>
+          </div>
           <button class="icon-btn" id="theme-toggle-btn" data-theme-toggle title="Switch to dark theme" aria-label="Switch to dark theme">
             <i class="ti ti-moon" data-theme-icon></i>
           </button>
           <div class="notif-wrap">
-            <button class="icon-btn notif-btn" id="notif-btn" title="Notifications">
+            <button class="icon-btn notif-btn" id="notif-btn" title="${I18N.t('notifications')}">
               <i class="ti ti-bell"></i>
               <span class="notif-badge hidden" id="notif-badge">0</span>
             </button>
             <div class="notif-dropdown hidden" id="notif-dropdown">
               <div class="notif-dropdown-header">
-                <span>Notifications</span>
-                <button class="menu-item-link" id="notif-mark-all">Mark all read</button>
+                <span class="${dvCls}">${I18N.t('notifications')}</span>
+                <button class="menu-item-link${dvCls}" id="notif-mark-all">${I18N.t('mark_all_read')}</button>
               </div>
               <div id="notif-list" class="notif-list">
                 <div class="tab-loading"><span class="spinner spinner--dark"></span></div>
@@ -151,7 +158,7 @@ const AppShell = {
               </div>
               <hr class="menu-divider"/>
               <button class="menu-item" id="sign-out-btn">
-                <i class="ti ti-logout"></i> Sign Out
+                <i class="ti ti-logout"></i> <span class="${dvCls}">${I18N.t('sign_out')}</span>
               </button>
             </div>
           </div>
@@ -167,18 +174,19 @@ const AppShell = {
   // the mobile breakpoint.
   bottomNavHtml(user, activeRoute) {
     const admin = this.isAdmin(user);
+    const dvCls = I18N.cls();
     const item = (route, label, icon) =>
       `<a href="#${route}" class="bottom-nav-item${activeRoute === route ? ' bottom-nav-item--active' : ''}">
         <i class="ti ${icon}"></i>
-        <span>${label}</span>
+        <span class="${dvCls}">${label}</span>
       </a>`;
 
     return `
       <nav class="bottom-nav">
-        ${item('dashboard', 'Home', 'ti-home')}
-        ${item('requests', 'Requests', 'ti-inbox')}
-        ${item('prisoner-letters', 'Letters', 'ti-mail')}
-        ${admin ? item('admin', 'Admin', 'ti-settings') : ''}
+        ${item('dashboard', I18N.t('nav_home'), 'ti-home')}
+        ${item('requests', I18N.t('nav_requests'), 'ti-inbox')}
+        ${item('prisoner-letters', I18N.t('nav_letters_short'), 'ti-mail')}
+        ${admin ? item('admin', I18N.t('nav_admin'), 'ti-settings') : ''}
       </nav>
     `;
   },
@@ -204,6 +212,19 @@ const AppShell = {
     notifBtn?.addEventListener('click', (e) => {
       e.stopPropagation();
       document.getElementById('notif-dropdown')?.classList.toggle('hidden');
+    });
+
+    // Reloads rather than re-rendering in place — the chrome's
+    // translated strings are baked into whichever view is currently on
+    // screen (and every other view it could navigate to), so a full
+    // reload is simpler and far less error-prone than re-running every
+    // view's render() by hand just for this.
+    document.getElementById('ui-lang-toggle')?.querySelectorAll('[data-ui-lang]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (btn.dataset.uiLang === I18N.getLang()) return;
+        I18N.setLang(btn.dataset.uiLang);
+        window.location.reload();
+      });
     });
 
     if (!this._documentClickBound) {
