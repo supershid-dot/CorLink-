@@ -1102,7 +1102,17 @@ p  { line-height: 1.6; }
 }
 .dashboard-column-stack { display: flex; flex-direction: column; gap: 24px; }
 @media (max-width: 900px) {
-  .dashboard-columns { grid-template-columns: 1fr; }
+  /* minmax(0, 1fr), NOT a bare 1fr — a plain `1fr` track has an
+     implicit `minmax(auto, 1fr)`, so CSS Grid won't shrink it below
+     the un-wrapped intrinsic width of whatever's inside (here, a long
+     Divehi deadline subject with white-space: nowrap for its ellipsis
+     truncation). That ballooned this single mobile-collapsed column
+     — shared by BOTH Action Needed and the Workload/Deadlines stack —
+     wide enough to push the whole page into horizontal scroll, which
+     is what made Action Needed's own count badges look like they'd
+     vanished: they hadn't, they were just off past the right edge of
+     a page that had silently grown wider than the viewport. */
+  .dashboard-columns { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ── My Workload & Efficiency (dashboard) ─────────────────────── */
