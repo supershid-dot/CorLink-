@@ -119,6 +119,18 @@ match what changed since, instead of re-running the full files:
   and `org-logos` buckets, matching the client-side checks already in
   `attachments-api.js` — closes the gap where a direct Storage API call
   could bypass those checks entirely.
+- `supabase/patch-workflow-transitions.sql` — RLS gates WHO can update a
+  request/response, but nothing previously stopped a legitimately-
+  authorized supervisor's UPDATE from jumping the `status` column
+  straight from `draft` to `sent` via a direct API call, skipping the
+  approvals-table record of who actually reviewed it. Adds a
+  `BEFORE UPDATE OF status` trigger on both tables validating every
+  transition against the exact set `js/data/requests-api.js` actually
+  uses. Verified against a real local Postgres instance: the full
+  legitimate chain, the return-for-correction loop, and the `overdue`
+  overlay all still work; a direct `draft` → `sent` skip and a
+  `closed` → `draft` reversal are both rejected; a non-status UPDATE
+  doesn't invoke the trigger at all.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 
