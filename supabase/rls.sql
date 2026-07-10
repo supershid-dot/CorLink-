@@ -26,6 +26,9 @@ ALTER TABLE prisoners            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE letter_reference_sequences ENABLE ROW LEVEL SECURITY;
 ALTER TABLE prisoner_letters     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE prisoner_replies     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE entry_reference_sequences        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE external_correspondence          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE external_correspondence_replies  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE deadline_extensions  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_logs           ENABLE ROW LEVEL SECURITY;
 ALTER TABLE notifications        ENABLE ROW LEVEL SECURITY;
@@ -181,6 +184,26 @@ RETURNS BOOLEAN AS $$
     END;
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
+-- True if the caller may log/route p_org_id's external correspondence
+-- (Entry module — public/family/outside-office mail and prisoner
+-- complaints that arrive from outside the CorLink network entirely): a
+-- supervisor/admin of that org, OR (if the org has designated a
+-- section) any member of that section regardless of role, OR (if no
+-- section is set yet) any member of the org at all — identical shape to
+-- is_prisoner_registry_manager() above, deliberately: both are "a
+-- specific section handles this, but org leadership keeps oversight"
+-- designations, unlike is_prisoner_letters_staff()'s flat no-bypass flag.
+CREATE OR REPLACE FUNCTION is_entry_staff(p_org_id UUID)
+RETURNS BOOLEAN AS $$
+  SELECT
+    (get_my_org_id() = p_org_id AND is_supervisor_or_above())
+    OR CASE
+      WHEN (SELECT entry_section_id FROM organizations WHERE id = p_org_id) IS NOT NULL
+        THEN (SELECT entry_section_id FROM organizations WHERE id = p_org_id) IN (SELECT my_section_ids())
+      ELSE get_my_org_id() = p_org_id
+    END;
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+
 -- True if the user has been individually designated to handle prisoner
 -- letters (users.is_prisoner_letters_staff) — a flat per-user flag, not
 -- tied to section or role, since prisoner letters correspondence is a
@@ -259,6 +282,20 @@ RETURNS BOOLEAN AS $$
           OR ir.created_by = auth.uid()
           OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', ir.to_section_id))
         )
+    ))
+    -- Mirrors external_correspondence_select's own visibility shape —
+    -- entry-detail.js's timeline needs "routed to X by Y at [time]"
+    -- visible to the same audience that can see the entry itself.
+    OR (p_record_type = 'external_correspondence' AND EXISTS (
+      SELECT 1 FROM external_correspondence ec
+      WHERE ec.id = p_record_id
+        AND ec.org_id = get_my_org_id()
+        AND (
+          is_entry_staff(ec.org_id)
+          OR ec.to_section_id IN (SELECT my_section_ids())
+          OR ec.assigned_to = auth.uid()
+          OR ec.entered_by  = auth.uid()
+        )
     ));
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
@@ -320,7 +357,8 @@ CREATE OR REPLACE FUNCTION update_org_workflow_settings(
   p_org_id UUID,
   p_default_receiving_section_id UUID,
   p_reference_number_format TEXT,
-  p_prisoner_registry_section_id UUID DEFAULT NULL
+  p_prisoner_registry_section_id UUID DEFAULT NULL,
+  p_entry_section_id UUID DEFAULT NULL
 )
 RETURNS VOID AS $$
 BEGIN
@@ -340,6 +378,12 @@ BEGIN
     RAISE EXCEPTION 'prisoner_registry_section_id must belong to the target organization';
   END IF;
 
+  IF p_entry_section_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM sections WHERE id = p_entry_section_id AND org_id = p_org_id
+  ) THEN
+    RAISE EXCEPTION 'entry_section_id must belong to the target organization';
+  END IF;
+
   IF p_reference_number_format IS NULL OR trim(p_reference_number_format) = ''
      OR p_reference_number_format NOT LIKE '%{SEQ}%' THEN
     RAISE EXCEPTION 'reference_number_format must be non-empty and include the {SEQ} token';
@@ -348,7 +392,8 @@ BEGIN
   UPDATE organizations
   SET default_receiving_section_id = p_default_receiving_section_id,
       reference_number_format = p_reference_number_format,
-      prisoner_registry_section_id = p_prisoner_registry_section_id
+      prisoner_registry_section_id = p_prisoner_registry_section_id,
+      entry_section_id = p_entry_section_id
   WHERE id = p_org_id;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
@@ -1363,6 +1408,29 @@ CREATE POLICY "attachments_select" ON attachments
           )
         )
     ))
+    -- Mirrors external_correspondence_select's own shape exactly.
+    OR (record_type = 'external_correspondence' AND EXISTS (
+      SELECT 1 FROM external_correspondence ec WHERE ec.id = record_id
+        AND ec.org_id = get_my_org_id()
+        AND (
+          is_entry_staff(ec.org_id)
+          OR ec.to_section_id IN (SELECT my_section_ids())
+          OR ec.assigned_to = auth.uid()
+          OR ec.entered_by  = auth.uid()
+        )
+    ))
+    -- Mirrors external_correspondence_replies_select's own shape.
+    OR (record_type = 'external_correspondence_reply' AND EXISTS (
+      SELECT 1 FROM external_correspondence_replies ecr
+      JOIN external_correspondence ec ON ec.id = ecr.entry_id
+      WHERE ecr.id = record_id
+        AND (
+          ec.to_section_id IN (SELECT my_section_ids())
+          OR ecr.created_by = auth.uid()
+          OR (is_supervisor_or_above() AND ec.to_section_id IS NOT NULL AND get_my_org_id() = scope_org_id('section', ec.to_section_id))
+          OR (ecr.status = 'sent' AND (is_entry_staff(ec.org_id) OR ec.entered_by = auth.uid()))
+        )
+    ))
   );
 
 -- Additive: a CC'd viewer can see files attached to the specific
@@ -1428,6 +1496,19 @@ CREATE POLICY "attachments_insert" ON attachments
       OR (record_type = 'internal_reply' AND EXISTS (
         SELECT 1 FROM internal_request_replies irr WHERE irr.id = record_id
           AND irr.created_by = auth.uid() AND irr.status IN ('draft', 'pending_approval')
+      ))
+      -- Only Entry staff, and only while still logging/routing (not yet
+      -- closed) — mirrors the request/response is_locked check above,
+      -- using status = 'closed' as the equivalent "file is shut" point.
+      OR (record_type = 'external_correspondence' AND EXISTS (
+        SELECT 1 FROM external_correspondence ec WHERE ec.id = record_id
+          AND ec.org_id = get_my_org_id() AND is_entry_staff(ec.org_id) AND ec.status != 'closed'
+      ))
+      -- Only the reply's own drafter, only while it's still editable —
+      -- same shape as the internal_reply branch above.
+      OR (record_type = 'external_correspondence_reply' AND EXISTS (
+        SELECT 1 FROM external_correspondence_replies ecr WHERE ecr.id = record_id
+          AND ecr.created_by = auth.uid() AND ecr.status IN ('draft', 'pending_approval')
       ))
     )
   );
@@ -1521,6 +1602,116 @@ CREATE POLICY "prisoner_replies_insert" ON prisoner_replies
       WHERE pl.id = letter_id
         AND (pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
     )
+  );
+
+-- ─── entry_reference_sequences ───────────────────────────────
+-- Managed by generate_entry_reference() SECURITY DEFINER function only,
+-- same shape as refseq_select above.
+CREATE POLICY "entry_refseq_select" ON entry_reference_sequences
+  FOR SELECT USING (is_admin());
+
+-- ─── external_correspondence (Entry module) ──────────────────
+-- Visibility: the org's designated Entry section (is_entry_staff, which
+-- also covers org supervisors/admins for oversight — see its own
+-- comment above) sees everything; once routed, the receiving section's
+-- members, the specific assignee, and whoever originally logged it can
+-- also see it (that's the audience that actually needs to act on or
+-- follow up a specific case, distinct from Entry's own front-desk view).
+CREATE POLICY "external_correspondence_select" ON external_correspondence
+  FOR SELECT USING (
+    org_id = get_my_org_id()
+    AND (
+      is_entry_staff(org_id)
+      OR to_section_id IN (SELECT my_section_ids())
+      OR assigned_to = auth.uid()
+      OR entered_by  = auth.uid()
+    )
+  );
+
+-- Only Entry staff can log new correspondence — this is the intake
+-- gate for anything arriving from outside the CorLink network.
+CREATE POLICY "external_correspondence_insert" ON external_correspondence
+  FOR INSERT WITH CHECK (
+    entered_by = auth.uid()
+    AND org_id = get_my_org_id()
+    AND is_entry_staff(org_id)
+  );
+
+-- Two update paths, same "separate additive policies" convention as
+-- requests_update_assigned_receiver/requests_update_section_receiver:
+-- Entry staff can route (and otherwise manage) any of their org's
+-- entries; once routed, the receiving section can update it themselves
+-- (status/assigned_to) without needing to go back through Entry.
+CREATE POLICY "external_correspondence_update_entry" ON external_correspondence
+  FOR UPDATE USING (org_id = get_my_org_id() AND is_entry_staff(org_id))
+  WITH CHECK (org_id = get_my_org_id() AND is_entry_staff(org_id));
+
+CREATE POLICY "external_correspondence_update_section" ON external_correspondence
+  FOR UPDATE USING (to_section_id IN (SELECT my_section_ids()))
+  WITH CHECK (to_section_id IN (SELECT my_section_ids()));
+
+-- ─── external_correspondence_replies ─────────────────────────
+-- Same draft -> pending_approval -> sent shape as internal_request_
+-- replies, and the same "asking side only sees SENT replies" rule: here
+-- the "asking side" is Entry (who logged the case and is ultimately
+-- accountable for getting an answer back to the original sender).
+CREATE POLICY "external_correspondence_replies_select" ON external_correspondence_replies
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM external_correspondence ec WHERE ec.id = entry_id
+        AND (
+          ec.to_section_id IN (SELECT my_section_ids())
+          OR external_correspondence_replies.created_by = auth.uid()
+          OR (is_supervisor_or_above() AND ec.to_section_id IS NOT NULL AND get_my_org_id() = scope_org_id('section', ec.to_section_id))
+          OR (
+            external_correspondence_replies.status = 'sent'
+            AND (is_entry_staff(ec.org_id) OR ec.entered_by = auth.uid())
+          )
+        )
+    )
+  );
+
+CREATE POLICY "external_correspondence_replies_insert" ON external_correspondence_replies
+  FOR INSERT WITH CHECK (
+    created_by = auth.uid()
+    AND EXISTS (
+      SELECT 1 FROM external_correspondence ec WHERE ec.id = entry_id
+        AND ec.to_section_id IN (SELECT my_section_ids())
+    )
+  );
+
+-- The drafter can edit/submit while it's still theirs (draft/
+-- pending_approval); a supervisor over the responding section approves,
+-- returns, or marks it sent. Once sent, Entry staff also gets an update
+-- path (not just the responding section's supervisor) — recording
+-- delivery_method/sent_at is Entry's job of closing the loop with the
+-- original sender, and requiring supervisor rank there would strand
+-- ordinary Entry staff unable to ever mark a reply delivered. RLS gates
+-- rows, not columns (same convention as requests_update_supervisor
+-- elsewhere in this file) — the app only ever calls markReplySent()
+-- with delivery_method/sent_at, never body, on this path.
+CREATE POLICY "external_correspondence_replies_update" ON external_correspondence_replies
+  FOR UPDATE USING (
+    (created_by = auth.uid() AND status IN ('draft', 'pending_approval'))
+    OR EXISTS (
+      SELECT 1 FROM external_correspondence ec WHERE ec.id = entry_id
+        AND is_supervisor_or_above()
+        AND ec.to_section_id IS NOT NULL AND get_my_org_id() = scope_org_id('section', ec.to_section_id)
+    )
+    OR (status = 'sent' AND EXISTS (
+      SELECT 1 FROM external_correspondence ec WHERE ec.id = entry_id AND is_entry_staff(ec.org_id)
+    ))
+  )
+  WITH CHECK (
+    (created_by = auth.uid() AND status IN ('draft', 'pending_approval'))
+    OR EXISTS (
+      SELECT 1 FROM external_correspondence ec WHERE ec.id = entry_id
+        AND is_supervisor_or_above()
+        AND ec.to_section_id IS NOT NULL AND get_my_org_id() = scope_org_id('section', ec.to_section_id)
+    )
+    OR (status = 'sent' AND EXISTS (
+      SELECT 1 FROM external_correspondence ec WHERE ec.id = entry_id AND is_entry_staff(ec.org_id)
+    ))
   );
 
 -- ─── deadline_extensions ─────────────────────────────────────

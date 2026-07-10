@@ -14,6 +14,12 @@ const DashboardView = {
     this._isSupervisor = AppShell.isSupervisorOrAbove(user);
     this._canReceive = this._isSupervisor || AppShell.hasRole(user, 'assigned_receiver');
     this._canLetters = AppShell.canAccessPrisonerLetters(user);
+    // Org-wide supervisors/admins always qualify as Entry staff
+    // (is_entry_staff's org-wide fallback — see supabase/rls.sql), so
+    // this sync check covers the realistic "leadership watching the
+    // front-desk queue" case without an extra async org fetch just to
+    // resolve entry_section_id membership before the first paint.
+    this._canLogEntries = this._isSupervisor;
 
     container.innerHTML = `
       <div class="app-layout">
@@ -56,6 +62,14 @@ const DashboardView = {
               <div class="stat-card-body">
                 <div class="stat-value"><span class="spinner spinner--dark"></span></div>
                 <div class="stat-label">Prisoner Letters</div>
+              </div>
+            </a>` : ''}
+            ${this._canLogEntries ? `
+            <a href="#entry" class="stat-card" id="stat-entry">
+              <div class="stat-icon-box stat-icon-box--secondary"><i class="ti ti-mailbox"></i></div>
+              <div class="stat-card-body">
+                <div class="stat-value"><span class="spinner spinner--dark"></span></div>
+                <div class="stat-label">Unrouted Entries</div>
               </div>
             </a>` : ''}
           </div>
@@ -103,7 +117,7 @@ const DashboardView = {
 
   async _loadStats(user) {
     try {
-      const [inbox, sent, overdue, letters] = await Promise.all([
+      const [inbox, sent, overdue, letters, unroutedEntries] = await Promise.all([
         RequestsAPI.countInbox(user.org_id),
         RequestsAPI.countSent(user.id),
         RequestsAPI.countOverdue(user.org_id),
@@ -112,10 +126,12 @@ const DashboardView = {
         // above), and prisoner_letters_select's RLS would just return
         // 0 anyway, so there's nothing meaningful to fetch.
         this._canLetters ? PrisonerLettersAPI.countInbox(user.org_id) : Promise.resolve(0),
+        this._canLogEntries ? EntryAPI.countUnrouted(user.org_id) : Promise.resolve(0),
       ]);
       document.querySelector('#stat-inbox .stat-value').textContent = inbox;
       document.querySelector('#stat-sent .stat-value').textContent = sent;
       if (this._canLetters) document.querySelector('#stat-letters .stat-value').textContent = letters;
+      if (this._canLogEntries) document.querySelector('#stat-entry .stat-value').textContent = unroutedEntries;
       const overdueEl = document.querySelector('#stat-overdue .stat-value');
       overdueEl.textContent = overdue;
       if (overdue > 0) overdueEl.style.color = 'var(--color-error)';

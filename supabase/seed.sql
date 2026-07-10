@@ -116,3 +116,14 @@ VALUES (
 -- INSERT INTO internal_requests (parent_request_id, from_section_id, to_section_id, created_by, subject, body) VALUES
 --   ('<REQUEST_UUID>', '00000000-0000-0000-0000-000000000030', '00000000-0000-0000-0000-000000000040',
 --    '<STAFF_UUID>', 'FYI: case review', '<p>Please confirm the latest treatment notes.</p>');
+--
+-- ─── Example: Entry logging a public email, then routing it ──────
+-- Entry staff log what arrived (org_id/entered_by only — no from_org_id/
+-- to_org_id, since the sender isn't a CorLink organization at all), then
+-- a supervisor/Entry staffer routes it to the responsible section.
+-- INSERT INTO external_correspondence (org_id, source_channel, sender_category, sender_name, sender_contact, subject, body, entered_by, reference_number) VALUES
+--   ('00000000-0000-0000-0000-000000000001', 'email', 'public', 'Aishath Ali', 'aishath@example.com',
+--    'Request for visitation schedule', '<p>Could you share the current visitation hours for Maafushi Prison?</p>',
+--    '<STAFF_UUID>', 'ENT-MCS-2026-0001');
+-- UPDATE external_correspondence SET to_section_id = '00000000-0000-0000-0000-000000000030', status = 'routed'
+--   WHERE reference_number = 'ENT-MCS-2026-0001';

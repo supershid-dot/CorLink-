@@ -621,6 +621,14 @@ const AdminView = {
             <div class="field-hint">Only staff in this section (plus supervisors/admins) can add or edit prisoners in the registry used by Prisoner Letters. Leave unset to let any staff member in the org manage it.</div>
           </div>` : ''}
           <div class="field-group">
+            <label class="field-label">Entry Section</label>
+            <select class="field-select" name="entrySectionId">
+              <option value="">— None (any staff member in the org) —</option>
+              ${activeSections.map(s => `<option value="${s.id}" ${s.id === org.entry_section_id ? 'selected' : ''}>${this._escapeHtml(s.name)}</option>`).join('')}
+            </select>
+            <div class="field-hint">Only staff in this section (plus supervisors/admins) can log new Entry correspondence (public/family emails and letters, outside-office mail, and prisoner complaints) and route it to the responsible internal section. Leave unset to let any staff member in the org handle it.</div>
+          </div>
+          <div class="field-group">
             <label class="field-label">Reference Number Format</label>
             <input class="field-input-plain" name="referenceNumberFormat" required value="${this._escapeHtml(org.reference_number_format || '{ORG}-{SECTION}-{YEAR}-{SEQ}')}" />
             <div class="field-hint">Tokens: {ORG}, {SECTION}, {YEAR}, {SEQ}. Responses are automatically prefixed with "RES-" on top of this format. Example: HRCM-LGL-2026-0042</div>
@@ -643,6 +651,7 @@ const AdminView = {
           defaultReceivingSectionId: fd.get('defaultReceivingSectionId') || null,
           referenceNumberFormat: fd.get('referenceNumberFormat'),
           prisonerRegistrySectionId: fd.get('prisonerRegistrySectionId') || null,
+          entrySectionId: fd.get('entrySectionId') || null,
         });
         await this._renderTab();
       } catch (err) {
