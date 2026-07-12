@@ -151,6 +151,33 @@ match what changed since, instead of re-running the full files:
   insert/update/reply attempt; the patch file was applied twice with zero
   errors (idempotent) and produces identical results whether run against
   a fresh schema or migrated onto the pre-existing (unpatched) RLS shape.
+- `supabase/patch-entry-module.sql` — adds the **Entry** module: a new
+  `external_correspondence` / `external_correspondence_replies` pair of
+  tables for requests/letters/complaints that arrive from OUTSIDE the
+  CorLink network entirely (the general public and prisoners' families
+  writing to a public inbox like `info@corrections.gov.mv` or by post,
+  other government offices that are NOT registered CorLink
+  organizations, and written complaints prisoners hand in directly).
+  Unlike `requests`, there's no `from_org_id`/`to_org_id` — none of
+  these senders have a CorLink account. A staff member in the org's
+  designated Entry section (`organizations.entry_section_id`, configured
+  the same way as Default Receiving Section / Prisoner Registry Section
+  via Admin → Organization Settings → **Entry Section**) logs what
+  arrived and routes it to whichever internal section is responsible for
+  responding; that section drafts a reply (draft → pending_approval →
+  sent, same shape as Internal Collaboration replies) which CorLink
+  keeps as the file copy — staff still send it back to the original
+  sender themselves (email/post/etc), then mark it delivered here.
+  Same never-breaks-on-upgrade shape as the other two designated-section
+  settings: leave `entry_section_id` unset and any staff member in the
+  org can log/route entries, same as before this module existed.
+  Extends `attachments`/`audit_logs`/`notifications` CHECK constraints
+  and the Storage bucket's upload folder allowlist (also update
+  `supabase/storage-policies.sql` if you run that file separately from
+  this patch). **Run this, then decide whether to designate an Entry
+  section** (Admin → Organization Settings) — until you do, any staff
+  member in the org can use the module, matching the pre-designation
+  fallback the other two settings already use.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

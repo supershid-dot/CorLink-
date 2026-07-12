@@ -95,6 +95,7 @@ const AppShell = {
         <nav class="sidebar-nav">
           ${item('dashboard', 'Dashboard', 'ti-layout-dashboard')}
           ${item('requests', 'Requests', 'ti-inbox')}
+          ${item('entry', 'Entry', 'ti-mailbox')}
           ${canLetters ? item('prisoner-letters', 'Prisoner Letters', 'ti-mail') : ''}
           ${admin ? item('admin', 'Administration', 'ti-settings') : ''}
         </nav>
@@ -126,6 +127,7 @@ const AppShell = {
         <nav class="topbar-nav" id="topbar-nav">
           ${link('dashboard', 'Dashboard')}
           ${link('requests', 'Requests')}
+          ${link('entry', 'Entry')}
           ${canLetters ? link('prisoner-letters', 'Letters') : ''}
           ${admin ? link('admin', 'Admin') : ''}
         </nav>
@@ -203,6 +205,7 @@ const AppShell = {
       <nav class="bottom-nav">
         ${item('dashboard', 'Home', 'ti-home')}
         ${item('requests', 'Requests', 'ti-inbox')}
+        ${item('entry', 'Entry', 'ti-mailbox')}
         ${canLetters ? item('prisoner-letters', 'Letters', 'ti-mail') : ''}
         ${admin ? item('admin', 'Admin', 'ti-settings') : ''}
       </nav>
@@ -300,12 +303,13 @@ const AppShell = {
     // set of results on screen.
     const seq = (this._searchSeq = (this._searchSeq || 0) + 1);
     try {
-      const [requests, letters] = await Promise.all([
+      const [requests, letters, entries] = await Promise.all([
         RequestsAPI.globalSearch(query),
         PrisonerLettersAPI.globalSearch(query),
+        EntryAPI.globalSearch(query),
       ]);
       if (seq !== this._searchSeq) return;
-      this._renderGlobalSearchResults(requests, letters, query);
+      this._renderGlobalSearchResults(requests, letters, entries, query);
     } catch (err) {
       if (seq !== this._searchSeq) return;
       console.error('CorLink: global search failed', err);
@@ -313,7 +317,7 @@ const AppShell = {
     }
   },
 
-  _renderGlobalSearchResults(requests, letters, query) {
+  _renderGlobalSearchResults(requests, letters, entries, query) {
     const resultsEl = document.getElementById('global-search-results');
     if (!resultsEl) return;
 
@@ -327,6 +331,10 @@ const AppShell = {
         type: 'prisoner_letter', id: l.id, title: l.prisoner_name,
         titleClass: '', ref: l.reference_number, date: l.created_at,
       })),
+      ...(entries || []).map(e => ({
+        type: 'external_correspondence', id: e.id, title: e.subject,
+        titleClass: '', ref: e.reference_number, date: e.created_at,
+      })),
     ].sort((a, b) => new Date(b.date) - new Date(a.date));
 
     if (items.length === 0) {
@@ -334,9 +342,14 @@ const AppShell = {
       return;
     }
 
+    const icon = (type) => {
+      if (type === 'prisoner_letter') return 'ti-mail';
+      if (type === 'external_correspondence') return 'ti-mailbox';
+      return 'ti-inbox';
+    };
     resultsEl.innerHTML = items.map(item => `
       <button class="global-search-result" data-record-type="${item.type}" data-record-id="${item.id}">
-        <i class="ti ${item.type === 'prisoner_letter' ? 'ti-mail' : 'ti-inbox'}"></i>
+        <i class="ti ${icon(item.type)}"></i>
         <span class="global-search-result-body">
           <span class="global-search-result-title${item.titleClass}">${this._escapeHtml(item.title || 'Untitled')}</span>
           <span class="global-search-result-meta">${item.ref ? this._escapeHtml(item.ref) : 'No reference yet'} · ${new Date(item.date).toLocaleDateString()}</span>
@@ -350,7 +363,8 @@ const AppShell = {
         const input = document.getElementById('global-search-input');
         if (input) input.value = '';
         resultsEl.innerHTML = '';
-        const route = btn.dataset.recordType === 'prisoner_letter' ? 'prisoner-letter-detail' : 'request-detail';
+        const routes = { prisoner_letter: 'prisoner-letter-detail', external_correspondence: 'entry-detail' };
+        const route = routes[btn.dataset.recordType] || 'request-detail';
         Router.navigate(route, { id: btn.dataset.recordId });
       });
     });

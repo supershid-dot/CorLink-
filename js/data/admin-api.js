@@ -61,13 +61,14 @@ const AdminAPI = (() => {
     // plain table update — orgs_update RLS is super-admin-only so an org
     // admin can set these fields on their own org without also getting
     // row-level write access to is_active/code/name/logo_path.
-    async updateOrgWorkflowSettings(id, { defaultReceivingSectionId, referenceNumberFormat, prisonerRegistrySectionId }) {
+    async updateOrgWorkflowSettings(id, { defaultReceivingSectionId, referenceNumberFormat, prisonerRegistrySectionId, entrySectionId }) {
       const db = getSupabase();
       const { error } = await db.rpc('update_org_workflow_settings', {
         p_org_id: id,
         p_default_receiving_section_id: defaultReceivingSectionId,
         p_reference_number_format: referenceNumberFormat,
         p_prisoner_registry_section_id: prisonerRegistrySectionId ?? null,
+        p_entry_section_id: entrySectionId ?? null,
       });
       if (error) throw error;
       await logAudit('edited', 'organization', id, `Updated request routing & reference number settings`);

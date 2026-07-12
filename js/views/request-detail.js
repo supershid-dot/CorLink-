@@ -129,7 +129,7 @@ const RequestDetailView = {
     toast.innerHTML = `
       <i class="ti ti-refresh"></i>
       <span>This case has been updated.</span>
-      <button type="button" class="btn btn-primary btn-xs" data-toast-refresh>Refresh</button>
+      <button type="button" class="btn btn-secondary btn-xs" data-toast-refresh>Refresh</button>
       <button type="button" class="icon-btn-xs" data-toast-dismiss aria-label="Dismiss"><i class="ti ti-x"></i></button>
     `;
     document.body.appendChild(toast);
@@ -266,6 +266,7 @@ const RequestDetailView = {
 
   _renderContent() {
     const root = this._conversation[0].request;
+    const last = this._conversation[this._conversation.length - 1].request;
     const multiRound = this._conversation.length > 1;
     return `
       <div class="detail-header">
@@ -277,6 +278,11 @@ const RequestDetailView = {
       </div>
 
       <div class="panel detail-meta-panel">
+        <div class="case-header-status">
+          ${RequestsView._statusBadge(last.status, last.deadline)}
+          ${last.reference_number ? `<span class="case-ref">${last.reference_number}</span>` : ''}
+          ${last.deadline ? `<span class="structure-empty">Due ${RequestsView._deadlineCell(last.deadline, last.status)}</span>` : ''}
+        </div>
         <div class="detail-meta">
           <div><span class="detail-meta-label">From</span><span>${root.from_org?.name || ''}${root.from_section ? ' — ' + root.from_section.name : ''}</span></div>
           <div><span class="detail-meta-label">To</span><span>${root.to_org?.name || ''}</span></div>
@@ -285,8 +291,220 @@ const RequestDetailView = {
         </div>
       </div>
 
+      ${this._renderNextStepBanner()}
+
       ${this._conversation.map((entry, i) => this._renderRequestBlock(entry, i, multiRound)).join('')}
     `;
+  },
+
+  // ── Next Step banner ─────────────────────────────────────────────
+  // THE single place that names the current lifecycle step in plain
+  // language, says whose move it is, and hosts the primary action for
+  // the current viewer — replacing the old per-round "Actions" panel
+  // that sat at the very bottom of each (potentially screens-tall)
+  // round block and required already knowing the workflow to interpret.
+  // Buttons reuse the exact data-attributes _bindActions binds, so no
+  // parallel binding architecture exists.
+  _renderNextStepBanner() {
+    const entry = this._conversation[this._conversation.length - 1];
+    const r = entry.request;
+    const user = this._user;
+    const ctx = {
+      isFromOrgMember: user.org_id === r.from_org_id,
+      isToOrgMember:   user.org_id === r.to_org_id,
+      isCreator:       r.created_by === user.id,
+      isAssignee:      r.assigned_to === user.id,
+    };
+    const step = this._nextStepFor(r, ctx, entry);
+    if (!step) return '';
+    const buttons = [...(step.primary || []), ...(step.secondary || [])].join('');
+    return `
+      <div class="next-step-banner next-step-banner--${step.tone}">
+        <div class="next-step-text">
+          <div class="next-step-title">${step.title}</div>
+          ${step.sub ? `<div class="next-step-sub">${step.sub}</div>` : ''}
+        </div>
+        ${buttons ? `<div class="next-step-actions">${buttons}</div>` : ''}
+      </div>
+    `;
+  },
+
+  // 'overdue' is an overlay status, not a lifecycle step — resolve it
+  // back to the underlying step so the banner logic stays a clean
+  // state × role table. The Overdue badge itself stays visible via the
+  // case header.
+  _effectiveStatus(r) {
+    if (r.status !== 'overdue') return r.status;
+    if (!r.reference_number) return 'pending_approval';
+    if (!r.to_section_id) return r.received_at ? 'received' : 'sent';
+    return 'in_progress';
+  },
+
+  // Returns { tone, title, sub, primary: [html], secondary: [html] }.
+  // Every gate condition here is transplanted verbatim from the old
+  // _renderActions — nothing is relaxed, only relocated.
+  _nextStepFor(r, ctx, entry) {
+    const status = this._effectiveStatus(r);
+    const openReqComments = (entry.reviewComments || []).filter(c => !c.resolved_at).length;
+    const commentsNote = (n) => `<i class="ti ti-message-2"></i> Resolve ${n} open review comment${n === 1 ? '' : 's'} below first.`;
+    const creatorName = r.created_by_user?.full_name || 'the drafter';
+    const fromOrg = r.from_org?.name || 'the sending organization';
+    const toOrg = r.to_org?.name || 'the receiving organization';
+    const sectionName = r.to_section?.name || 'a section';
+    const followupBtn = `<button class="btn btn-secondary btn-sm" data-send-followup="${r.id}"><i class="ti ti-message-plus"></i> Send Further Information</button>`;
+
+    if (status === 'draft') {
+      if (ctx.isCreator) {
+        return {
+          tone: 'action', title: 'Draft in progress — your move',
+          sub: openReqComments > 0 ? commentsNote(openReqComments) : 'Submit it for approval when it\'s ready to go.',
+          primary: openReqComments > 0 ? [] : [`<button class="btn btn-primary btn-sm" data-submit-request="${r.id}" data-section="${r.from_section_id}">Submit for Approval</button>`],
+          secondary: [`<button class="btn btn-secondary btn-sm" data-edit-request="${r.id}">Edit Draft</button>`],
+        };
+      }
+      if (ctx.isFromOrgMember) {
+        return { tone: 'waiting', title: `Waiting for ${this._escapeHtml(creatorName)} to finish this draft` };
+      }
+      return null;
+    }
+
+    if (status === 'pending_approval') {
+      if (ctx.isFromOrgMember && this._isSupervisor) {
+        return {
+          tone: 'action', title: 'This request needs your approval',
+          sub: openReqComments > 0 ? `<i class="ti ti-message-2"></i> ${openReqComments} open review comment${openReqComments === 1 ? '' : 's'} — the drafter must resolve ${openReqComments === 1 ? 'it' : 'them'} before this can be approved.` : '',
+          primary: openReqComments > 0 ? [] : [`<button class="btn btn-primary btn-sm" data-approve-request="${r.id}">Approve &amp; Send</button>`],
+          secondary: [`<button class="btn btn-secondary btn-sm" data-return-request="${r.id}">Return</button>`],
+        };
+      }
+      if (ctx.isCreator) {
+        return {
+          tone: 'waiting', title: 'Submitted for approval',
+          sub: `Waiting for ${this._escapeHtml(r.pending_approval_by_user?.full_name || 'a supervisor')} to approve.`,
+          secondary: [`<button class="btn btn-secondary btn-sm" data-edit-request="${r.id}">Edit Draft</button>`],
+        };
+      }
+      if (ctx.isFromOrgMember) return { tone: 'waiting', title: 'Awaiting supervisor approval' };
+      return null;
+    }
+
+    if (['sent', 'received'].includes(status) && !r.to_section_id) {
+      if (ctx.isToOrgMember && this._canReceive) {
+        return {
+          tone: 'action', title: `New request from ${this._escapeHtml(fromOrg)} — receive and route it`,
+          sub: status === 'received'
+            ? 'Already marked received — pick the section to finish routing.'
+            : 'One step: records the receipt and routes it to the responsible section.',
+          primary: [`<button class="btn btn-primary btn-sm" data-receive-route="${r.id}">Receive &amp; Route</button>`],
+        };
+      }
+      if (ctx.isToOrgMember) {
+        return { tone: 'waiting', title: `With ${this._escapeHtml(toOrg)}'s front desk`, sub: 'Waiting to be received and routed.' };
+      }
+      return { tone: 'waiting', title: `Sent to ${this._escapeHtml(toOrg)}`, sub: 'Waiting for them to receive it.' };
+    }
+
+    if (status === 'in_progress') {
+      const canAssign = r.to_section_id
+        && (AppShell.isAdmin(this._user) || this._mySupervisedSections.some(s => s.id === r.to_section_id));
+      const pendingResponse = entry.responseDetails.find(rd => rd.response.status === 'pending_approval');
+      const draftResponse = entry.responseDetails.find(rd => rd.response.status === 'draft');
+
+      if (pendingResponse && ctx.isToOrgMember && this._isSupervisor) {
+        const n = (pendingResponse.reviewComments || []).filter(c => !c.resolved_at).length;
+        return {
+          tone: 'action', title: 'This response needs your approval',
+          sub: n > 0 ? `<i class="ti ti-message-2"></i> ${n} open review comment${n === 1 ? '' : 's'} — the drafter must resolve ${n === 1 ? 'it' : 'them'} before this can be approved.` : '',
+          primary: n > 0 ? [] : [`<button class="btn btn-primary btn-sm" data-approve-response="${pendingResponse.response.id}" data-request="${r.id}">Approve &amp; Send Response</button>`],
+          secondary: [`<button class="btn btn-secondary btn-sm" data-return-response="${pendingResponse.response.id}">Return Response</button>`],
+        };
+      }
+      if (draftResponse && draftResponse.response.created_by === this._user.id) {
+        const n = (draftResponse.reviewComments || []).filter(c => !c.resolved_at).length;
+        return {
+          tone: 'action', title: 'Response drafted — submit it for approval',
+          sub: n > 0 ? commentsNote(n) : '',
+          primary: n > 0 ? [] : [`<button class="btn btn-primary btn-sm" data-submit-response="${draftResponse.response.id}" data-section="${r.to_section_id}">Submit for Approval</button>`],
+        };
+      }
+      if (pendingResponse && pendingResponse.response.created_by === this._user.id) {
+        return {
+          tone: 'waiting', title: 'Response submitted for approval',
+          sub: `Waiting for ${this._escapeHtml(pendingResponse.response.pending_approval_by_user?.full_name || 'a supervisor')}.`,
+        };
+      }
+      if (ctx.isToOrgMember && !r.assigned_to && canAssign) {
+        return {
+          tone: 'action', title: `Routed to ${this._escapeHtml(sectionName)} — assign a staff member`,
+          primary: [`<button class="btn btn-primary btn-sm" data-assign-request="${r.id}">Assign to Staff</button>`],
+          secondary: [`<button class="btn btn-secondary btn-sm" data-route-request="${r.id}">Route to Another Section</button>`],
+        };
+      }
+      if (ctx.isAssignee && entry.responseDetails.length === 0) {
+        // The inline Draft-a-Response form below is this state's one
+        // primary action — a second button here would just compete.
+        return {
+          tone: 'action', title: 'Assigned to you — draft the response below',
+          sub: 'Use the Draft a Response box under the message.',
+        };
+      }
+      if (ctx.isToOrgMember && r.assigned_to && canAssign) {
+        return {
+          tone: 'waiting', title: `Assigned to ${this._escapeHtml(r.assigned_to_user?.full_name || 'a staff member')} — awaiting their draft`,
+          secondary: [
+            `<button class="btn btn-secondary btn-sm" data-assign-request="${r.id}">Reassign</button>`,
+            `<button class="btn btn-secondary btn-sm" data-route-request="${r.id}">Route to Another Section</button>`,
+          ],
+        };
+      }
+      if (ctx.isToOrgMember) {
+        return {
+          tone: 'waiting', title: `With ${this._escapeHtml(sectionName)}`,
+          sub: r.assigned_to ? `Being handled by ${this._escapeHtml(r.assigned_to_user?.full_name || 'a staff member')}.` : 'Waiting for a supervisor to assign it.',
+        };
+      }
+      return { tone: 'waiting', title: `With ${this._escapeHtml(toOrg)}`, sub: 'Waiting for their response.' };
+    }
+
+    if (status === 'responded') {
+      const sentResp = entry.responseDetails.find(rd => rd.response.status === 'sent');
+      const stamped = !!sentResp?.response.received_at;
+      if (ctx.isFromOrgMember && this._isSupervisor) {
+        if (!stamped && sentResp) {
+          return {
+            tone: 'action', title: `Response received from ${this._escapeHtml(toOrg)} — acknowledge and close`,
+            sub: 'Records the receipt and closes the case in one step.',
+            primary: [`<button class="btn btn-primary btn-sm" data-ack-close="${sentResp.response.id}" data-request="${r.id}" data-received="false">Acknowledge &amp; Close</button>`],
+            secondary: [followupBtn],
+          };
+        }
+        return {
+          tone: 'action', title: 'Response acknowledged — close the case',
+          primary: [`<button class="btn btn-primary btn-sm" data-close-request="${r.id}">Close Case</button>`],
+          secondary: [followupBtn],
+        };
+      }
+      if (ctx.isFromOrgMember && this._canReceive && !stamped && sentResp) {
+        return {
+          tone: 'action', title: 'Response received — record the receipt',
+          sub: 'A supervisor closes the case afterwards.',
+          primary: [`<button class="btn btn-primary btn-sm" data-mark-response-received="${sentResp.response.id}">Mark Response Received</button>`],
+        };
+      }
+      if (ctx.isFromOrgMember) {
+        return { tone: 'waiting', title: 'Responded', sub: 'Waiting for a supervisor to close the case.' };
+      }
+      return { tone: 'waiting', title: 'Responded', sub: `Waiting for ${this._escapeHtml(fromOrg)} to acknowledge.` };
+    }
+
+    if (status === 'closed') {
+      return {
+        tone: 'done', title: 'Case closed',
+        secondary: ctx.isFromOrgMember ? [followupBtn] : [],
+      };
+    }
+
+    return null;
   },
 
   // Each round-trip renders inside ONE bordered .round-section wrapper —
@@ -305,24 +523,22 @@ const RequestDetailView = {
     const ctx = { isFromOrgMember, isToOrgMember, isCreator, isAssignee };
     const isLast = index === this._conversation.length - 1;
 
-    return `
-      <div class="round-section">
-        ${multiRound ? `
+    // Status/reference/deadline live in the case header (and, for old
+    // rounds, in the collapsed summary line) — no longer repeated in
+    // every round's own header/meta rows.
+    const body = `
+        ${multiRound && isLast ? `
           <div class="round-header">
             <span class="round-badge">Round ${index + 1}</span>
-            ${RequestsView._statusBadge(r.status, r.deadline)}
-            ${r.reference_number ? `<span class="round-header-meta">${r.reference_number}</span>` : ''}
-            ${r.deadline ? `<span class="round-header-meta">Due ${RequestsView._deadlineCell(r.deadline, r.status)}</span>` : ''}
+            <span class="structure-empty">${new Date(r.created_at).toLocaleDateString()}</span>
           </div>
         ` : ''}
 
+        ${isToOrgMember && isLast ? `
         <div class="round-meta-row">
-          ${!multiRound ? `<span>${RequestsView._statusBadge(r.status, r.deadline)}</span>` : ''}
-          ${!multiRound && r.reference_number ? `<span class="structure-empty">${r.reference_number}</span>` : ''}
-          ${isToOrgMember ? `<span class="structure-empty">${r.to_section ? 'Routed to ' + r.to_section.name : 'Not yet routed'}</span>` : ''}
-          ${isToOrgMember ? `<span class="structure-empty">Assigned: ${r.assigned_to_user?.full_name || 'Unassigned'}</span>` : ''}
-          ${!multiRound && r.deadline ? `<span class="structure-empty">Due ${RequestsView._deadlineCell(r.deadline, r.status)}</span>` : ''}
-        </div>
+          <span class="structure-empty">${r.to_section ? 'Routed to ' + r.to_section.name : 'Not yet routed'}</span>
+          <span class="structure-empty">Assigned: ${r.assigned_to_user?.full_name || 'Unassigned'}</span>
+        </div>` : ''}
 
         <div class="thread">
           <div class="thread-message thread-message--request">
@@ -350,21 +566,28 @@ const RequestDetailView = {
 
         ${entry.responseDetails.length > 0 ? `
           <div class="thread">
-            ${entry.responseDetails.map(rd => this._renderResponse(rd, r)).join('')}
+            ${entry.responseDetails.map(rd => this._renderResponse(rd, r, isLast)).join('')}
           </div>
         ` : ''}
-
-        <div class="detail-actions-panel" data-request-block="${r.id}">
-          ${this._renderActions(r, ctx, entry)}
-        </div>
-
-        ${isLast && ['responded', 'closed'].includes(r.status) && isFromOrgMember ? `
-          <div class="followup-row">
-            <button class="btn btn-secondary btn-sm" data-send-followup="${r.id}"><i class="ti ti-message-plus"></i> Send Further Information</button>
-          </div>
-        ` : ''}
-      </div>
     `;
+
+    // Older rounds collapse to a one-line summary by default — their
+    // full content stays in the DOM (native <details>), so every
+    // existing binding keeps working and expanding is instant.
+    if (multiRound && !isLast) {
+      return `
+        <details class="round-section round-section--collapsed">
+          <summary class="round-summary">
+            <span class="round-badge">Round ${index + 1}</span>
+            <span class="structure-empty">${new Date(r.created_at).toLocaleDateString()}</span>
+            ${r.reference_number ? `<span class="structure-empty">${r.reference_number}</span>` : ''}
+            ${r.status !== 'closed' ? RequestsView._statusBadge(r.status, r.deadline) : ''}
+          </summary>
+          <div class="round-summary-body">${body}</div>
+        </details>
+      `;
+    }
+    return `<div class="round-section">${body}</div>`;
   },
 
   _renderReceipt(record) {
@@ -604,10 +827,14 @@ const RequestDetailView = {
     `).join('');
   },
 
-  _renderResponse(rd, request) {
+  // isLast: whether this response belongs to the LATEST round — the
+  // Next Step banner hosts Submit-for-Approval and the response receipt
+  // action for the latest round, so those buttons render message-level
+  // only on earlier rounds (the banner never covers those).
+  _renderResponse(rd, request, isLast = true) {
     const resp = rd.response;
     // Same "resolve every open comment before resubmitting" gate as the
-    // request side (_renderActions) — computed once here for both the
+    // request side (_nextStepFor) — computed once here for both the
     // count text and the button-vs-note branch below.
     const openRespComments = (rd.reviewComments || []).filter(c => !c.resolved_at).length;
     return `
@@ -626,10 +853,10 @@ const RequestDetailView = {
         ${['draft', 'pending_approval'].includes(resp.status) && resp.created_by === this._user.id ? `
           <div class="thread-message-actions">
             <button class="btn btn-secondary btn-xs" data-edit-response="${resp.id}">Edit Draft</button>
-            ${resp.status === 'draft' ? (
+            ${!isLast && resp.status === 'draft' ? (
               openRespComments > 0
                 ? `<div class="field-hint"><i class="ti ti-message-2"></i> Resolve ${openRespComments} open review comment${openRespComments === 1 ? '' : 's'} above before resubmitting for approval.</div>`
-                : `<button class="btn btn-primary btn-xs" data-submit-response="${resp.id}" data-section="${request.to_section_id}">Submit for Approval</button>`
+                : `<button class="btn btn-secondary btn-xs" data-submit-response="${resp.id}" data-section="${request.to_section_id}">Submit for Approval</button>`
             ) : ''}
           </div>
         ` : ''}
@@ -638,7 +865,7 @@ const RequestDetailView = {
       ${this._renderAttachments('response', resp.id, rd.attachments,
         !(resp.status === 'draft' && resp.created_by !== this._user.id),
         resp.is_locked || (resp.status === 'pending_approval' && resp.created_by !== this._user.id))}
-      ${resp.status === 'sent' && !resp.received_at && request.from_org_id === this._user.org_id && this._canReceive ? `
+      ${!isLast && resp.status === 'sent' && !resp.received_at && request.from_org_id === this._user.org_id && this._canReceive ? `
         <div class="thread-message-actions">
           <button class="btn btn-secondary btn-xs" data-mark-response-received="${resp.id}">Mark Received</button>
         </div>
@@ -763,10 +990,10 @@ const RequestDetailView = {
         </div>
         ${replyComposeOpen && canReplyNow ? this._composeInternalReplyHtml(ir) : ''}
         <div class="detail-actions">
-          ${ir.status === 'sent' && !ir.received_at && canReceive ? `<button class="btn btn-primary btn-xs" data-mark-internal-received="${ir.id}">Mark Received</button>` : ''}
+          ${ir.status === 'sent' && !ir.received_at && canReceive ? `<button class="btn btn-secondary btn-xs" data-mark-internal-received="${ir.id}">Mark Received</button>` : ''}
           ${['received', 'in_progress'].includes(ir.status) && canAssign ? `<button class="btn btn-secondary btn-xs" data-assign-internal="${ir.id}">${ir.assigned_to ? 'Reassign' : 'Assign to Staff'}</button>` : ''}
           ${['received', 'in_progress'].includes(ir.status) && canAssign ? `<button class="btn btn-secondary btn-xs" data-reroute-internal="${ir.id}">Route to Another Section</button>` : ''}
-          ${canReplyNow && !replyComposeOpen ? `<button class="btn btn-primary btn-xs" data-reply-internal="${ir.id}">Draft Reply</button>` : ''}
+          ${canReplyNow && !replyComposeOpen ? `<button class="btn btn-secondary btn-xs" data-reply-internal="${ir.id}">Draft Reply</button>` : ''}
           ${isCreatorSide && ir.status === 'responded' ? `<button class="btn btn-secondary btn-xs" data-close-internal="${ir.id}">Close</button>` : ''}
         </div>
       </div>
@@ -801,7 +1028,7 @@ const RequestDetailView = {
         <div class="response-error alert alert-error hidden"></div>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" data-cancel-internal-reply="${ir.id}">Cancel</button>
-          <button type="submit" class="btn btn-primary btn-sm">Save Draft</button>
+          <button type="submit" class="btn btn-secondary btn-sm">Save Draft</button>
         </div>
       </form>
     `;
@@ -822,7 +1049,7 @@ const RequestDetailView = {
       sent:             ['Sent', 'badge-success'],
     }[reply.status] || [reply.status, 'badge-outline'];
     // Same force-resolve-before-resubmit rule as external requests/
-    // responses (_renderActions) — a comment left by the section's
+    // responses (_nextStepFor) — a comment left by the section's
     // supervisor has to be marked resolved before the drafter can
     // submit again.
     const openReplyComments = (reviewComments || []).filter(c => !c.resolved_at).length;
@@ -846,107 +1073,20 @@ const RequestDetailView = {
           ${reply.status === 'draft' && isMine ? (
             openReplyComments > 0
               ? `<div class="field-hint"><i class="ti ti-message-2"></i> Resolve ${openReplyComments} open review comment${openReplyComments === 1 ? '' : 's'} above before resubmitting for approval.</div>`
-              : `<button class="btn btn-primary btn-xs" data-submit-internal-reply="${reply.id}" data-ir="${ir.id}">Submit for Approval</button>`
+              : `<button class="btn btn-secondary btn-xs" data-submit-internal-reply="${reply.id}" data-ir="${ir.id}">Submit for Approval</button>`
           ) : ''}
           ${reply.status === 'pending_approval' && this._isSupervisor ? `
             ${openReplyComments > 0
               ? `<div class="field-hint"><i class="ti ti-message-2"></i> ${openReplyComments} open review comment${openReplyComments === 1 ? '' : 's'} — the drafter must resolve ${openReplyComments === 1 ? 'it' : 'them'} before this can be approved.</div>`
-              : `<button class="btn btn-primary btn-xs" data-approve-internal-reply="${reply.id}" data-ir="${ir.id}">Approve &amp; Send</button>`}
+              : `<button class="btn btn-secondary btn-xs" data-approve-internal-reply="${reply.id}" data-ir="${ir.id}">Approve &amp; Send</button>`}
             <button class="btn btn-secondary btn-xs" data-return-internal-reply="${reply.id}" data-ir="${ir.id}">Return</button>` : ''}
         </div>
       </div>
     `;
   },
 
-  _renderActions(r, ctx, entry) {
-    const blocks = [];
-
-    // Requester drafting/submitting — editable through pending_approval
-    // (not just before submitting), matching requests_update RLS: a
-    // draft only becomes locked once a supervisor actually approves it.
-    if (['draft', 'pending_approval'].includes(r.status) && ctx.isCreator) {
-      blocks.push(`<button class="btn btn-secondary btn-sm" data-edit-request="${r.id}">Edit Draft</button>`);
-    }
-    // Every comment a supervisor left has to be marked resolved before
-    // the creator can send this back for approval again — otherwise
-    // nothing stops a resubmission that never actually addressed the
-    // feedback. Same open-comment count shown to the supervisor on the
-    // approval side (_renderApprovalHistory's gate); here it blocks the
-    // OTHER end of the same loop.
-    if (r.status === 'draft' && ctx.isCreator) {
-      const openReqComments = (entry.reviewComments || []).filter(c => !c.resolved_at).length;
-      blocks.push(openReqComments > 0
-        ? `<div class="field-hint"><i class="ti ti-message-2"></i> Resolve ${openReqComments} open review comment${openReqComments === 1 ? '' : 's'} above before resubmitting for approval.</div>`
-        : `<button class="btn btn-primary btn-sm" data-submit-request="${r.id}" data-section="${r.from_section_id}">Submit for Approval</button>`);
-    }
-
-    // Requester-side supervisor approving/returning. While ANY review
-    // comment is still open, Approve & Send is withheld entirely (not
-    // just disabled) — the review loop has to finish first; only
-    // Return is offered. RLS doesn't enforce this (a comment is
-    // advisory), but the UI making approval impossible with open
-    // comments is the whole point of the loop.
-    if (r.status === 'pending_approval' && ctx.isFromOrgMember && this._isSupervisor) {
-      const openComments = (entry.reviewComments || []).filter(c => !c.resolved_at).length;
-      blocks.push(`
-        ${openComments > 0 ? `
-          <div class="field-hint"><i class="ti ti-message-2"></i> ${openComments} open review comment${openComments === 1 ? '' : 's'} — the drafter must resolve ${openComments === 1 ? 'it' : 'them'} before this can be approved.</div>` : `
-          <button class="btn btn-primary btn-sm" data-approve-request="${r.id}">Approve &amp; Send</button>`}
-        <button class="btn btn-secondary btn-sm" data-return-request="${r.id}">Return</button>
-      `);
-    }
-
-    // Recipient-side receiving unrouted mail (supervisor/admin/assigned_receiver).
-    if (r.status === 'sent' && !r.to_section_id && ctx.isToOrgMember && this._canReceive) {
-      blocks.push(`<button class="btn btn-primary btn-sm" data-mark-received="${r.id}">Mark Received</button>`);
-    }
-
-    // Recipient-side routing, once received.
-    if (r.status === 'received' && !r.to_section_id && ctx.isToOrgMember && this._canReceive) {
-      blocks.push(`<button class="btn btn-primary btn-sm" data-route-request="${r.id}">Route to Section</button>`);
-    }
-
-    // Section-level assigning to a specific staff member to draft the
-    // reply — restricted to actual supervisors of THIS section (or an
-    // org admin), not any member of the to-org. this._isSupervisor
-    // alone is too broad here (true for a supervisor of a totally
-    // unrelated section); AppShell.isAdmin() bypasses section scoping
-    // entirely, matching how admins already work everywhere else.
-    const canAssign = r.to_section_id
-      && (AppShell.isAdmin(this._user) || this._mySupervisedSections.some(s => s.id === r.to_section_id));
-    if (r.to_section_id && ctx.isToOrgMember && ['in_progress'].includes(r.status) && canAssign) {
-      blocks.push(`<button class="btn btn-secondary btn-sm" data-assign-request="${r.id}">${r.assigned_to ? 'Reassign' : 'Assign to Staff'}</button>`);
-      // A section that received a routed request but isn't the right
-      // one to answer can pass it on — the new section then assigns its
-      // own staff (assignment is cleared on re-route, see routeRequest).
-      blocks.push(`<button class="btn btn-secondary btn-sm" data-route-request="${r.id}">Route to Another Section</button>`);
-    }
-
-    // Recipient-side supervisor approving/returning the response —
-    // same open-comments gate as the request-side approval above.
-    const pendingResponse = entry.responseDetails.find(rd => rd.response.status === 'pending_approval');
-    if (pendingResponse && ctx.isToOrgMember && this._isSupervisor) {
-      const openRespComments = (pendingResponse.reviewComments || []).filter(c => !c.resolved_at).length;
-      blocks.push(`
-        <div class="field-hint">Response awaiting approval:</div>
-        ${openRespComments > 0 ? `
-          <div class="field-hint"><i class="ti ti-message-2"></i> ${openRespComments} open review comment${openRespComments === 1 ? '' : 's'} — the drafter must resolve ${openRespComments === 1 ? 'it' : 'them'} before this can be approved.</div>` : `
-          <button class="btn btn-primary btn-sm" data-approve-response="${pendingResponse.response.id}" data-request="${r.id}">Approve &amp; Send Response</button>`}
-        <button class="btn btn-secondary btn-sm" data-return-response="${pendingResponse.response.id}">Return Response</button>
-      `);
-    }
-
-    // Requester closing out a responded request.
-    if (r.status === 'responded' && ctx.isFromOrgMember && this._isSupervisor) {
-      blocks.push(`<button class="btn btn-primary btn-sm" data-close-request="${r.id}">Mark Closed</button>`);
-    }
-
-    if (blocks.length === 0) return '';
-    return `<div class="panel"><h3>Actions</h3><div class="detail-actions">${blocks.join('')}</div></div>`;
-  },
-
   // Rendered as its own panel AFTER Internal Collaboration (see
-  // _renderRequestBlock) rather than inside _renderActions above it —
+  // _renderRequestBlock), below the info-gathering step —
   // drafting the actual reply always comes below the info-gathering
   // step, never above it, regardless of whether Internal Collaboration
   // has anything in it yet for this case.
@@ -989,7 +1129,7 @@ const RequestDetailView = {
           <div class="attachments-list" data-response-pending="${requestId}"></div>
         </div>
         <div class="response-error alert alert-error hidden"></div>
-        <button type="submit" class="btn btn-primary btn-sm">Save &amp; Send Draft Response</button>
+        <button type="submit" class="btn btn-primary btn-sm">Save Draft Response</button>
       </form>
     `;
   },
@@ -1100,8 +1240,15 @@ const RequestDetailView = {
       }, true));
     });
 
-    main.querySelectorAll('[data-mark-received]').forEach(btn => {
-      btn.addEventListener('click', () => this._runAction(() => RequestsAPI.markRequestReceived(btn.dataset.markReceived)));
+    main.querySelectorAll('[data-receive-route]').forEach(btn => {
+      btn.addEventListener('click', () => this._openReceiveRouteModal(btn.dataset.receiveRoute));
+    });
+
+    main.querySelectorAll('[data-ack-close]').forEach(btn => {
+      btn.addEventListener('click', () => this._runAction(() => RequestsAPI.acknowledgeAndClose(
+        btn.dataset.ackClose, btn.dataset.request,
+        { responseAlreadyReceived: btn.dataset.received === 'true' }
+      )));
     });
 
     main.querySelectorAll('[data-add-comment-type]').forEach(btn => {
@@ -1399,6 +1546,10 @@ const RequestDetailView = {
     });
   },
 
+  // Plain re-route (a routed request moving to a different section) —
+  // deliberately does NOT touch receipts (the request was already
+  // formally received once); the merged Receive & Route path below is
+  // for still-unrouted mail only.
   async _openRouteModal(requestId) {
     const entry = this._conversation.find(e => e.request.id === requestId);
     let sections;
@@ -1439,6 +1590,88 @@ const RequestDetailView = {
       const errEl = form.querySelector('.modal-error');
       try {
         await RequestsAPI.routeRequest(requestId, fd.get('sectionId'));
+        this._closeModal();
+        await this._load();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
+  // Receive & Route in one step (receipt + section + optional assignee)
+  // — the receipt is stamped as part of the same action, see
+  // RequestsAPI.receiveAndRoute. Mirrors the same modal in requests.js.
+  async _openReceiveRouteModal(requestId) {
+    const entry = this._conversation.find(e => e.request.id === requestId);
+    const r = entry.request;
+    let sections, orgUsers;
+    try {
+      [sections, orgUsers] = await Promise.all([
+        AdminAPI.listSectionsByOrg(r.to_org_id).then(list => list.filter(s => s.is_active)),
+        AdminAPI.listUsersByOrg(r.to_org_id).then(list => list.filter(u => u.is_active)),
+      ]);
+    } catch (err) {
+      console.error('CorLink: failed to load routing form data', err);
+      return;
+    }
+    if (sections.length === 0) {
+      this._openModal(`
+        <h3>Receive &amp; Route</h3>
+        <div class="alert alert-info">No active sections to route to yet.</div>
+        <div class="modal-actions"><button class="btn btn-secondary" data-close-modal>Close</button></div>
+      `);
+      return;
+    }
+    this._openModal(`
+      <h3>Receive &amp; Route</h3>
+      ${r.status === 'sent' ? `<div class="alert alert-info"><i class="ti ti-info-circle"></i> This will record the request as received by you and route it in one step.</div>` : ''}
+      <form id="receive-route-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Responsible Section</label>
+          <select class="field-select" name="sectionId">
+            ${sections.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Assign to Staff (optional)</label>
+          <select class="field-select" name="assignedTo" id="receive-route-assignee"></select>
+          <div class="field-hint">You can also assign later from this page.</div>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Receive &amp; Route</button>
+        </div>
+      </form>
+    `);
+    const form = document.getElementById('receive-route-form');
+    const sectionSelect = form.querySelector('[name="sectionId"]');
+    const assigneeSelect = document.getElementById('receive-route-assignee');
+    const repopulateAssignees = async () => {
+      assigneeSelect.innerHTML = `<option value="">— Unassigned —</option>`;
+      try {
+        const sectionUserIds = new Set(await NotificationsAPI.sectionUserIds(sectionSelect.value));
+        const inSection = orgUsers.filter(u => sectionUserIds.has(u.id));
+        assigneeSelect.innerHTML = `<option value="">— Unassigned —</option>`
+          + inSection.map(u => `<option value="${u.id}">${this._escapeHtml(u.full_name)}</option>`).join('');
+      } catch (err) {
+        console.warn('CorLink: failed to load section staff for assignment', err);
+      }
+    };
+    sectionSelect.addEventListener('change', repopulateAssignees);
+    await repopulateAssignees();
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const errEl = form.querySelector('.modal-error');
+      try {
+        await RequestsAPI.receiveAndRoute(requestId, {
+          currentStatus: r.status,
+          toSectionId: fd.get('sectionId'),
+          assignedTo: fd.get('assignedTo') || null,
+        });
         this._closeModal();
         await this._load();
       } catch (err) {
@@ -1720,16 +1953,38 @@ const RequestDetailView = {
         </div>
         ${RequestsView._deadlineFieldHtml()}
         ${RequestsView._loopInFieldHtml(this._fromOrgUsers)}
+        <div class="field-group">
+          <label class="field-label">Approving Supervisor</label>
+          <select class="field-select" name="approverId" id="followup-approver"></select>
+          <div class="field-hint">Needed only if you submit for approval now — Save Draft skips this.</div>
+        </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
-          <button type="submit" class="btn btn-primary">Save Draft</button>
+          <button type="submit" class="btn btn-secondary" data-compose-mode="draft">Save Draft</button>
+          <button type="submit" class="btn btn-primary" data-compose-mode="submit">Submit for Approval</button>
         </div>
       </form>
     `, { large: true });
     const form = document.getElementById('followup-form');
     const editor = RichEditor.create(document.getElementById('followup-body'), { language: 'dv' });
     const followupSubject = document.getElementById('followup-subject');
+    // Same approver-picker-in-compose treatment as the New Request
+    // modal (requests.js) — tracks the From Section.
+    const approverSelect = document.getElementById('followup-approver');
+    const repopulateApprovers = async () => {
+      const sectionId = new FormData(form).get('fromSectionId');
+      approverSelect.innerHTML = `<option value="">— Any qualifying supervisor —</option>`;
+      try {
+        const approvers = await RequestsAPI.listEligibleApprovers(sectionId);
+        approverSelect.innerHTML = `<option value="">— Any qualifying supervisor —</option>`
+          + approvers.map(u => `<option value="${u.id}">${this._escapeHtml(u.full_name)}${u.designations?.name ? ' — ' + this._escapeHtml(u.designations.name) : ''}</option>`).join('');
+      } catch (err) {
+        console.warn('CorLink: failed to load eligible approvers', err);
+      }
+    };
+    form.querySelector('[name="fromSectionId"]')?.addEventListener('change', repopulateApprovers);
+    repopulateApprovers();
     RequestsView._bindDeadlineField(form);
     RequestsView._bindLoopInField(form, this._fromOrgUsers);
     const syncFollowupSubjectLang = (lang) => followupSubject.classList.toggle('field-divehi', lang === 'dv');
@@ -1746,6 +2001,7 @@ const RequestDetailView = {
     });
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
+      const mode = e.submitter?.dataset.composeMode || 'draft';
       const fd = new FormData(form);
       const errEl = form.querySelector('.modal-error');
       const body = editor.getHTML();
@@ -1761,10 +2017,23 @@ const RequestDetailView = {
           body, language: fd.get('language'),
           deadline: fd.get('deadline') || null, parentRequestId: r.id,
         });
-        await CCRecipientsAPI.add('request', result.id, fd.getAll('loopInUserIds'));
+        const failures = [];
+        try {
+          await CCRecipientsAPI.add('request', result.id, fd.getAll('loopInUserIds'));
+        } catch (err) {
+          failures.push(`Loop In Staff: ${err.message || 'failed'}`);
+        }
+        if (mode === 'submit') {
+          try {
+            await RequestsAPI.submitRequest(result.id, fd.get('approverId') || null);
+          } catch (err) {
+            failures.push(`Submitting for approval failed: ${err.message || 'unknown error'} — you can submit it from the request page.`);
+          }
+        }
         DraftAutosave.clear(`followup:${r.id}`);
         this._closeModal();
         Router.navigate('request-detail', { id: result.id });
+        if (failures.length > 0) alert(`Draft saved, but not everything went through:\n${failures.join('\n')}`);
       } catch (err) {
         errEl.textContent = err.message;
         errEl.classList.remove('hidden');

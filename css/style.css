@@ -1536,17 +1536,6 @@ input.field-divehi, textarea.field-divehi, select.field-divehi {
    since the full set won't always fit on mobile, but visually a step
    down (pill buttons, not underlined) so it reads as "narrowing the
    current tab" rather than a second row of tabs. */
-/* Sits directly above a .filter-chips row when a tab has more than
-   one facet (e.g. Inbox/Sent's "Show" who-facet stacked over the
-   existing "Status" facet) — a plain small caption, not a chip itself. */
-.filter-row-label {
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  color: var(--color-text-light);
-  margin-bottom: 6px;
-}
 .filter-chips {
   display: flex;
   gap: 8px;
@@ -2243,8 +2232,56 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
 }
 .detail-actions form.modal-form { width: 100%; }
 
-/* ── Conversation (multi-round-trip requests) ────────────────── */
-.followup-row { display: flex; }
+/* ── Next Step banner (request detail) ───────────────────────── */
+/* THE one place that names the current workflow step, whose move it
+   is, and hosts the page's single primary action — replaces the old
+   bottom-of-round "Actions" panel. minmax(0)/flex-wrap care: titles
+   can be long Divehi strings and must wrap, never overflow (the
+   dashboard grid lesson). */
+.next-step-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 14px 18px;
+  margin-bottom: 20px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  border-left-width: 4px;
+  background: var(--color-surface);
+}
+.next-step-banner--action  { border-left-color: var(--color-primary); background: var(--color-primary-light); }
+.next-step-banner--waiting { border-left-color: var(--color-border); background: var(--color-bg); }
+.next-step-banner--done    { border-left-color: var(--color-success); background: var(--color-success-bg); }
+.next-step-text { min-width: 0; flex: 1 1 240px; }
+.next-step-title { font-weight: 600; overflow-wrap: break-word; }
+.next-step-sub {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  margin-top: 2px;
+  overflow-wrap: break-word;
+}
+.next-step-sub i { margin-right: 4px; }
+.next-step-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Status + reference + deadline for the case, shown ONCE in the meta
+   panel instead of repeated in every round's header/meta rows. */
+.case-header-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+.case-ref { font-size: 0.8125rem; color: var(--color-text-muted); letter-spacing: 0.02em; }
 
 /* ── Rich Text Editor ─────────────────────────────────────────── */
 /* No overflow:hidden here — the table dropdown is position:absolute
@@ -2553,8 +2590,6 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
   padding: 2px 8px;
   border-radius: var(--radius-full);
 }
-.round-header-meta { font-size: 0.8125rem; color: var(--color-text-muted); }
-
 .round-meta-row {
   display: flex;
   flex-wrap: wrap;
@@ -2565,10 +2600,36 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
   border-bottom: 1px solid var(--color-border);
 }
 
-.round-section > .thread { margin: 16px 20px; }
-.round-section > .detail-actions-panel { margin: 0 20px 16px; }
-.round-section > .internal-collab-panel { margin: 0 20px 16px; }
-.round-section > .followup-row { margin: 0 20px 16px; }
+.round-section > .thread,
+.round-summary-body > .thread { margin: 16px 20px; }
+.round-section > .internal-collab-panel,
+.round-summary-body > .internal-collab-panel { margin: 0 20px 16px; }
+
+/* Older rounds collapse to a one-line summary by default (only the
+   latest round stays expanded) — same native <details> chevron recipe
+   as .activity-log above. */
+.round-section--collapsed > .round-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 20px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 0.8125rem;
+}
+.round-section--collapsed > .round-summary::-webkit-details-marker { display: none; }
+.round-section--collapsed > .round-summary::before {
+  content: '';
+  width: 0; height: 0;
+  border-left: 4px solid var(--color-text-muted);
+  border-top: 3px solid transparent;
+  border-bottom: 3px solid transparent;
+  transition: transform var(--transition);
+  flex-shrink: 0;
+}
+.round-section--collapsed[open] > .round-summary::before { transform: rotate(90deg); }
+.round-section--collapsed[open] > .round-summary { border-bottom: 1px solid var(--color-border); }
 
 /* ── Internal Collaboration (org-only) ───────────────────────── */
 /* A native <details>/<summary> disclosure — deliberately styled to

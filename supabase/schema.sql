@@ -97,6 +97,16 @@ ALTER TABLE organizations
 ALTER TABLE organizations
   ADD COLUMN prisoner_registry_section_id UUID REFERENCES sections(id);
 
+-- Same shape again, for the Entry module (external_correspondence,
+-- further down this file): which section (if any) logs correspondence
+-- that arrives from OUTSIDE the CorLink network entirely — the public,
+-- prisoners' families, non-participating outside offices, and
+-- prisoner-submitted written complaints — and routes it to whoever
+-- internally should respond (see is_entry_staff() in rls.sql). NULL =
+-- any org member, same never-breaks-on-upgrade shape as the two above.
+ALTER TABLE organizations
+  ADD COLUMN entry_section_id UUID REFERENCES sections(id);
+
 -- ─── Designations (job titles / positions within an organization) ──
 -- Org-specific picklist (e.g. "Legal Officer", "Case Manager") — the
 -- organization's own admin manages this list, same as they manage
@@ -391,7 +401,7 @@ CREATE TABLE cc_recipients (
 -- Allowed types: pdf, docx, xlsx, jpg, png  |  Max: 20 MB each, 100 MB total
 CREATE TABLE attachments (
   id            UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
-  record_type   TEXT    NOT NULL CHECK (record_type IN ('request', 'response', 'prisoner_letter', 'internal_request', 'prisoner_reply', 'internal_reply')),
+  record_type   TEXT    NOT NULL CHECK (record_type IN ('request', 'response', 'prisoner_letter', 'internal_request', 'prisoner_reply', 'internal_reply', 'external_correspondence', 'external_correspondence_reply')),
   record_id     UUID    NOT NULL,
   filename      TEXT    NOT NULL,
   storage_path  TEXT    NOT NULL,   -- Path within Supabase Storage bucket
@@ -474,6 +484,96 @@ CREATE TABLE prisoner_replies (
   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- ─── External Correspondence (Entry module) ─────────────────
+-- Requests, letters, and complaints that arrive from OUTSIDE the
+-- CorLink network entirely: the general public and prisoners' families
+-- writing to info@corrections.gov.mv or by post, other government
+-- offices that are NOT registered CorLink organizations, and written
+-- complaints prisoners hand in directly to an internal section. None of
+-- these senders have a CorLink organization/account, so unlike
+-- `requests` (which assumes both from_org_id and to_org_id are real,
+-- registered organizations) this is deliberately its own table rather
+-- than a variant of it. A staff member in the org's designated Entry
+-- section (organizations.entry_section_id above) logs what arrived,
+-- then routes it to whichever internal section is responsible for
+-- responding — mirroring requests' "receive, then route" shape, but
+-- entirely within one organization: no from_org_id/to_org_id duality,
+-- no cross-org visibility to guard against.
+CREATE TABLE external_correspondence (
+  id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  org_id            UUID        NOT NULL REFERENCES organizations(id),
+  source_channel    TEXT        NOT NULL CHECK (source_channel IN ('email', 'letter', 'in_person', 'phone', 'other')),
+  sender_category   TEXT        NOT NULL CHECK (sender_category IN ('public', 'prisoner_family', 'external_office', 'prisoner_complaint')),
+  sender_name       TEXT        NOT NULL,
+  sender_contact    TEXT,       -- Free text: email / phone / address, as available
+  external_office_name TEXT,    -- Name of the outside office, when sender_category = 'external_office' — not a CorLink organizations row
+  prisoner_ref      UUID        REFERENCES prisoners(id),  -- Optional link to the registry (family enquiries / complaints), same convention as prisoner_letters.prisoner_ref
+  prisoner_name     TEXT,       -- Denormalized, same convention as prisoner_letters.prisoner_name
+  subject           TEXT        NOT NULL,
+  subject_language  TEXT        NOT NULL DEFAULT 'en' CHECK (subject_language IN ('en', 'dv')),
+  body              TEXT        NOT NULL,   -- Sanitized rich HTML (js/lib/rich-editor.js) — the logged/transcribed content
+  language          TEXT        NOT NULL DEFAULT 'en' CHECK (language IN ('en', 'dv')),
+  received_date     DATE        NOT NULL DEFAULT CURRENT_DATE,  -- When the correspondence itself arrived — may predate created_at (Entry logging it)
+  entered_by        UUID        NOT NULL REFERENCES users(id),
+  to_section_id     UUID        REFERENCES sections(id),   -- Internal section responsible for responding; NULL until routed
+  assigned_to       UUID        REFERENCES users(id),
+  status            TEXT        NOT NULL DEFAULT 'logged' CHECK (status IN ('logged', 'routed', 'responded', 'closed')),
+  deadline          DATE,
+  reference_number  TEXT        UNIQUE,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Replies mirror prisoner_replies/internal_request_replies: the
+-- responding section drafts and (via supervisor approval, same
+-- draft -> pending_approval -> sent shape as internal_request_replies)
+-- sends its answer. CorLink only RECORDS the reply as the official
+-- file copy — delivery_method/sent_at describe how staff actually got
+-- it back to the original sender (email/post/etc outside this system),
+-- not an automated send.
+CREATE TABLE external_correspondence_replies (
+  id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  entry_id            UUID        NOT NULL REFERENCES external_correspondence(id),
+  body                TEXT        NOT NULL,
+  language            TEXT        NOT NULL DEFAULT 'en' CHECK (language IN ('en', 'dv')),
+  status              TEXT        NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'pending_approval', 'sent')),
+  pending_approval_by UUID        REFERENCES users(id),
+  approved_by         UUID        REFERENCES users(id),
+  approved_at         TIMESTAMPTZ,
+  delivery_method     TEXT        CHECK (delivery_method IN ('email', 'letter', 'in_person', 'phone', 'other')),
+  sent_at             TIMESTAMPTZ,
+  created_by          UUID        NOT NULL REFERENCES users(id),
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Org-level yearly sequence, same shape as letter_reference_sequences —
+-- generated at logging time (there's no section yet to key a per-
+-- section sequence off, unlike generate_reference_number()).
+CREATE TABLE entry_reference_sequences (
+  org_id        UUID    NOT NULL REFERENCES organizations(id),
+  year          INTEGER NOT NULL,
+  next_sequence INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY (org_id, year)
+);
+
+CREATE OR REPLACE FUNCTION generate_entry_reference(p_org_id UUID)
+RETURNS TEXT AS $$
+DECLARE
+  v_year INTEGER := EXTRACT(YEAR FROM NOW());
+  v_seq  INTEGER;
+  v_code TEXT;
+BEGIN
+  INSERT INTO entry_reference_sequences (org_id, year, next_sequence)
+  VALUES (p_org_id, v_year, 2)
+  ON CONFLICT (org_id, year)
+  DO UPDATE SET next_sequence = entry_reference_sequences.next_sequence + 1
+  RETURNING next_sequence - 1 INTO v_seq;
+
+  SELECT code INTO v_code FROM organizations WHERE id = p_org_id;
+  RETURN 'ENT-' || COALESCE(v_code, 'ORG') || '-' || v_year || '-' || LPAD(v_seq::TEXT, 4, '0');
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
 -- ─── Deadline Extensions ────────────────────────────────────
 CREATE TABLE deadline_extensions (
   id            UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -502,7 +602,7 @@ CREATE TABLE audit_logs (
                )),
   record_type  TEXT    NOT NULL CHECK (record_type IN (
                  'request', 'response', 'internal_request', 'prisoner_letter', 'deadline_extension',
-                 'user', 'organization', 'section', 'session', 'attachment'
+                 'user', 'organization', 'section', 'session', 'attachment', 'external_correspondence'
                )),
   record_id    UUID,
   notes        TEXT,
@@ -517,7 +617,8 @@ CREATE TABLE notifications (
   type         TEXT    NOT NULL CHECK (type IN (
                  'new_request', 'new_response', 'approval_requested', 'draft_returned',
                  'deadline_warning', 'extension_requested', 'extension_decided',
-                 'new_prisoner_letter', 'letter_replied'
+                 'new_prisoner_letter', 'letter_replied',
+                 'new_external_correspondence', 'external_correspondence_replied'
                )),
   record_type  TEXT    NOT NULL,
   record_id    UUID    NOT NULL,
@@ -551,6 +652,10 @@ CREATE INDEX idx_internal_request_replies_ir ON internal_request_replies(interna
 CREATE INDEX idx_review_comments_record      ON review_comments(record_type, record_id);
 CREATE INDEX idx_cc_recipients_user          ON cc_recipients(user_id);
 CREATE INDEX idx_prisoner_letters_org   ON prisoner_letters(from_prison_id);
+CREATE INDEX idx_external_correspondence_org      ON external_correspondence(org_id);
+CREATE INDEX idx_external_correspondence_section  ON external_correspondence(to_section_id) WHERE to_section_id IS NOT NULL;
+CREATE INDEX idx_external_correspondence_status   ON external_correspondence(status);
+CREATE INDEX idx_ec_replies_entry       ON external_correspondence_replies(entry_id);
 CREATE INDEX idx_notifications_user     ON notifications(user_id, is_read);
 CREATE INDEX idx_audit_logs_user        ON audit_logs(user_id);
 CREATE INDEX idx_audit_logs_record      ON audit_logs(record_type, record_id);
@@ -583,6 +688,8 @@ CREATE TRIGGER set_updated_at BEFORE UPDATE ON requests
 CREATE TRIGGER set_updated_at BEFORE UPDATE ON responses
   FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
 CREATE TRIGGER set_updated_at BEFORE UPDATE ON prisoner_letters
+  FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
+CREATE TRIGGER set_updated_at BEFORE UPDATE ON external_correspondence
   FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
 CREATE TRIGGER set_updated_at BEFORE UPDATE ON deadline_extensions
   FOR EACH ROW EXECUTE FUNCTION trigger_set_updated_at();
@@ -670,6 +777,53 @@ $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER check_response_status BEFORE UPDATE OF status ON responses
   FOR EACH ROW EXECUTE FUNCTION trigger_check_response_status();
+
+-- Same enforcement, same reasoning, for external_correspondence /
+-- external_correspondence_replies (Entry module) — RLS gates who can
+-- update these rows but not which transition they make.
+CREATE OR REPLACE FUNCTION valid_entry_status_transition(old_status TEXT, new_status TEXT)
+RETURNS BOOLEAN AS $$
+  SELECT old_status = new_status OR (old_status, new_status) IN (
+    ('logged', 'routed'),
+    ('routed', 'responded'),
+    ('responded', 'closed')
+  );
+$$ LANGUAGE sql IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION trigger_check_entry_status()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NOT valid_entry_status_transition(OLD.status, NEW.status) THEN
+    RAISE EXCEPTION 'Invalid external_correspondence status transition: % -> %', OLD.status, NEW.status;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER check_entry_status BEFORE UPDATE OF status ON external_correspondence
+  FOR EACH ROW EXECUTE FUNCTION trigger_check_entry_status();
+
+CREATE OR REPLACE FUNCTION valid_entry_reply_status_transition(old_status TEXT, new_status TEXT)
+RETURNS BOOLEAN AS $$
+  SELECT old_status = new_status OR (old_status, new_status) IN (
+    ('draft', 'pending_approval'),
+    ('pending_approval', 'sent'),
+    ('pending_approval', 'draft')
+  );
+$$ LANGUAGE sql IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION trigger_check_entry_reply_status()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NOT valid_entry_reply_status_transition(OLD.status, NEW.status) THEN
+    RAISE EXCEPTION 'Invalid external_correspondence_replies status transition: % -> %', OLD.status, NEW.status;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER check_entry_reply_status BEFORE UPDATE OF status ON external_correspondence_replies
+  FOR EACH ROW EXECUTE FUNCTION trigger_check_entry_reply_status();
 
 -- ─── Reference Number Generator ──────────────────────────────
 -- Called when a supervisor approves and sends a request (p_record_type
