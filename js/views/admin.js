@@ -785,10 +785,13 @@ const AdminView = {
                 <td data-label="Service #">${u.service_number}</td>
                 <td data-label="Designation">${u.designations?.name || '<span class="structure-empty">—</span>'}</td>
                 <td data-label="Assignments">
-                  <div class="badge-list">
-                    ${(u.user_assignments || []).filter(a => a.is_active).map(a =>
-                      `<span class="badge badge-outline badge-wrap">${this._roleLabel(a.role)} · ${this._scopeLabel(a, scopeMap)}${a.is_primary ? ' ★' : ''}</span>`
-                    ).join('') || '<span class="structure-empty">None</span>'}
+                  <div class="assignment-chip-row">
+                    ${(u.user_assignments || []).filter(a => a.is_active).map(a => `
+                      <span class="assignment-chip${a.is_primary ? ' assignment-chip--primary' : ''}">
+                        ${a.is_primary ? '<i class="ti ti-star-filled"></i>' : ''}
+                        <span class="assignment-chip-text">${this._roleLabel(a.role)} · ${this._scopeLabel(a, scopeMap)}</span>
+                      </span>
+                    `).join('') || '<span class="structure-empty">None</span>'}
                   </div>
                 </td>
                 <td data-label="Status">${u.is_active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-muted">Inactive</span>'}</td>
@@ -1003,56 +1006,67 @@ const AdminView = {
     this._openModal(`
       <h3>Manage — ${user.full_name}</h3>
 
-      <form id="edit-profile-form" class="modal-form">
-        <label class="field-label">Profile</label>
-        <div class="field-group">
-          <input class="field-input-plain" name="fullName" required value="${user.full_name}" placeholder="Full name" />
-        </div>
-        <div class="field-group">
-          <input class="field-input-plain" type="email" name="email" required value="${user.email}" placeholder="Email" />
-        </div>
-        <div class="field-group">
-          <label class="field-label">Designation</label>
-          <select class="field-select" name="designationId">
-            <option value="">— None —</option>
-            ${designationOptions.map(d => `<option value="${d.id}" ${user.designation_id === d.id ? 'selected' : ''}>${d.name}</option>`).join('')}
-          </select>
-        </div>
-        <button type="submit" class="btn btn-secondary btn-sm">Save Profile</button>
-      </form>
-
-      <div class="field-group">
-        <label class="field-label">Account Status</label>
-        <div class="assignment-add-row">
-          <button class="btn ${user.is_active ? 'btn-secondary' : 'btn-primary'} btn-sm" id="toggle-user-active">
-            ${user.is_active ? 'Deactivate Account' : 'Activate Account'}
-          </button>
-          <button class="btn btn-secondary btn-sm" id="reset-password-btn">Reset Password</button>
-        </div>
+      <div class="modal-section">
+        <div class="modal-section-title">Profile</div>
+        <form id="edit-profile-form" class="modal-form">
+          <div class="field-group">
+            <label class="field-label">Full Name</label>
+            <input class="field-input-plain" name="fullName" required value="${user.full_name}" />
+          </div>
+          <div class="field-group">
+            <label class="field-label">Email</label>
+            <input class="field-input-plain" type="email" name="email" required value="${user.email}" />
+          </div>
+          <div class="field-group">
+            <label class="field-label">Designation</label>
+            <select class="field-select" name="designationId">
+              <option value="">— None —</option>
+              ${designationOptions.map(d => `<option value="${d.id}" ${user.designation_id === d.id ? 'selected' : ''}>${d.name}</option>`).join('')}
+            </select>
+          </div>
+          <button type="submit" class="btn btn-primary btn-sm">Save Profile</button>
+        </form>
       </div>
 
-      <div class="field-group">
-        <label class="field-label">${adminLabel} Access</label>
-        <div class="assignment-add-row">
-          <button class="btn ${hasAdmin ? 'btn-secondary' : 'btn-primary'} btn-sm" id="toggle-admin-access">
-            ${hasAdmin ? `Revoke ${adminLabel} Access` : `Grant ${adminLabel} Access`}
-          </button>
+      <div class="modal-section">
+        <div class="modal-section-title">Access &amp; Status</div>
+
+        <div class="settings-row">
+          <span class="settings-row-label">
+            Account Status
+            ${user.is_active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-muted">Inactive</span>'}
+          </span>
+          <span class="settings-row-control">
+            <button class="btn btn-secondary btn-xs" id="toggle-user-active">${user.is_active ? 'Deactivate' : 'Activate'}</button>
+            <button class="btn btn-secondary btn-xs" id="reset-password-btn">Reset Password</button>
+          </span>
+        </div>
+
+        <div class="settings-row">
+          <span class="settings-row-label">
+            ${adminLabel} Access
+            ${hasAdmin ? '<span class="badge badge-success">Granted</span>' : '<span class="badge badge-muted">Not Granted</span>'}
+          </span>
+          <span class="settings-row-control">
+            <button class="btn btn-secondary btn-xs" id="toggle-admin-access">${hasAdmin ? 'Revoke' : 'Grant'}</button>
+          </span>
         </div>
         <div class="field-hint">Admin access is organization-wide — it's kept separate from the section/role assignments below.</div>
-      </div>
 
-      <div class="field-group">
-        <label class="field-label">Prisoner Letters Access</label>
-        <div class="assignment-add-row">
-          <button class="btn ${user.is_prisoner_letters_staff ? 'btn-secondary' : 'btn-primary'} btn-sm" id="toggle-prisoner-letters-staff">
-            ${user.is_prisoner_letters_staff ? 'Revoke Prisoner Letters Access' : 'Grant Prisoner Letters Access'}
-          </button>
+        <div class="settings-row">
+          <span class="settings-row-label">
+            Prisoner Letters Access
+            ${user.is_prisoner_letters_staff ? '<span class="badge badge-success">Granted</span>' : '<span class="badge badge-muted">Not Granted</span>'}
+          </span>
+          <span class="settings-row-control">
+            <button class="btn btn-secondary btn-xs" id="toggle-prisoner-letters-staff">${user.is_prisoner_letters_staff ? 'Revoke' : 'Grant'}</button>
+          </span>
         </div>
         <div class="field-hint">Individually granted, not tied to section or role — required to see the Prisoner Letters menu or any of its data at all, even for a supervisor or admin.</div>
       </div>
 
-      <div class="field-group">
-        <label class="field-label">Current Assignments</label>
+      <div class="modal-section">
+        <div class="modal-section-title">Section Assignments</div>
         <ul class="assignment-list">
           ${activeAssignments.map(a => `
             <li>
@@ -1064,28 +1078,28 @@ const AdminView = {
             </li>
           `).join('') || '<li class="structure-empty">No active assignments</li>'}
         </ul>
-      </div>
 
-      <form id="add-assignment-form" class="modal-form">
-        <label class="field-label">Add Assignment</label>
-        <div class="assignment-add-row">
-          <select class="field-select" name="scope">
-            ${this._scopeOptionsHtml(scopes)}
-          </select>
-          <select class="field-select" name="role">
-            <option value="staff">Staff</option>
-            <option value="supervisor">Supervisor</option>
-            <option value="assigned_receiver">Assigned Receiver</option>
-          </select>
-          <button type="submit" class="btn btn-primary btn-sm">Add</button>
-        </div>
-      </form>
+        <form id="add-assignment-form" class="modal-form">
+          <label class="field-label">Add Assignment</label>
+          <div class="assignment-add-row">
+            <select class="field-select" name="scope">
+              ${this._scopeOptionsHtml(scopes)}
+            </select>
+            <select class="field-select" name="role">
+              <option value="staff">Staff</option>
+              <option value="supervisor">Supervisor</option>
+              <option value="assigned_receiver">Assigned Receiver</option>
+            </select>
+            <button type="submit" class="btn btn-primary btn-sm">Add</button>
+          </div>
+        </form>
+      </div>
 
       <div class="modal-error alert alert-error hidden"></div>
       <div class="modal-actions">
         <button class="btn btn-secondary" data-close-modal>Close</button>
       </div>
-    `);
+    `, { medium: true });
 
     document.getElementById('edit-profile-form').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -1191,11 +1205,12 @@ const AdminView = {
   },
 
   // ── Generic Modal Helpers ──────────────────────────────────────
-  _openModal(innerHtml) {
+  _openModal(innerHtml, { large = false, medium = false } = {}) {
     const root = document.getElementById('modal-root');
+    const sizeClass = large ? ' modal-box--lg' : medium ? ' modal-box--md' : '';
     root.innerHTML = `
       <div class="modal-overlay" id="modal-overlay">
-        <div class="modal-box">${innerHtml}</div>
+        <div class="modal-box${sizeClass}">${innerHtml}</div>
       </div>
     `;
     document.getElementById('modal-overlay').addEventListener('click', (e) => {
