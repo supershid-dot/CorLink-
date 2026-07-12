@@ -143,11 +143,13 @@ const DashboardView = {
     }
   },
 
-  // Same predicates as RequestsView._inboxFilters()/_sentFilters() (see
-  // js/views/requests.js) — duplicated rather than shared across the
-  // two view objects since each is a one-line boolean test and sharing
-  // would mean threading _user/_canReceive state between unrelated
-  // views for no real benefit.
+  // Row predicates intentionally stay finer-grained than the Requests
+  // tabs' smart views (each row names one specific condition; the
+  // deep-link target is the broader "Needs My Action" view, which is a
+  // superset containing every counted row) — duplicated rather than
+  // shared across the two view objects since each is a one-line boolean
+  // test and sharing would mean threading _user/_canReceive state
+  // between unrelated views for no real benefit.
   async _loadActionNeeded(user) {
     const listEl = document.getElementById('action-list');
     try {
@@ -169,14 +171,14 @@ const DashboardView = {
       // actively misleading (implies an action that isn't theirs to take).
       if (this._canReceive) {
         const unrouted = inbox.filter(r => !r.to_section_id && ['sent', 'received'].includes(r.status)).length;
-        rows.push({ icon: 'ti-inbox', label: 'Unrouted Requests', count: unrouted, href: '#requests?tab=inbox&filter=unrouted' });
+        rows.push({ icon: 'ti-inbox', label: 'Unrouted Requests', count: unrouted, href: '#requests?tab=inbox&view=needs_action' });
       }
 
       const notAssigned = inbox.filter(r => !!r.to_section_id && !r.assigned_to && r.status === 'in_progress').length;
-      rows.push({ icon: 'ti-user-question', label: 'Not Assigned', count: notAssigned, href: '#requests?tab=inbox&filter=not_assigned' });
+      rows.push({ icon: 'ti-user-question', label: 'Not Assigned', count: notAssigned, href: '#requests?tab=inbox&view=needs_action' });
 
       const responseNotStarted = inbox.filter(r => r.status === 'in_progress' && (r.responses || []).length === 0).length;
-      rows.push({ icon: 'ti-edit-off', label: 'Response Not Started', count: responseNotStarted, href: '#requests?tab=inbox&filter=response_not_started' });
+      rows.push({ icon: 'ti-edit-off', label: 'Response Not Started', count: responseNotStarted, href: '#requests?tab=inbox&view=needs_action' });
 
       // Drafts a supervisor bounced back to ME that I haven't
       // resubmitted yet — request drafts live in my Sent list, response
@@ -188,7 +190,7 @@ const DashboardView = {
         sent.filter(r => r.status === 'draft' && r.created_by === user.id && returnedReq.has(r.id)).length
         + inbox.reduce((sum, r) => sum + (r.responses || []).filter(resp =>
             resp.status === 'draft' && resp.created_by === user.id && returnedResp.has(resp.id)).length, 0);
-      rows.push({ icon: 'ti-corner-up-left', label: 'Returned for Correction', count: returnedForCorrection, href: '#requests?tab=sent&filter=drafts' });
+      rows.push({ icon: 'ti-corner-up-left', label: 'Returned for Correction', count: returnedForCorrection, href: '#requests?tab=sent&view=needs_action' });
 
       if (this._isSupervisor) {
         const [requestApprovals, responseApprovals] = await Promise.all([
@@ -201,7 +203,7 @@ const DashboardView = {
       // "Responses not received from other organizations" — the other
       // org already sent their reply, this org hasn't acknowledged it.
       const responseNotReceived = sent.filter(r => (r.responses || []).some(resp => resp.status === 'sent' && !resp.received_at)).length;
-      rows.push({ icon: 'ti-mail-opened', label: 'Responses Not Received', count: responseNotReceived, href: '#requests?tab=sent&filter=response_not_received' });
+      rows.push({ icon: 'ti-mail-opened', label: 'Reply Received — Acknowledge & Close', count: responseNotReceived, href: '#requests?tab=sent&view=needs_action' });
 
       if (mySections.length > 0) {
         const sectionIds = mySections.map(s => s.id);
@@ -219,7 +221,9 @@ const DashboardView = {
         rows.push({ icon: 'ti-message-question', label: 'Information Requests — Needs Your Reply', count: needsMyReply, href: '#requests?tab=info&sub=mine' });
       }
 
-      listEl.innerHTML = rows.map(r => `
+      // Zero-count rows are hidden entirely — a padded list of zeros
+      // buries the one row that actually needs attention.
+      listEl.innerHTML = rows.filter(r => r.count > 0).map(r => `
         <a href="${r.href}" class="action-row">
           <span class="action-row-icon"><i class="ti ${r.icon}"></i></span>
           <span class="action-row-label">${r.label}</span>

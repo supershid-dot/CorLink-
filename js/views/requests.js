@@ -6,9 +6,8 @@
 
 const RequestsView = {
   _state: {
-    tab: 'inbox', inboxFilter: 'all', sentFilter: 'all', teamFilter: 'all', approvalsSub: 'requests',
+    tab: 'inbox', inboxView: 'needs_action', sentView: 'needs_action', teamFilter: 'all', approvalsSub: 'requests',
     infoSub: 'mine',
-    inboxWho: 'all', sentWho: 'all',
     inboxSearch: '', sentSearch: '', approvalsSearch: '', infoSearch: '', teamSearch: '',
     inboxOrg: 'all', sentOrg: 'all',
     teamStaffId: null,
@@ -67,16 +66,30 @@ const RequestsView = {
     if (this._state.tab === 'team' && this._mySupervisedSections.length === 0) this._state.tab = 'inbox';
 
     // Deep-links from the dashboard's Action Needed cards, e.g.
-    // #requests?tab=inbox&filter=not_assigned — validated against the
-    // actual filter keys for whichever tab we landed on so a stale/
+    // #requests?tab=inbox&view=needs_action — validated against the
+    // actual view keys for whichever tab we landed on so a stale/
     // garbage query param can't silently select a chip that isn't
-    // there (falls back to 'all', same as an unrecognized filter key
-    // already does in _renderInboxFiltered/_renderSentFiltered).
-    if (params.filter) {
-      if (this._state.tab === 'inbox' && this._inboxFilters().some(f => f.key === params.filter)) {
-        this._state.inboxFilter = params.filter;
-      } else if (this._state.tab === 'sent' && this._sentFilters().some(f => f.key === params.filter)) {
-        this._state.sentFilter = params.filter;
+    // there. Old ?filter= keys (pre-smart-views bookmarks, and the
+    // dashboard links before they were updated) are mapped onto the
+    // nearest smart view rather than 404ing.
+    const LEGACY_FILTERS = {
+      inbox: {
+        unrouted: 'needs_action', not_assigned: 'needs_action', response_not_started: 'needs_action',
+        response_drafted: 'drafts', response_sent: 'closed', overdue: 'overdue', all: 'all',
+      },
+      sent: {
+        drafts: 'drafts', pending_approval: 'drafts',
+        request_not_received: 'awaiting_reply', request_received: 'awaiting_reply', awaiting_response: 'awaiting_reply',
+        response_not_received: 'needs_action', response_received: 'reply_received', overdue: 'overdue', all: 'all',
+      },
+    };
+    const requestedView = params.view
+      || (params.filter ? (LEGACY_FILTERS[this._state.tab] || {})[params.filter] : null);
+    if (requestedView) {
+      if (this._state.tab === 'inbox' && this._inboxViews().some(v => v.key === requestedView)) {
+        this._state.inboxView = requestedView;
+      } else if (this._state.tab === 'sent' && this._sentViews().some(v => v.key === requestedView)) {
+        this._state.sentView = requestedView;
       }
     }
     if (this._state.tab === 'info' && ['mine', 'theirs'].includes(params.sub)) {
@@ -153,8 +166,8 @@ const RequestsView = {
     content.innerHTML = `<div class="tab-loading"><span class="spinner spinner--dark"></span> Loading…</div>`;
 
     try {
-      if (this._state.tab === 'inbox') await this._renderInbox(content);
-      else if (this._state.tab === 'sent') await this._renderSent(content);
+      if (this._state.tab === 'inbox') await this._renderMailTab(content, 'inbox');
+      else if (this._state.tab === 'sent') await this._renderMailTab(content, 'sent');
       else if (this._state.tab === 'approvals') await this._renderApprovals(content);
       else if (this._state.tab === 'info') await this._renderInfoRequests(content);
       else if (this._state.tab === 'team') await this._renderTeam(content);
@@ -166,46 +179,69 @@ const RequestsView = {
 
   // ── Quick-filter category definitions ───────────────────────────
   // Every predicate runs client-side over the tab's already-fetched
-  // item list (see _renderInbox/_renderSent) rather than issuing a
+  // item list (see _renderMailTab) rather than issuing a
   // fresh query per chip — the counts and the filtered table both
   // derive from one fetch, so clicking a chip is instant and never
   // hits the network again.
-  _inboxFilters() {
+  // One curated "smart view" chip row per tab, replacing the previous
+  // two-facet Show × Status system (whose combinations nobody could
+  // hold in their head). Each view answers a real question directly —
+  // "what needs ME right now" is the default, because that's the
+  // question people open this tab to answer.
+  _inboxViews() {
     const today = new Date().toISOString().slice(0, 10);
+    const me = this._user.id;
+    const supIds = new Set((this._mySupervisedSections || []).map(s => s.id));
+    const isAdmin = AppShell.isAdmin(this._user);
     return [
-      { key: 'all', label: 'All', test: () => true },
-      // Unrouted rows are only ever visible to supervisors/assigned_receiver
-      // in the first place (requests_select_assigned_receiver RLS) — for
-      // anyone else this chip would always read 0, so it's omitted rather
-      // than shown as dead clutter.
-      ...(this._canReceive ? [{ key: 'unrouted', label: 'Unrouted', test: r => !r.to_section_id && ['sent', 'received'].includes(r.status) }] : []),
-      { key: 'not_assigned', label: 'Not Assigned', test: r => !!r.to_section_id && !r.assigned_to && r.status === 'in_progress' },
-      { key: 'response_not_started', label: 'Response Not Started', test: r => r.status === 'in_progress' && (r.responses || []).length === 0 },
-      { key: 'response_drafted', label: 'Response Drafted', test: r => (r.responses || []).some(resp => ['draft', 'pending_approval'].includes(resp.status)) },
-      { key: 'response_sent', label: 'Response Sent', test: r => (r.responses || []).some(resp => resp.status === 'sent') },
+      {
+        key: 'needs_action', label: 'Needs My Action', test: r =>
+          // Front desk: unrouted mail I can receive & route
+          (this._canReceive && !r.to_section_id && ['sent', 'received'].includes(r.status))
+          // Section supervisor: routed to my section, nobody assigned yet
+          || (r.status === 'in_progress' && !!r.to_section_id && !r.assigned_to && (isAdmin || supIds.has(r.to_section_id)))
+          // Assignee: it's mine and no response is open yet
+          || (r.status === 'in_progress' && r.assigned_to === me && (r.responses || []).every(x => x.status === 'sent'))
+          // Drafter: my response draft (incl. returned for correction)
+          || (r.responses || []).some(x => x.status === 'draft' && x.created_by === me)
+          // Supervisor: a response awaits approval
+          || (this._isSupervisor && (r.responses || []).some(x => x.status === 'pending_approval')),
+      },
+      { key: 'in_progress', label: 'In Progress', test: r =>
+          ['received', 'in_progress'].includes(r.status)
+          || (r.status === 'overdue' && !(r.responses || []).some(x => x.status === 'sent')) },
+      { key: 'drafts', label: 'Response Drafts', test: r => (r.responses || []).some(x => ['draft', 'pending_approval'].includes(x.status)) },
       { key: 'overdue', label: 'Overdue', test: r => !!r.deadline && r.deadline < today && !['closed', 'responded'].includes(r.status) },
+      { key: 'looped_in', label: 'Looped In', test: r => (this._myLoopedInRequestIds || new Set()).has(r.id) },
+      { key: 'closed', label: 'Completed', test: r => ['responded', 'closed'].includes(r.status) },
+      { key: 'all', label: 'All', test: () => true },
     ];
   },
 
-  _sentFilters() {
+  _sentViews() {
     const today = new Date().toISOString().slice(0, 10);
+    const me = this._user.id;
     return [
-      { key: 'all', label: 'All', test: () => true },
-      { key: 'drafts', label: 'My Drafts', test: r => r.status === 'draft' && r.created_by === this._user.id },
-      { key: 'pending_approval', label: 'Pending Approval', test: r => r.status === 'pending_approval' },
-      // Whether the destination org's front desk has logged the request
-      // itself as received yet (requests.received_at, set by
-      // markRequestReceived — distinct from to_section_id/routing, and
-      // from the response-side chips below, which track their REPLY).
-      { key: 'request_not_received', label: 'Not Received Yet', test: r => r.status === 'sent' },
-      { key: 'request_received', label: 'Received by Them', test: r => !!r.received_at },
-      { key: 'awaiting_response', label: 'Awaiting Response', test: r => !['draft', 'pending_approval'].includes(r.status) && (r.responses || []).length === 0 },
-      // "Responses not received from other organizations" — the other
-      // org already sent their reply, but our own receiving org hasn't
-      // acknowledged it yet (see markResponseReceived in requests-api.js).
-      { key: 'response_not_received', label: 'Response Not Received', test: r => (r.responses || []).some(resp => resp.status === 'sent' && !resp.received_at) },
-      { key: 'response_received', label: 'Response Received', test: r => (r.responses || []).some(resp => !!resp.received_at) },
+      {
+        key: 'needs_action', label: 'Needs My Action', test: r =>
+          // My draft — includes returned-for-correction
+          (r.status === 'draft' && r.created_by === me)
+          // Supervisor: a request awaits my approval
+          || (this._isSupervisor && r.status === 'pending_approval')
+          // Receiver/supervisor: their reply arrived, not yet acknowledged
+          || ((this._isSupervisor || this._canReceive) && (r.responses || []).some(x => x.status === 'sent' && !x.received_at))
+          // Supervisor: acknowledged, ready to close
+          || (this._isSupervisor && r.status === 'responded'),
+      },
+      { key: 'drafts', label: 'Drafts', test: r => ['draft', 'pending_approval'].includes(r.status) },
+      { key: 'awaiting_reply', label: 'Awaiting Reply', test: r =>
+          ['sent', 'received', 'in_progress', 'overdue'].includes(r.status)
+          && !(r.responses || []).some(x => x.status === 'sent') },
+      { key: 'reply_received', label: 'Reply Received', test: r => (r.responses || []).some(x => x.status === 'sent') },
       { key: 'overdue', label: 'Overdue', test: r => !!r.deadline && r.deadline < today && !['closed', 'responded'].includes(r.status) },
+      { key: 'looped_in', label: 'Looped In', test: r => (this._myLoopedInRequestIds || new Set()).has(r.id) },
+      { key: 'closed', label: 'Closed', test: r => r.status === 'closed' },
+      { key: 'all', label: 'All', test: () => true },
     ];
   },
 
@@ -244,28 +280,6 @@ const RequestsView = {
         `).join('')}
       </div>
     `;
-  },
-
-  // ── "Show" facet (Inbox/Sent only) — WHO a row relates to, combined
-  // with the existing "Status" facet (WHAT state it's in) via AND. Two
-  // independent single-select rows rather than one row of multi-select
-  // chips: every combination stays meaningful (no "Not Assigned" +
-  // "Assigned to Me" self-contradiction to worry about), and it's just
-  // _filterChipsHtml() called a second time with its own state key.
-  // "Assigned to Me" is inbox-only — assigned_to is always someone on
-  // the RECEIVING side drafting the reply, so on Sent (my org is the
-  // sender) it would never match my own id.
-  _whoFilters(kind) {
-    const sectionIds = new Set((this._mySections || []).map(s => s.id));
-    const sectionField = kind === 'inbox' ? 'to_section_id' : 'from_section_id';
-    const base = [
-      { key: 'all', label: 'All', test: () => true },
-      { key: 'created_by_me', label: 'Created by Me', test: r => r.created_by === this._user.id },
-      ...(kind === 'inbox' ? [{ key: 'assigned_to_me', label: 'Assigned to Me', test: r => r.assigned_to === this._user.id }] : []),
-      { key: 'my_section', label: 'My Section', test: r => sectionIds.has(r[sectionField]) },
-      { key: 'looped_in', label: 'Looped In', test: r => (this._myLoopedInRequestIds || new Set()).has(r.id) },
-    ];
-    return base;
   },
 
   // ── Search (Inbox / Sent / Approvals / Info Requests) ────────────
@@ -349,129 +363,64 @@ const RequestsView = {
 
   // The search box is rendered once per tab load (not on every
   // chip-click/keystroke re-render) so typing never loses focus or
-  // cursor position — only the #inbox-results sub-container beneath
+  // cursor position — only the #<kind>-results sub-container beneath
   // it gets replaced when the search term or active chip changes.
-  async _renderInbox(content) {
-    const { items, totalCount } = await RequestsAPI.listInbox(this._user.org_id);
-    this._inboxItems = items;
-    this._inboxTotalCount = totalCount;
+  // One parameterized renderer for Inbox and Sent — the two tabs were
+  // previously near-identical copies differing only in state keys and
+  // which org embed they display.
+  async _renderMailTab(content, kind) {
+    const isInbox = kind === 'inbox';
+    const { items, totalCount } = isInbox
+      ? await RequestsAPI.listInbox(this._user.org_id)
+      : await RequestsAPI.listSent(this._user.org_id);
+    this[isInbox ? '_inboxItems' : '_sentItems'] = items;
     content.innerHTML = `
       <div class="list-toolbar">
-        ${this._searchBoxHtml('inboxSearch', 'Search subject or message…', this._state.inboxSearch)}
-        ${this._orgFilterHtml('inboxOrg', this._inboxItems, 'from_org')}
+        ${this._searchBoxHtml(`${kind}Search`, 'Search subject or message…', this._state[`${kind}Search`])}
+        ${this._orgFilterHtml(`${kind}Org`, items, isInbox ? 'from_org' : 'to_org')}
       </div>
       ${totalCount > items.length ? `<div class="field-hint">Showing the ${items.length} most recent of ${totalCount} — use search to narrow further.</div>` : ''}
-      <div id="inbox-results"></div>
+      <div id="${kind}-results"></div>
     `;
-    this._bindSearchBox(content, 'inboxSearch', () => this._renderInboxFiltered());
-    this._bindOrgFilter(content, 'inboxOrg', () => this._renderInboxFiltered());
-    this._renderInboxFiltered();
+    this._bindSearchBox(content, `${kind}Search`, () => this._renderMailFiltered(kind));
+    this._bindOrgFilter(content, `${kind}Org`, () => this._renderMailFiltered(kind));
+    this._renderMailFiltered(kind);
   },
 
-  _renderInboxFiltered() {
-    const resultsEl = document.getElementById('inbox-results');
+  _renderMailFiltered(kind) {
+    const resultsEl = document.getElementById(`${kind}-results`);
     if (!resultsEl) return;
-    const items = this._inboxItems || [];
-    const query = (this._state.inboxSearch || '').trim().toLowerCase();
-    const orgFiltered = this._state.inboxOrg === 'all' ? items : items.filter(r => r.from_org_id === this._state.inboxOrg);
+    const isInbox = kind === 'inbox';
+    const items = (isInbox ? this._inboxItems : this._sentItems) || [];
+    const orgIdField = isInbox ? 'from_org_id' : 'to_org_id';
+    const query = (this._state[`${kind}Search`] || '').trim().toLowerCase();
+    const orgFiltered = this._state[`${kind}Org`] === 'all' ? items : items.filter(r => r[orgIdField] === this._state[`${kind}Org`]);
     const searched = orgFiltered.filter(r => this._matchesQuery(r.subject, r.body, query, r.reference_number));
 
-    const whoFilters = this._whoFilters('inbox');
-    const activeWho = whoFilters.find(f => f.key === this._state.inboxWho) || whoFilters[0];
-    const statusFilters = this._inboxFilters();
-    const activeStatus = statusFilters.find(f => f.key === this._state.inboxFilter) || statusFilters[0];
-
-    // Symmetric faceted counts: each row's numbers reflect the OTHER
-    // row's current selection, not its own — so a chip's count always
-    // matches what clicking it would actually produce.
-    const whoCountBase = searched.filter(activeStatus.test);
-    const statusCountBase = searched.filter(activeWho.test);
-    const filtered = statusCountBase.filter(activeStatus.test);
+    const views = isInbox ? this._inboxViews() : this._sentViews();
+    const active = views.find(v => v.key === this._state[`${kind}View`]) || views[0];
+    const filtered = searched.filter(active.test);
     const emptyHtml = items.length === 0
-      ? this._emptyStateHtml(6, { icon: 'ti-inbox', title: 'No requests yet', subtitle: 'Correspondence sent to your organization will show up here.' })
+      ? (isInbox
+          ? this._emptyStateHtml(6, { icon: 'ti-inbox', title: 'No requests yet', subtitle: 'Correspondence sent to your organization will show up here.' })
+          : this._emptyStateHtml(6, {
+              icon: 'ti-send', title: 'No requests sent yet',
+              subtitle: 'Start a new case to send correspondence to another organization.',
+              cta: '<button type="button" class="btn btn-primary btn-sm" data-empty-compose>New Request</button>',
+            }))
       : this._noMatchesHtml(6);
 
     resultsEl.innerHTML = `
-      <div class="filter-row-label">Show</div>
-      ${this._filterChipsHtml(whoFilters, whoCountBase, activeWho.key, 'who')}
-      <div class="filter-row-label">Status</div>
-      ${this._filterChipsHtml(statusFilters, statusCountBase, activeStatus.key, 'filter')}
-      ${this._listPanel(null, filtered, { orgCol: 'From', orgKey: 'from_org', allowReceive: this._canReceive, emptyHtml })}
-    `;
-    resultsEl.querySelectorAll('[data-who]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        this._state.inboxWho = btn.dataset.who;
-        this._renderInboxFiltered();
-      });
-    });
-    resultsEl.querySelectorAll('[data-filter]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        this._state.inboxFilter = btn.dataset.filter;
-        this._renderInboxFiltered();
-      });
-    });
-    this._bindListActions(resultsEl, filtered);
-  },
-
-  async _renderSent(content) {
-    const { items, totalCount } = await RequestsAPI.listSent(this._user.org_id);
-    this._sentItems = items;
-    this._sentTotalCount = totalCount;
-    content.innerHTML = `
-      <div class="list-toolbar">
-        ${this._searchBoxHtml('sentSearch', 'Search subject or message…', this._state.sentSearch)}
-        ${this._orgFilterHtml('sentOrg', this._sentItems, 'to_org')}
-      </div>
-      ${totalCount > items.length ? `<div class="field-hint">Showing the ${items.length} most recent of ${totalCount} — use search to narrow further.</div>` : ''}
-      <div id="sent-results"></div>
-    `;
-    this._bindSearchBox(content, 'sentSearch', () => this._renderSentFiltered());
-    this._bindOrgFilter(content, 'sentOrg', () => this._renderSentFiltered());
-    this._renderSentFiltered();
-  },
-
-  _renderSentFiltered() {
-    const resultsEl = document.getElementById('sent-results');
-    if (!resultsEl) return;
-    const items = this._sentItems || [];
-    const query = (this._state.sentSearch || '').trim().toLowerCase();
-    const orgFiltered = this._state.sentOrg === 'all' ? items : items.filter(r => r.to_org_id === this._state.sentOrg);
-    const searched = orgFiltered.filter(r => this._matchesQuery(r.subject, r.body, query, r.reference_number));
-
-    const whoFilters = this._whoFilters('sent');
-    const activeWho = whoFilters.find(f => f.key === this._state.sentWho) || whoFilters[0];
-    const statusFilters = this._sentFilters();
-    const activeStatus = statusFilters.find(f => f.key === this._state.sentFilter) || statusFilters[0];
-
-    const whoCountBase = searched.filter(activeStatus.test);
-    const statusCountBase = searched.filter(activeWho.test);
-    const filtered = statusCountBase.filter(activeStatus.test);
-    const emptyHtml = items.length === 0
-      ? this._emptyStateHtml(6, {
-          icon: 'ti-send', title: 'No requests sent yet',
-          subtitle: 'Start a new case to send correspondence to another organization.',
-          cta: '<button type="button" class="btn btn-primary btn-sm" data-empty-compose>New Request</button>',
-        })
-      : this._noMatchesHtml(6);
-
-    resultsEl.innerHTML = `
-      <div class="filter-row-label">Show</div>
-      ${this._filterChipsHtml(whoFilters, whoCountBase, activeWho.key, 'who')}
-      <div class="filter-row-label">Status</div>
-      ${this._filterChipsHtml(statusFilters, statusCountBase, activeStatus.key, 'filter')}
-      ${this._listPanel(null, filtered, { orgCol: 'To', orgKey: 'to_org', emptyHtml })}
+      ${this._filterChipsHtml(views, searched, active.key, 'filter')}
+      ${this._listPanel(null, filtered, isInbox
+        ? { orgCol: 'From', orgKey: 'from_org', allowReceive: this._canReceive, emptyHtml }
+        : { orgCol: 'To', orgKey: 'to_org', emptyHtml })}
     `;
     resultsEl.querySelector('[data-empty-compose]')?.addEventListener('click', () => this._openComposeModal());
-    resultsEl.querySelectorAll('[data-who]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        this._state.sentWho = btn.dataset.who;
-        this._renderSentFiltered();
-      });
-    });
     resultsEl.querySelectorAll('[data-filter]').forEach(btn => {
       btn.addEventListener('click', () => {
-        this._state.sentFilter = btn.dataset.filter;
-        this._renderSentFiltered();
+        this._state[`${kind}View`] = btn.dataset.filter;
+        this._renderMailFiltered(kind);
       });
     });
     this._bindListActions(resultsEl, filtered);
@@ -655,8 +604,8 @@ const RequestsView = {
     const awaitingTheirReply = searched.filter(ir => mySet.has(ir.from_section_id) && !mySet.has(ir.to_section_id));
     // Unsearched (pre-query) counts per sub-tab, to tell "this sub-tab
     // has genuinely never had anything" apart from "a search/filter
-    // just matched nothing" — same distinction _renderInboxFiltered/
-    // _renderSentFiltered/_renderTeamFiltered make.
+    // just matched nothing" — same distinction _renderMailFiltered/
+    // _renderTeamFiltered make.
     const rawMine = items.filter(ir => mySet.has(ir.to_section_id));
     const rawTheirs = items.filter(ir => mySet.has(ir.from_section_id) && !mySet.has(ir.to_section_id));
     const sub = this._state.infoSub === 'theirs' ? 'theirs' : 'mine';
@@ -767,10 +716,12 @@ const RequestsView = {
 
   _listRow(r, opts) {
     const orgName = r[opts.orgKey]?.name || '';
-    // Receiving (acknowledging arrival) always happens before routing —
-    // see markRequestReceived/routeRequest in requests-api.js.
-    const needsReceiving = opts.allowReceive && r.status === 'sent' && !r.to_section_id;
-    const needsRouting = opts.allowReceive && r.status === 'received' && !r.to_section_id;
+    // Receiving + routing were previously two separate single-purpose
+    // buttons for the same person and permission — merged into one
+    // "Receive & Route" action (receiveAndRoute in requests-api.js);
+    // the receipt is still stamped as part of it. A 'received' status
+    // here means a legacy half-done row — the same button finishes it.
+    const needsReceiveRoute = opts.allowReceive && !r.to_section_id && ['sent', 'received'].includes(r.status);
     return `
       <tr>
         <td data-label="Reference">${r.reference_number || '<span class="structure-empty">Draft</span>'}</td>
@@ -780,28 +731,17 @@ const RequestsView = {
         <td data-label="Deadline">${this._deadlineCell(r.deadline, r.status)}</td>
         <td data-label="Actions">
           <a class="btn btn-secondary btn-xs" href="#request-detail?id=${r.id}">View</a>
-          ${needsReceiving ? `<button class="btn btn-primary btn-xs" data-mark-received="${r.id}">Mark Received</button>` : ''}
-          ${needsRouting ? `<button class="btn btn-primary btn-xs" data-route="${r.id}">Route</button>` : ''}
+          ${needsReceiveRoute ? `<button class="btn btn-secondary btn-xs" data-receive-route="${r.id}">Receive &amp; Route</button>` : ''}
         </td>
       </tr>
     `;
   },
 
   _bindListActions(content, items) {
-    content.querySelectorAll('[data-mark-received]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        try {
-          await RequestsAPI.markRequestReceived(btn.dataset.markReceived);
-          await this._renderTab();
-        } catch (err) {
-          alert(err.message || 'Something went wrong.');
-        }
-      });
-    });
-    content.querySelectorAll('[data-route]').forEach(btn => {
+    content.querySelectorAll('[data-receive-route]').forEach(btn => {
       btn.addEventListener('click', () => {
-        const r = items.find(x => x.id === btn.dataset.route);
-        this._openRouteModal(r);
+        const r = items.find(x => x.id === btn.dataset.receiveRoute);
+        this._openReceiveRouteModal(r);
       });
     });
   },
@@ -1068,16 +1008,40 @@ const RequestsView = {
           </label>
           <div class="attachments-list" id="compose-pending-files"></div>
         </div>
+        <div class="field-group">
+          <label class="field-label">Approving Supervisor</label>
+          <select class="field-select" name="approverId" id="compose-approver"></select>
+          <div class="field-hint">Needed only if you submit for approval now — includes supervisors at the section, department, and command level. Save Draft skips this.</div>
+        </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
-          <button type="submit" class="btn btn-primary">Save Draft</button>
+          <button type="submit" class="btn btn-secondary" data-compose-mode="draft">Save Draft</button>
+          <button type="submit" class="btn btn-primary" data-compose-mode="submit">Submit for Approval</button>
         </div>
       </form>
     `, { large: true });
 
     const form = document.getElementById('compose-form');
     const editor = RichEditor.create(document.getElementById('compose-body'), { language: 'dv' });
+
+    // Approver options track the From Section — the eligible approvers
+    // are that section's supervisors (plus department/command level),
+    // same population as request-detail's Submit for Approval modal.
+    const approverSelect = document.getElementById('compose-approver');
+    const repopulateApprovers = async () => {
+      const sectionId = new FormData(form).get('fromSectionId');
+      approverSelect.innerHTML = `<option value="">— Any qualifying supervisor —</option>`;
+      try {
+        const approvers = await RequestsAPI.listEligibleApprovers(sectionId);
+        approverSelect.innerHTML = `<option value="">— Any qualifying supervisor —</option>`
+          + approvers.map(u => `<option value="${u.id}">${this._escapeHtml(u.full_name)}${u.designations?.name ? ' — ' + this._escapeHtml(u.designations.name) : ''}</option>`).join('');
+      } catch (err) {
+        console.warn('CorLink: failed to load eligible approvers', err);
+      }
+    };
+    form.querySelector('[name="fromSectionId"]')?.addEventListener('change', repopulateApprovers);
+    repopulateApprovers();
     const subjectInput = document.getElementById('compose-subject');
     const syncSubjectLang = (lang) => subjectInput.classList.toggle('field-divehi', lang === 'dv');
     RichEditor.bindLangToggle(form, 'subjectLanguage', syncSubjectLang);
@@ -1137,6 +1101,10 @@ const RequestsView = {
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
+      // Which of the two submit buttons fired — Save Draft keeps the
+      // old behavior; Submit for Approval also submits in the same go,
+      // so the common path is one screen instead of two.
+      const mode = e.submitter?.dataset.composeMode || 'draft';
       const fd = new FormData(form);
       const errEl = form.querySelector('.modal-error');
       const body = editor.getHTML();
@@ -1169,10 +1137,21 @@ const RequestsView = {
         } catch (err) {
           failures.push(`Loop In Staff: ${err.message || 'failed'}`);
         }
+        // Submit AFTER attachments/CC so the approver sees the complete
+        // draft. A failure here must not orphan the created draft —
+        // land on the detail page either way, where Submit for
+        // Approval remains available.
+        if (mode === 'submit') {
+          try {
+            await RequestsAPI.submitRequest(result.id, fd.get('approverId') || null);
+          } catch (err) {
+            failures.push(`Submitting for approval failed: ${err.message || 'unknown error'} — you can submit it from the request page.`);
+          }
+        }
         DraftAutosave.clear('compose-request');
         this._closeModal();
         Router.navigate('request-detail', { id: result.id });
-        if (failures.length > 0) alert(`Draft saved, but some attachments failed to upload:\n${failures.join('\n')}`);
+        if (failures.length > 0) alert(`Draft saved, but not everything went through:\n${failures.join('\n')}`);
       } catch (err) {
         errEl.textContent = err.message;
         errEl.classList.remove('hidden');
@@ -1180,19 +1159,25 @@ const RequestsView = {
     });
   },
 
-  // ── Route (assign incoming mail to a section) ───────────────────
-  async _openRouteModal(request) {
-    let sections;
+  // ── Receive & Route (one step: receipt + section + optional assignee) ──
+  // The receipt ("received by [Name] — [time]") is stamped as part of
+  // the same action — see RequestsAPI.receiveAndRoute. Modeled on
+  // prisoner-letters' route modal (section + optional staff in one form).
+  async _openReceiveRouteModal(request) {
+    let sections, orgUsers;
     try {
-      sections = (await AdminAPI.listSectionsByOrg(this._user.org_id)).filter(s => s.is_active);
+      [sections, orgUsers] = await Promise.all([
+        AdminAPI.listSectionsByOrg(this._user.org_id).then(list => list.filter(s => s.is_active)),
+        AdminAPI.listUsersByOrg(this._user.org_id).then(list => list.filter(u => u.is_active)),
+      ]);
     } catch (err) {
-      console.error('CorLink: failed to load sections for routing', err);
+      console.error('CorLink: failed to load routing form data', err);
       return;
     }
 
     if (sections.length === 0) {
       this._openModal(`
-        <h3>Route Request</h3>
+        <h3>Receive &amp; Route</h3>
         <div class="alert alert-info">No active sections to route to yet.</div>
         <div class="modal-actions"><button class="btn btn-secondary" data-close-modal>Close</button></div>
       `);
@@ -1200,30 +1185,59 @@ const RequestsView = {
     }
 
     this._openModal(`
-      <h3>Route — <span class="${RichEditor.dvClass(request.subject, request.subject_language)}">${request.subject}</span></h3>
-      <form id="route-form" class="modal-form">
+      <h3>Receive &amp; Route — <span class="${RichEditor.dvClass(request.subject, request.subject_language)}">${request.subject}</span></h3>
+      ${request.status === 'sent' ? `<div class="alert alert-info"><i class="ti ti-info-circle"></i> This will record the request as received by you and route it in one step.</div>` : ''}
+      <form id="receive-route-form" class="modal-form">
         <div class="field-group">
-          <label class="field-label">Assign to Section</label>
+          <label class="field-label">Responsible Section</label>
           <select class="field-select" name="sectionId">
             ${sections.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
           </select>
           <div class="field-hint">This section owns the reply. Need input from another section too? That section can loop others in via Internal Collaboration once they open the request.</div>
         </div>
+        <div class="field-group">
+          <label class="field-label">Assign to Staff (optional)</label>
+          <select class="field-select" name="assignedTo" id="receive-route-assignee"></select>
+          <div class="field-hint">You can also assign later from the request page.</div>
+        </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
-          <button type="submit" class="btn btn-primary">Route</button>
+          <button type="submit" class="btn btn-primary">Receive &amp; Route</button>
         </div>
       </form>
     `);
 
-    const form = document.getElementById('route-form');
+    const form = document.getElementById('receive-route-form');
+    const sectionSelect = form.querySelector('[name="sectionId"]');
+    const assigneeSelect = document.getElementById('receive-route-assignee');
+    // Assignee options are scoped to the currently-picked section —
+    // offering the whole org would invite assignments the section's
+    // own supervisor would just have to undo.
+    const repopulateAssignees = async () => {
+      assigneeSelect.innerHTML = `<option value="">— Unassigned —</option>`;
+      try {
+        const sectionUserIds = new Set(await NotificationsAPI.sectionUserIds(sectionSelect.value));
+        const inSection = orgUsers.filter(u => sectionUserIds.has(u.id));
+        assigneeSelect.innerHTML = `<option value="">— Unassigned —</option>`
+          + inSection.map(u => `<option value="${u.id}">${this._escapeHtml(u.full_name)}</option>`).join('');
+      } catch (err) {
+        console.warn('CorLink: failed to load section staff for assignment', err);
+      }
+    };
+    sectionSelect.addEventListener('change', repopulateAssignees);
+    await repopulateAssignees();
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
       const errEl = form.querySelector('.modal-error');
       try {
-        await RequestsAPI.routeRequest(request.id, fd.get('sectionId'));
+        await RequestsAPI.receiveAndRoute(request.id, {
+          currentStatus: request.status,
+          toSectionId: fd.get('sectionId'),
+          assignedTo: fd.get('assignedTo') || null,
+        });
         this._closeModal();
         await this._renderTab();
       } catch (err) {

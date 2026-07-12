@@ -469,7 +469,12 @@ const RequestsAPI = (() => {
     // auth.uid()` clause (rls.sql) is what keeps them able to see (and
     // thus this UPDATE...RETURNING able to return) a row they formally
     // received, regardless of where it gets routed afterward.
-    async routeRequest(id, toSectionId) {
+    // notifySection: false skips the whole-section broadcast — used by
+    // receiveAndRoute() when a specific assignee was picked in the same
+    // step, so only that person is notified (same either/or convention
+    // as PrisonerLettersAPI.routeLetter). Plain routing keeps the
+    // broadcast default.
+    async routeRequest(id, toSectionId, { notifySection = true } = {}) {
       const db = getSupabase();
       // assigned_to is cleared on every route — for first-time routing
       // it's already null, and on a RE-route the previous section's
@@ -480,11 +485,13 @@ const RequestsAPI = (() => {
       const { data: section, error: sectionErr } = await db.from('sections').select('name').eq('id', toSectionId).single();
       if (sectionErr) console.warn('CorLink: failed to look up section name for routing audit log:', sectionErr.message);
       await logAudit('routed', 'request', id, `Routed to ${section?.name || 'a section'}`);
-      const recipients = await NotificationsAPI.sectionUserIds(toSectionId);
-      await NotificationsAPI.notify(recipients, {
-        type: 'new_request', recordType: 'request', recordId: id,
-        message: `"${data.subject}" has been routed to your section`,
-      });
+      if (notifySection) {
+        const recipients = await NotificationsAPI.sectionUserIds(toSectionId);
+        await NotificationsAPI.notify(recipients, {
+          type: 'new_request', recordType: 'request', recordId: id,
+          message: `"${data.subject}" has been routed to your section`,
+        });
+      }
       return data;
     },
 
@@ -508,6 +515,27 @@ const RequestsAPI = (() => {
           type: 'new_request', recordType: 'request', recordId: id,
           message: `"${data.subject}" was assigned to you`,
         });
+      }
+      return data;
+    },
+
+    // ── Receive & Route (one user action, composed) ─────────────────
+    // The receiving front desk used to click "Mark Received" and then
+    // "Route" as two separate steps gated by the same permission — this
+    // merges them into one action while keeping the receipt, the
+    // sent → received → in_progress state chain (the transition trigger
+    // and requests_update_assigned_receiver's receive-first RLS
+    // visibility both depend on that order — see routeRequest's comment
+    // above), and every audit entry each conceptual step already wrote.
+    // currentStatus 'received' means a legacy half-done row (received
+    // but never routed) — the receive step is skipped on that retry.
+    async receiveAndRoute(id, { currentStatus, toSectionId, assignedTo }) {
+      if (currentStatus === 'sent') {
+        await this.markRequestReceived(id);
+      }
+      let data = await this.routeRequest(id, toSectionId, { notifySection: !assignedTo });
+      if (assignedTo) {
+        data = await this.assignRequest(id, assignedTo);
       }
       return data;
     },
@@ -629,6 +657,21 @@ const RequestsAPI = (() => {
       if (error) throw wrapRowError(error);
       await logAudit('edited', 'request', id, 'Closed request');
       return data;
+    },
+
+    // ── Acknowledge & Close (one user action, composed) ─────────────
+    // The originating org used to click "Mark Received" on the response
+    // and then "Mark Closed" on the request as two separate steps — the
+    // receipt gates nothing else, so a supervisor can do both at once.
+    // Receipt columns/audit entries are identical to the two-step path;
+    // responseAlreadyReceived covers the case where a non-supervisor
+    // receiver already stamped the receipt and the supervisor is only
+    // closing.
+    async acknowledgeAndClose(responseId, requestId, { responseAlreadyReceived = false } = {}) {
+      if (!responseAlreadyReceived) {
+        await this.markResponseReceived(responseId);
+      }
+      return this.closeRequest(requestId);
     },
 
     // ── Case timeline ────────────────────────────────────────────
