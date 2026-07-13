@@ -870,12 +870,17 @@ const RequestDetailView = {
     `;
   },
 
-  // locked suppresses the upload dropzone once a request/response has
-  // been approved (is_locked = TRUE) — existing attachments stay
-  // visible/downloadable, but the case for that record is closed for
-  // further evidence once a supervisor has signed off on it. Internal
-  // requests have no approval step, so their call site never passes this.
-  _renderAttachments(recordType, recordId, attachments, canView, locked = false) {
+  // hideUpload suppresses the dropzone without hiding the file list —
+  // two independent reasons a caller passes true: (1) a request/
+  // response has been approved (is_locked = TRUE), where the case is
+  // closed for further evidence once a supervisor has signed off; (2)
+  // an internal_request with zero attachments yet, viewed by anyone
+  // other than the sender — an empty "drag files here" prompt shown to
+  // every section member (not just whoever is actually expected to
+  // supply the file) reads as "you should upload something," which
+  // isn't the sender's intent. Once at least one file exists, or the
+  // viewer IS the sender, the dropzone reappears for them normally.
+  _renderAttachments(recordType, recordId, attachments, canView, hideUpload = false) {
     if (!canView) return '';
     return `
       <div class="attachments-panel" data-attachments="${recordType}:${recordId}">
@@ -887,7 +892,7 @@ const RequestDetailView = {
             </span>
           `).join('') || ''}
         </div>
-        ${locked ? '' : `
+        ${hideUpload ? '' : `
           <label class="attachment-dropzone" data-dropzone="${recordType}:${recordId}">
             <i class="ti ti-cloud-upload"></i>
             <span>Drag files here, or <span class="attachment-browse-link">browse</span></span>
@@ -984,11 +989,13 @@ const RequestDetailView = {
 
     return `
       <div class="internal-request-row" data-internal-request="${ir.id}">
-        <div class="thread-message-header">
-          <strong class="${RichEditor.dvClass(ir.subject, ir.subject_language)}">${ir.subject}</strong>
-          <span class="structure-empty">${ir.from_section?.name || ''} → ${ir.to_section?.name || ''}</span>
-          <span class="badge ${statusBadge[1]}">${statusBadge[0]}</span>
-          ${ir.deadline ? `<span class="structure-empty">Due ${RequestsView._deadlineCell(ir.deadline, ir.status)}</span>` : ''}
+        <div class="thread-message-header thread-message-header--split">
+          <div class="thread-message-header-meta">
+            <span class="structure-empty">${ir.from_section?.name || ''} → ${ir.to_section?.name || ''}</span>
+            <span class="badge ${statusBadge[1]}">${statusBadge[0]}</span>
+            ${ir.deadline ? `<span class="structure-empty">Due ${RequestsView._deadlineCell(ir.deadline, ir.status)}</span>` : ''}
+          </div>
+          <strong class="internal-request-subject${RichEditor.dvClass(ir.subject, ir.subject_language)}">${ir.subject}</strong>
         </div>
         <div class="thread-message-body${ir.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(ir.body)}</div>
         ${this._renderActivityLog(`
@@ -997,7 +1004,8 @@ const RequestDetailView = {
           </div>
           ${this._renderAuditEvents('internal_request', ir.id, ['received', 'routed', 'assigned'])}
         `)}
-        ${this._renderAttachments('internal_request', ir.id, ird.attachments, inToSection)}
+        ${this._renderAttachments('internal_request', ir.id, ird.attachments, inToSection,
+          ird.attachments.length === 0 && ir.created_by !== this._user.id)}
         ${ird.replyDetails.map(rd => this._renderInternalReply(ir, rd.reply, rd.attachments, rd.reviewComments, inToSection, canApproveReturn)).join('')}
         ${replyComposeOpen && canReplyNow ? this._composeInternalReplyHtml(ir) : ''}
         <div class="detail-actions">
@@ -1116,12 +1124,17 @@ const RequestDetailView = {
         && r.assigned_to && ctx.isAssignee)) {
       return '';
     }
-    return `<div class="panel">${this._composeResponseHtml(r.id)}</div>`;
+    return `<div class="panel">${this._composeResponseHtml(r.id, r.to_section_id)}</div>`;
   },
 
-  _composeResponseHtml(requestId) {
+  // Same Save Draft / Submit for Approval pair as the New Request
+  // compose form (requests.js) — previously this form only offered
+  // Save Draft, forcing a second trip through the thread's own
+  // Submit for Approval button just to send a response drafted in one
+  // sitting.
+  _composeResponseHtml(requestId, sectionId) {
     return `
-      <form class="modal-form response-form" data-response-form="${requestId}">
+      <form class="modal-form response-form" data-response-form="${requestId}" data-section="${sectionId || ''}">
         <div class="field-group field-group-row">
           <label class="field-label">Draft a Response</label>
           ${RichEditor.langToggleHtml('language', 'dv')}
@@ -1139,8 +1152,16 @@ const RequestDetailView = {
           </label>
           <div class="attachments-list" data-response-pending="${requestId}"></div>
         </div>
+        <div class="field-group">
+          <label class="field-label">Approving Supervisor</label>
+          <select class="field-select" name="approverId" data-response-approver="${requestId}"></select>
+          <div class="field-hint">Needed only if you submit for approval now — includes supervisors at the section, department, and command level. Save Draft skips this.</div>
+        </div>
         <div class="response-error alert alert-error hidden"></div>
-        <button type="submit" class="btn btn-primary btn-sm">Save Draft Response</button>
+        <div class="modal-actions">
+          <button type="submit" class="btn btn-secondary btn-sm" data-compose-mode="draft">Save Draft</button>
+          <button type="submit" class="btn btn-primary btn-sm" data-compose-mode="submit">Submit for Approval</button>
+        </div>
       </form>
     `;
   },
@@ -1160,6 +1181,23 @@ const RequestDetailView = {
       DraftAutosave.autoSaveForm(form, `response:${requestId}`, editor, {
         langToggles: [{ name: 'language', onChange: (lang) => editor.setLanguage(lang) }],
       });
+
+      // Same eligible-approvers population as the New Request compose
+      // form and the Submit for Approval modal — the responding
+      // section's supervisors (plus department/command level).
+      const approverSelect = form.querySelector(`[data-response-approver="${requestId}"]`);
+      if (approverSelect) {
+        (async () => {
+          approverSelect.innerHTML = `<option value="">— Any qualifying supervisor —</option>`;
+          try {
+            const approvers = await RequestsAPI.listEligibleApprovers(form.dataset.section);
+            approverSelect.innerHTML = `<option value="">— Any qualifying supervisor —</option>`
+              + approvers.map(u => `<option value="${u.id}">${this._escapeHtml(u.full_name)}${u.designations?.name ? ' — ' + this._escapeHtml(u.designations.name) : ''}</option>`).join('');
+          } catch (err) {
+            console.warn('CorLink: failed to load eligible approvers', err);
+          }
+        })();
+      }
 
       const pendingFiles = [];
       const pendingListEl = form.querySelector(`[data-response-pending="${requestId}"]`);
@@ -1201,6 +1239,10 @@ const RequestDetailView = {
 
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
+        // Which of the two submit buttons fired — Save Draft keeps the
+        // old behavior; Submit for Approval also submits in the same
+        // go, matching the New Request compose form's convention.
+        const mode = e.submitter?.dataset.composeMode || 'draft';
         const fd = new FormData(form);
         const errEl = form.querySelector('.response-error');
         const body = editor.getHTML();
@@ -1220,9 +1262,20 @@ const RequestDetailView = {
               failures.push(`${file.name}: ${err.message || 'upload failed'}`);
             }
           }
+          // Submit AFTER attachments/CC so the approver sees the
+          // complete draft. A failure here must not orphan the created
+          // draft — the thread's own Submit for Approval button
+          // remains available either way.
+          if (mode === 'submit') {
+            try {
+              await RequestsAPI.submitResponse(response.id, fd.get('approverId') || null);
+            } catch (err) {
+              failures.push(`Submitting for approval failed: ${err.message || 'unknown error'} — you can submit it from the thread below.`);
+            }
+          }
           DraftAutosave.clear(`response:${requestId}`);
           await this._load();
-          if (failures.length > 0) alert(`Response sent, but some attachments failed to upload:\n${failures.join('\n')}`);
+          if (failures.length > 0) alert(`Response saved, but not everything went through:\n${failures.join('\n')}`);
         } catch (err) {
           errEl.textContent = err.message;
           errEl.classList.remove('hidden');

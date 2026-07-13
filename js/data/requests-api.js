@@ -186,7 +186,7 @@ const RequestsAPI = (() => {
       const { data, error } = await db.from('responses')
         .select(`
           *,
-          request:requests!responses_request_id_fkey(id, subject, subject_language, reference_number, to_org_id, from_org:organizations!requests_from_org_id_fkey(name, code))
+          request:requests!responses_request_id_fkey(id, subject, subject_language, reference_number, to_org_id, to_section_id, from_org:organizations!requests_from_org_id_fkey(name, code))
         `)
         .eq('status', 'pending_approval')
         .order('created_at', { ascending: true });

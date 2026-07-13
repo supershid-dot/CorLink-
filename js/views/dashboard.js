@@ -153,14 +153,26 @@ const DashboardView = {
   async _loadActionNeeded(user) {
     const listEl = document.getElementById('action-list');
     try {
-      const [inboxResult, sentResult, mySections, returnedApprovals] = await Promise.all([
+      const [inboxResult, sentResult, mySections, mySupervisedSections, returnedApprovals] = await Promise.all([
         RequestsAPI.listInbox(user.org_id),
         RequestsAPI.listSent(user.org_id),
         RequestsAPI.mySections(),
+        RequestsAPI.mySupervisedSections(),
         RequestsAPI.listReturnedApprovals(),
       ]);
       const inbox = inboxResult.items;
       const sent = sentResult.items;
+      const isAdmin = AppShell.isAdmin(user);
+      // requests_select RLS grants org-wide admins (and, for Unrouted
+      // Requests below, anyone holding assigned_receiver) visibility
+      // across every section, not just the viewer's own — inbox/sent
+      // above reflect that broader RLS grant, not "what's actually mine
+      // to act on." Every row below scopes down from that raw RLS
+      // visibility to what THIS user personally owns, so a supervisor
+      // or admin doesn't see the count for someone else's section (or,
+      // previously, the whole org's) work as if it were their own.
+      const supervisedIds = new Set(mySupervisedSections.map(s => s.id));
+      const iSupervise = (sectionId) => isAdmin || supervisedIds.has(sectionId);
 
       const rows = [];
       let outstanding = [];
@@ -169,15 +181,26 @@ const DashboardView = {
       // assigned_receiver (requests_select_assigned_receiver RLS) —
       // for anyone else it's not just always zero, the row would be
       // actively misleading (implies an action that isn't theirs to take).
+      // Genuinely org-wide by nature (unrouted mail has no section yet,
+      // so there's nothing narrower than "my org" to scope it to) —
+      // unlike the section/assignment-scoped rows below, this one
+      // legitimately belongs to anyone holding the receiving role.
       if (this._canReceive) {
         const unrouted = inbox.filter(r => !r.to_section_id && ['sent', 'received'].includes(r.status)).length;
         rows.push({ icon: 'ti-inbox', label: 'Unrouted Requests', count: unrouted, href: '#requests?tab=inbox&view=needs_action' });
       }
 
-      const notAssigned = inbox.filter(r => !!r.to_section_id && !r.assigned_to && r.status === 'in_progress').length;
+      // Assigning is a supervisor's action (mirrors the Assign/Reassign
+      // button's own gating in request-detail.js) — scoped to sections
+      // this user actually supervises, not every unassigned item their
+      // RLS visibility happens to include.
+      const notAssigned = inbox.filter(r => !!r.to_section_id && !r.assigned_to && r.status === 'in_progress' && iSupervise(r.to_section_id)).length;
       rows.push({ icon: 'ti-user-question', label: 'Not Assigned', count: notAssigned, href: '#requests?tab=inbox&view=needs_action' });
 
-      const responseNotStarted = inbox.filter(r => r.status === 'in_progress' && (r.responses || []).length === 0).length;
+      // Drafting the response is specifically the assignee's job —
+      // scoped to items assigned to ME, not every unstarted response
+      // visible across my section(s).
+      const responseNotStarted = inbox.filter(r => r.status === 'in_progress' && r.assigned_to === user.id && (r.responses || []).length === 0).length;
       rows.push({ icon: 'ti-edit-off', label: 'Response Not Started', count: responseNotStarted, href: '#requests?tab=inbox&view=needs_action' });
 
       // Drafts a supervisor bounced back to ME that I haven't
@@ -193,11 +216,18 @@ const DashboardView = {
       rows.push({ icon: 'ti-corner-up-left', label: 'Returned for Correction', count: returnedForCorrection, href: '#requests?tab=sent&view=needs_action' });
 
       if (this._isSupervisor) {
+        // Scoped to sections I actually supervise — listPendingApprovals/
+        // listPendingResponseApprovals return every org-wide pending
+        // approval RLS lets a supervisor see (any supervisor can approve
+        // any section's item), which is correct for the full Approvals
+        // tab but not for a personal "what's mine" dashboard count.
         const [requestApprovals, responseApprovals] = await Promise.all([
           RequestsAPI.listPendingApprovals(user.org_id),
           RequestsAPI.listPendingResponseApprovals(user.org_id),
         ]);
-        rows.push({ icon: 'ti-clipboard-check', label: 'Pending Approvals', count: requestApprovals.length + responseApprovals.length, href: '#requests?tab=approvals' });
+        const myRequestApprovals = requestApprovals.filter(r => iSupervise(r.from_section_id));
+        const myResponseApprovals = responseApprovals.filter(resp => iSupervise(resp.request?.to_section_id));
+        rows.push({ icon: 'ti-clipboard-check', label: 'Pending Approvals', count: myRequestApprovals.length + myResponseApprovals.length, href: '#requests?tab=approvals' });
       }
 
       // "Responses not received from other organizations" — the other
