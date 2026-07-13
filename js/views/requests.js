@@ -465,7 +465,17 @@ const RequestsView = {
       return;
     }
     resultsEl.innerHTML = `<div class="tab-loading"><span class="spinner spinner--dark"></span> Loading…</div>`;
-    this._teamItems = await RequestsAPI.listStaffWorkload(this._state.teamStaffId);
+    // Two independent sources make up "this person's workload" —
+    // external requests (RequestsAPI, assigned_to/created_by) and
+    // Internal Collaboration items looped to them (InternalRequestsAPI,
+    // assigned_to on internal_requests) — fetched in parallel and
+    // rendered as two panels below, same split the request-detail page
+    // itself draws between the external thread and its internal-collab
+    // panel.
+    [this._teamItems, this._teamInternalItems] = await Promise.all([
+      RequestsAPI.listStaffWorkload(this._state.teamStaffId),
+      InternalRequestsAPI.listAssignedToUser(this._state.teamStaffId),
+    ]);
     this._renderTeamFiltered();
   },
 
@@ -473,20 +483,27 @@ const RequestsView = {
     const resultsEl = document.getElementById('team-results');
     if (!resultsEl) return;
     const items = this._teamItems || [];
+    const internalItems = this._teamInternalItems || [];
     const query = (this._state.teamSearch || '').trim().toLowerCase();
     const searched = items.filter(r => this._matchesQuery(r.subject, r.body, query, r.reference_number));
+    const searchedInternal = internalItems.filter(ir => this._matchesQuery(ir.subject, ir.body, query));
     const filters = this._teamFilters();
     const active = filters.find(f => f.key === this._state.teamFilter) || filters[0];
     const filtered = searched.filter(active.test);
-    const emptyHtml = items.length === 0
+    // "Nothing assigned yet" only holds if BOTH sources are empty —
+    // this staff member might have zero external requests but still
+    // have Internal Collaboration items on them (or vice versa).
+    const nothingAtAll = items.length === 0 && internalItems.length === 0;
+    const emptyHtml = nothingAtAll
       ? this._emptyStateHtml(6, {
           icon: 'ti-briefcase', title: 'Nothing assigned yet',
-          subtitle: "Assign this staff member to a case from any request's detail page to see their workload here.",
+          subtitle: "Assign this staff member to a case, or loop them into a case's Internal Collaboration panel, to see their workload here.",
         })
       : this._noMatchesHtml(6);
     resultsEl.innerHTML = `
       ${this._filterChipsHtml(filters, searched, active.key)}
       ${this._listPanel(null, filtered, { orgCol: 'From', orgKey: 'from_org', emptyHtml })}
+      ${searchedInternal.length > 0 ? `<div style="margin-top: 20px;">${this._infoRequestPanel(searchedInternal, null, 'Internal Collaboration Assigned')}</div>` : ''}
     `;
     resultsEl.querySelectorAll('[data-filter]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -638,9 +655,10 @@ const RequestsView = {
     });
   },
 
-  _infoRequestPanel(items, emptyHtml) {
+  _infoRequestPanel(items, emptyHtml, title = null) {
     return `
       <div class="panel">
+        ${title ? `<div class="panel-header"><h3>${title}</h3></div>` : ''}
         <table class="data-table">
           <thead>
             <tr><th>Case</th><th>Subject</th><th>From → To</th><th>Status</th><th>Sent</th><th></th></tr>
