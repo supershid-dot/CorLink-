@@ -51,6 +51,12 @@ const InternalRequestsAPI = (() => {
     // cross-case version. 'sent'/'received' are the two not-yet-
     // answered states (see the status flow note at the top of this
     // file) — 'responded'/'closed' are excluded since those are done ('in_progress' = assigned but not yet answered, still outstanding).
+    // replies:internal_request_replies(status) is a lightweight nested
+    // select (just the status column, not the full row) — added so
+    // dashboard.js's Action Needed can tell "not assigned" apart from
+    // "assigned but reply not started" apart from "reply pending
+    // approval" instead of lumping every not-yet-responded internal
+    // request into one undifferentiated bucket.
     async listOutstandingForSections(sectionIds) {
       if (!sectionIds || sectionIds.length === 0) return [];
       const db = getSupabase();
@@ -59,7 +65,8 @@ const InternalRequestsAPI = (() => {
           *,
           from_section:sections!internal_requests_from_section_id_fkey(name, code),
           to_section:sections!internal_requests_to_section_id_fkey(name, code),
-          parent_request:requests!internal_requests_parent_request_id_fkey(id, subject, reference_number)
+          parent_request:requests!internal_requests_parent_request_id_fkey(id, subject, reference_number),
+          replies:internal_request_replies(status)
         `)
         .or(`from_section_id.in.(${sectionIds.join(',')}),to_section_id.in.(${sectionIds.join(',')})`)
         .in('status', ['sent', 'received', 'in_progress'])
