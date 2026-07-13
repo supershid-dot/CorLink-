@@ -2142,6 +2142,25 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
   margin-bottom: 10px;
   font-size: 0.875rem;
 }
+/* Internal-request row header only: section-flow metadata (LTR, reads
+   left-to-right) pinned to the start, subject pinned to the end — so a
+   Divehi (RTL) subject reads from its own natural right edge instead
+   of being glued directly after the metadata text. */
+.thread-message-header--split { justify-content: space-between; }
+.thread-message-header-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+.internal-request-subject {
+  flex: 1 1 220px;
+  min-width: 0;
+  overflow-wrap: break-word;
+  text-align: left;
+}
+.internal-request-subject.field-divehi { text-align: right; }
 /* Bodies are sanitized rich HTML (RichEditor.sanitize()), not plain
    text — no white-space: pre-wrap here, real block elements (p/ul/
    table) provide their own line breaks. The global reset zeroes all
