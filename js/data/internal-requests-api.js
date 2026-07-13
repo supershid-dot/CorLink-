@@ -243,7 +243,10 @@ const InternalRequestsAPI = (() => {
       return data;
     },
 
-    async approveReply(id, internalRequest) {
+    // comment is optional here (Approve doesn't require a reason, unlike
+    // Return below) — plain text only, stripped of any markup and
+    // truncated before it goes into the notification message.
+    async approveReply(id, internalRequest, comment) {
       const db = getSupabase();
       const session = await Auth.getSession();
       const { data, error } = await db.from('internal_request_replies')
@@ -254,23 +257,28 @@ const InternalRequestsAPI = (() => {
       await logAudit('approved', internalRequest.id, 'Approved and sent internal reply');
       const askingSide = new Set(await NotificationsAPI.sectionUserIds(internalRequest.from_section_id));
       askingSide.add(internalRequest.created_by);
+      const note = (comment || '').replace(/<[^>]+>/g, '').trim().slice(0, 200);
       await NotificationsAPI.notify([...askingSide], {
         type: 'new_response', recordType: 'request', recordId: internalRequest.parent_request_id,
-        message: `"${internalRequest.subject}" — your internal request received a reply`,
+        message: `"${internalRequest.subject}" — your internal request received a reply${note ? ': ' + note : ''}`,
       });
       return data;
     },
 
-    async returnReply(id, internalRequest) {
+    // comment is required by the UI (js/views/request-detail.js's
+    // _openCommentModal) so a returned drafter always gets a reason,
+    // matching the external side's returnResponse/returnRequest.
+    async returnReply(id, internalRequest, comment) {
       const db = getSupabase();
       const { data, error } = await db.from('internal_request_replies')
         .update({ status: 'draft', pending_approval_by: null })
         .eq('id', id).select().single();
       if (error) throw error;
       await logAudit('returned', internalRequest.id, 'Returned internal reply for changes');
+      const note = (comment || '').replace(/<[^>]+>/g, '').trim().slice(0, 200);
       await NotificationsAPI.notify([data.created_by], {
         type: 'draft_returned', recordType: 'request', recordId: internalRequest.parent_request_id,
-        message: `"${internalRequest.subject}" — your internal reply was returned for changes`,
+        message: `"${internalRequest.subject}" — your internal reply was returned for changes${note ? ': ' + note : ''}`,
       });
       return data;
     },
