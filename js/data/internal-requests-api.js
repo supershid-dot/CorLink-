@@ -68,6 +68,29 @@ const InternalRequestsAPI = (() => {
       return data;
     },
 
+    // Every internal request assigned to this staff member — the Team
+    // tab's per-staff workload view (js/views/requests.js) previously
+    // only queried the external requests table via RequestsAPI.
+    // listStaffWorkload, so a staff member with an Internal Collaboration
+    // item on them but no external assignment showed as "Nothing
+    // assigned yet." All statuses included (not just the still-open
+    // ones listOutstandingForSections above returns) so the Team tab's
+    // own filter chips (e.g. "Closed") have something to match against.
+    async listAssignedToUser(userId) {
+      const db = getSupabase();
+      const { data, error } = await db.from('internal_requests')
+        .select(`
+          *,
+          from_section:sections!internal_requests_from_section_id_fkey(name, code),
+          to_section:sections!internal_requests_to_section_id_fkey(name, code),
+          parent_request:requests!internal_requests_parent_request_id_fkey(id, subject, reference_number)
+        `)
+        .eq('assigned_to', userId)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return data;
+    },
+
     async listReplies(internalRequestId) {
       const db = getSupabase();
       const { data, error } = await db.from('internal_request_replies')
