@@ -242,12 +242,32 @@ const DashboardView = {
         const awaitingTheirReply = outstanding.filter(ir => mySet.has(ir.from_section_id) && !mySet.has(ir.to_section_id)).length;
         rows.push({ icon: 'ti-clock', label: 'Information Requested — Awaiting Reply', count: awaitingTheirReply, href: '#requests?tab=info&sub=theirs' });
 
-        // Mirror of the row above, from the OTHER side of the same
-        // internal_requests rows: another section asked MINE for input
-        // and I haven't replied yet. Previously had no dashboard
-        // indicator at all — a recipient section only ever discovered
-        // this by opening the Info Requests tab directly.
-        const needsMyReply = outstanding.filter(ir => mySet.has(ir.to_section_id)).length;
+        // Everything below used to collapse into one "Needs Your Reply"
+        // count regardless of whether the viewer could actually act on
+        // it — a plain staff member and an org-wide supervisor saw the
+        // exact same number for a mix of "nobody's assigned this yet"
+        // (a supervisor's job), "it's assigned to ME and I haven't
+        // drafted a reply" (my own job), and "a reply is waiting on a
+        // supervisor's approval" (that supervisor's job). Split into
+        // the same granular buckets the external side already uses
+        // (Not Assigned / Not Started / Pending Approval), each scoped
+        // to who can actually act on it, mirroring iSupervise's own
+        // narrowing above.
+        const incoming = outstanding.filter(ir => mySet.has(ir.to_section_id));
+        const notAssigned = ir => ['received', 'in_progress'].includes(ir.status) && !ir.assigned_to && iSupervise(ir.to_section_id);
+        const replyNotStarted = ir => ir.status === 'in_progress' && ir.assigned_to === user.id && (ir.replies || []).length === 0;
+        const pendingApproval = ir => iSupervise(ir.to_section_id) && (ir.replies || []).some(r => r.status === 'pending_approval');
+
+        rows.push({ icon: 'ti-user-question', label: 'Internal Request Not Assigned', count: incoming.filter(notAssigned).length, href: '#requests?tab=info&sub=mine' });
+        rows.push({ icon: 'ti-edit-off', label: 'Internal Reply Not Started', count: incoming.filter(replyNotStarted).length, href: '#requests?tab=info&sub=mine' });
+        rows.push({ icon: 'ti-clipboard-check', label: 'Internal Reply Pending Approval', count: incoming.filter(pendingApproval).length, href: '#requests?tab=info&sub=mine' });
+
+        // Catch-all for what's left — e.g. received but not yet
+        // assigned for a viewer who isn't that section's supervisor, or
+        // a reply someone else is still drafting — so nothing silently
+        // disappears from the total once the three buckets above are
+        // subtracted out.
+        const needsMyReply = incoming.filter(ir => !notAssigned(ir) && !replyNotStarted(ir) && !pendingApproval(ir)).length;
         rows.push({ icon: 'ti-message-question', label: 'Information Requests — Needs Your Reply', count: needsMyReply, href: '#requests?tab=info&sub=mine' });
       }
 

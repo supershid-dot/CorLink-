@@ -1251,6 +1251,13 @@ const RequestDetailView = {
           errEl.classList.remove('hidden');
           return;
         }
+        // Disabled for the round trip — without this, a second tap on
+        // either button before createResponse() resolves and _load()
+        // re-renders (removing this form) fires the handler again,
+        // creating a second, orphaned draft response from the same
+        // compose session.
+        const submitBtns = form.querySelectorAll('button[type="submit"]');
+        submitBtns.forEach(btn => { btn.disabled = true; });
         try {
           const response = await RequestsAPI.createResponse({ requestId, body, language: fd.get('language') });
           await CCRecipientsAPI.add('response', response.id, fd.getAll('loopInUserIds'));
@@ -1279,6 +1286,7 @@ const RequestDetailView = {
         } catch (err) {
           errEl.textContent = err.message;
           errEl.classList.remove('hidden');
+          submitBtns.forEach(btn => { btn.disabled = false; });
         }
       });
     });
@@ -1488,6 +1496,12 @@ const RequestDetailView = {
           errEl.classList.remove('hidden');
           return;
         }
+        // Disabled for the round trip — without this, a second tap
+        // before draftReply() resolves and _load() re-renders (removing
+        // this form) fires the handler again, creating a second,
+        // orphaned draft reply from the same compose session.
+        const submitBtn = form.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
         try {
           const reply = await InternalRequestsAPI.draftReply({ internalRequestId, body, language: fd.get('language') });
           const failures = [];
@@ -1505,6 +1519,7 @@ const RequestDetailView = {
         } catch (err) {
           errEl.textContent = err.message;
           errEl.classList.remove('hidden');
+          submitBtn.disabled = false;
         }
       });
     });
