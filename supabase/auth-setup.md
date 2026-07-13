@@ -178,6 +178,29 @@ match what changed since, instead of re-running the full files:
   section** (Admin → Organization Settings) — until you do, any staff
   member in the org can use the module, matching the pre-designation
   fallback the other two settings already use.
+- `supabase/patch-rls-scope-indexes.sql` — if `patch-missing-indexes.sql`
+  above didn't fully fix a recurring "Couldn't load this request:
+  canceling statement due to statement timeout," this is the deeper
+  cause: `scope_section_ids()` (the function every RLS scoping helper —
+  `my_section_ids`/`my_supervised_section_ids`/`has_role_in_section` —
+  calls to expand a command/department/division/organization-level
+  assignment down to its concrete sections) had no index to seek
+  `sections` by `department_id`/`division_id`/`org_id`, so it fell back
+  to a full table scan for any assignment not scoped directly at the
+  section level — most notably org-wide admin grants (scope_type
+  `'organization'`). Because these RLS helpers are `SECURITY DEFINER`
+  (required to avoid RLS-recursion against `user_assignments`), Postgres
+  can't hoist or cache that scan across separate calls, so it re-runs
+  fresh for every row a query's RLS check touches — a case with a long
+  audit/routing history multiplies this badly enough to trip the
+  timeout on its own, independent of the first indexes patch. Adds
+  indexes on `sections(department_id)`, `sections(division_id)`,
+  `sections(org_id)`, and `departments(command_id)`. Also paired with
+  an app-code fix (already shipped) that narrows
+  `RequestsAPI.listCaseAuditTrail` to the specific audit actions
+  request-detail.js actually renders instead of fetching (and
+  RLS-evaluating) every action ever logged for a case, including a
+  whole `response`-side query that was never even used.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 
