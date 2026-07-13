@@ -2788,5 +2788,10 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
   gap: 8px;
 }
 .internal-request-row:last-child { margin-bottom: 0; }
-.internal-request-replies { display: flex; flex-direction: column; gap: 8px; }
-.internal-request-replies .thread-message { padding: 10px 12px; }
+/* Applied directly to each reply's .thread-message (in place of a
+   .internal-request-replies wrapper div that existed only to carry
+   this padding override) — .internal-request-row above is already a
+   flex column with its own gap, so a flattened reply still gets the
+   same spacing as a direct child. */
+.thread-message--compact { padding: 10px 12px; margin-bottom: 8px; }
+.thread-message--compact:last-child { margin-bottom: 0; }

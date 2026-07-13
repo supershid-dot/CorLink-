@@ -558,6 +558,7 @@ const RequestsAPI = (() => {
       if (patch.body != null) patch = { ...patch, body: RichEditor.sanitize(patch.body) };
       const { data, error } = await db.from('responses').update(patch).eq('id', id).select().single();
       if (error) throw wrapRowError(error);
+      await logAudit('edited', 'response', id, 'Edited response draft');
       return data;
     },
 
@@ -656,6 +657,12 @@ const RequestsAPI = (() => {
         .update({ status: 'closed' }).eq('id', id).select().single();
       if (error) throw wrapRowError(error);
       await logAudit('edited', 'request', id, 'Closed request');
+      const recipients = new Set(await NotificationsAPI.sectionUserIds(data.from_section_id));
+      recipients.add(data.created_by);
+      await NotificationsAPI.notify([...recipients], {
+        type: 'new_response', recordType: 'request', recordId: id,
+        message: `"${data.subject}" was closed`,
+      });
       return data;
     },
 
