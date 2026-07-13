@@ -227,7 +227,7 @@ const RequestDetailView = {
           ccRecipients: requestCcRecipientsById[request.id] || [],
         };
       });
-      this._auditTrail = await RequestsAPI.listCaseAuditTrail(requestIds, responseIds, internalRequestIds);
+      this._auditTrail = await RequestsAPI.listCaseAuditTrail(requestIds, internalRequestIds);
 
       // Prefetched once per page load (not per round — a follow-up
       // keeps the same to_org_id as the case it continues) so

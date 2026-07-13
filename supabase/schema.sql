@@ -662,6 +662,28 @@ CREATE INDEX idx_audit_logs_record      ON audit_logs(record_type, record_id);
 CREATE INDEX idx_audit_logs_created     ON audit_logs(created_at DESC);
 CREATE INDEX idx_login_attempts_sn      ON login_attempts(service_number, attempted_at DESC);
 
+-- Backs scope_section_ids() (supabase/rls.sql) — the function every
+-- RLS-scoping helper (my_section_ids/my_supervised_section_ids/
+-- has_role_in_section) ultimately calls to expand a command/department/
+-- division/organization-level assignment down to its concrete active
+-- sections. Without these, that expansion falls back to a sequential
+-- scan of sections for every non-'section'-scoped assignment, on every
+-- single row can_view_case_audit_record()/requests_select/etc. has to
+-- evaluate — since these RLS helper functions are SECURITY DEFINER
+-- (required to avoid RLS-recursion against user_assignments/sections,
+-- see the comments above those functions), Postgres treats each call
+-- as an opaque black box and re-runs the full expansion fresh per row
+-- rather than hoisting/caching it, so this cost multiplies with every
+-- audit_logs/requests/responses/internal_requests row a query touches.
+-- Org-wide admin assignments (scope_type='organization') hit this
+-- hardest — see update_org_workflow_settings's own org-wide-admin
+-- comment — which is why an admin's page loads were the ones most
+-- prone to tripping statement_timeout as a case's audit history grew.
+CREATE INDEX idx_sections_department    ON sections(department_id) WHERE department_id IS NOT NULL AND is_active = TRUE;
+CREATE INDEX idx_sections_division      ON sections(division_id) WHERE division_id IS NOT NULL AND is_active = TRUE;
+CREATE INDEX idx_sections_org           ON sections(org_id) WHERE is_active = TRUE;
+CREATE INDEX idx_departments_command    ON departments(command_id) WHERE is_active = TRUE;
+
 -- ─── Updated_at triggers ─────────────────────────────────────
 CREATE OR REPLACE FUNCTION trigger_set_updated_at()
 RETURNS TRIGGER AS $$

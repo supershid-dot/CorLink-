@@ -695,20 +695,28 @@ const RequestsAPI = (() => {
     // received_at/assigned_to on every re-route, so those columns alone
     // only ever show the LATEST leg — the audit trail is the only place
     // the full received-then-routed-then-received-again history survives.
-    async listCaseAuditTrail(requestIds, responseIds, internalRequestIds = []) {
+    // Filtered server-side to exactly the actions request-detail.js
+    // actually renders (_renderAuditEvents call sites) rather than every
+    // audit_logs row ever written for these records — created/edited/
+    // submitted/approved/returned/sent/viewed entries accumulate far
+    // more densely than routed/assigned/received but were previously
+    // fetched (and RLS-evaluated, the expensive part — see
+    // can_view_case_audit_record in supabase/rls.sql) and then just
+    // discarded client-side. There's no responses branch at all: no
+    // _renderAuditEvents call site ever passes recordType 'response'
+    // (the response thread only shows _renderReceipt, not a routed/
+    // assigned trail), so that query was pure wasted RLS-evaluated work
+    // on every single page load.
+    async listCaseAuditTrail(requestIds, internalRequestIds = []) {
       const db = getSupabase();
       const queries = [];
       if (requestIds.length) {
         queries.push(db.from('audit_logs').select('*, user:users(full_name, designations(name))')
-          .eq('record_type', 'request').in('record_id', requestIds));
-      }
-      if (responseIds.length) {
-        queries.push(db.from('audit_logs').select('*, user:users(full_name, designations(name))')
-          .eq('record_type', 'response').in('record_id', responseIds));
+          .eq('record_type', 'request').in('record_id', requestIds).in('action', ['routed', 'assigned']));
       }
       if (internalRequestIds.length) {
         queries.push(db.from('audit_logs').select('*, user:users(full_name, designations(name))')
-          .eq('record_type', 'internal_request').in('record_id', internalRequestIds));
+          .eq('record_type', 'internal_request').in('record_id', internalRequestIds).in('action', ['received', 'routed', 'assigned']));
       }
       if (!queries.length) return [];
       const results = await Promise.all(queries);
