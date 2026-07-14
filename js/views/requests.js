@@ -238,7 +238,12 @@ const RequestsView = {
       { key: 'awaiting_reply', label: 'Awaiting Reply', test: r =>
           ['sent', 'received', 'in_progress', 'overdue'].includes(r.status)
           && !(r.responses || []).some(x => x.status === 'sent') },
-      { key: 'reply_received', label: 'Reply Received', test: r => (r.responses || []).some(x => x.status === 'sent') },
+      // Excludes 'closed' on purpose — a closed case always has a sent
+      // response (that's the only path to 'closed'), so without this
+      // exclusion every closed request would also double-count here,
+      // and this chip would stop meaning "I have a reply to look at"
+      // and start meaning "this case has ever had a reply, ever."
+      { key: 'reply_received', label: 'Reply Received', test: r => (r.responses || []).some(x => x.status === 'sent') && r.status !== 'closed' },
       { key: 'overdue', label: 'Overdue', test: r => !!r.deadline && r.deadline < today && !['closed', 'responded', 'cancelled'].includes(r.status) },
       { key: 'looped_in', label: 'Looped In', test: r => (this._myLoopedInRequestIds || new Set()).has(r.id) },
       { key: 'closed', label: 'Closed', test: r => r.status === 'closed' },
@@ -264,9 +269,14 @@ const RequestsView = {
           || (r.responses || []).some(resp => ['draft', 'pending_approval'].includes(resp.status)) },
       { key: 'response_not_started', label: 'Not Started', test: r =>
           r.assigned_to === staffId && r.status === 'in_progress' && (r.responses || []).length === 0 },
+      // Excludes 'closed' for the same reason as Sent tab's "Reply
+      // Received" chip — a closed case always has a sent response, so
+      // without this exclusion "Sent" would double-count as "Closed"
+      // too, muddying what should be a distinct workload stage.
       { key: 'response_sent', label: 'Sent', test: r =>
-          (r.created_by === staffId && r.status === 'sent')
-          || (r.responses || []).some(resp => resp.status === 'sent') },
+          r.status !== 'closed'
+          && ((r.created_by === staffId && r.status === 'sent')
+          || (r.responses || []).some(resp => resp.status === 'sent')) },
       { key: 'overdue', label: 'Overdue', test: r => !!r.deadline && r.deadline < today && !['closed', 'responded', 'cancelled'].includes(r.status) },
       { key: 'closed', label: 'Closed', test: r => ['responded', 'closed'].includes(r.status) },
       { key: 'cancelled', label: 'Cancelled', test: r => r.status === 'cancelled' },
