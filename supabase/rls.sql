@@ -664,6 +664,22 @@ CREATE POLICY "refseq_select" ON reference_sequences
 -- assigned_receiver policies below for looped-in/front-desk cases) —
 -- org-wide admins keep full oversight, matching the "admins can route"
 -- intent already documented on requests_update_supervisor below.
+-- previous_section_id IN my_section_ids() is load-bearing for the same
+-- "post-UPDATE row must stay visible" reason as received_by above,
+-- for the section-scoped case: a supervisor of the CURRENT holding
+-- section routing (or Return-to-Sender-ing) a request to a section
+-- they hold no assignment in loses to_section_id-based visibility of
+-- the row mid-UPDATE — the track_previous_section trigger repoints
+-- previous_section_id at their own section in that same UPDATE, so
+-- this clause is what keeps their own hand-off from aborting itself.
+-- Confirmed empirically (local Postgres, replicating a live failure):
+-- without this clause a Records-section supervisor's route/return
+-- away from Records failed with "new row violates row-level security
+-- policy" even though every UPDATE policy passed — the failing check
+-- was the SELECT policy applied to the post-update row. Side effect,
+-- deliberate: the section that most recently handed a case off keeps
+-- read access to it (one hop of history only — overwritten on the
+-- next move), which also matches how the case timeline reads.
 CREATE POLICY "requests_select" ON requests
   FOR SELECT USING (
     (from_org_id = get_my_org_id() OR to_org_id = get_my_org_id())
@@ -671,6 +687,7 @@ CREATE POLICY "requests_select" ON requests
       is_admin()
       OR from_section_id IN (SELECT my_section_ids())
       OR to_section_id   IN (SELECT my_section_ids())
+      OR previous_section_id IN (SELECT my_section_ids())
       OR created_by      = auth.uid()
       OR received_by      = auth.uid()
     )
@@ -850,30 +867,24 @@ CREATE POLICY "requests_update_assigned_receiver" ON requests
 -- section or un-route it back to NULL — only touch a request that stays
 -- routed to a section they still hold assigned_receiver in.
 --
--- OR is_supervisor_or_above() in the WITH CHECK: Postgres RLS requires
--- EVERY policy whose USING clause matches the pre-update row to ALSO
--- have its WITH CHECK pass on the new row — a broader policy elsewhere
--- (requests_update_supervisor) authorizing the write does NOT exempt a
--- narrower policy whose USING also happened to match. A user who is
--- BOTH a section supervisor AND that section's assigned_receiver (a
--- normal combination) has this policy's USING match on every request
--- routed to a section they hold assigned_receiver in — without this
--- escape hatch, its WITH CHECK would then block them from routing that
--- request anywhere else, even though their supervisor role alone
--- should fully authorize it. Confirmed empirically against a real
--- Postgres instance: a dual-role user's "Route to Another Section"
--- (and, as of Return to Sender Section, "Return to Sender") both threw
--- "new row violates row-level security policy" before this fix, purely
--- because of this policy's USING also matching — despite
--- requests_update_supervisor's own WITH CHECK independently evaluating
--- true the whole time.
+-- This narrow WITH CHECK does NOT restrict a user who is ALSO a
+-- supervisor: permissive policies' WITH CHECKs are OR'd across every
+-- UPDATE policy on the table (verified empirically against a real
+-- Postgres instance — one passing WITH CHECK is enough; a narrower
+-- policy's USING also matching the row does NOT let its WITH CHECK
+-- veto a write another policy allows). A dual-role supervisor+
+-- assigned_receiver routes through requests_update_supervisor's
+-- passing WITH CHECK regardless of this one. (A route/return by that
+-- dual-role user DID once fail here — the actual cause was the
+-- post-update row falling out of the actor's requests_select
+-- visibility, fixed by previous_section_id there, not anything about
+-- this policy.)
 CREATE POLICY "requests_update_section_receiver" ON requests
   FOR UPDATE USING (
     to_section_id IS NOT NULL AND has_role_in_section(to_section_id, 'assigned_receiver')
   )
   WITH CHECK (
-    (to_section_id IS NOT NULL AND has_role_in_section(to_section_id, 'assigned_receiver'))
-    OR is_supervisor_or_above()
+    to_section_id IS NOT NULL AND has_role_in_section(to_section_id, 'assigned_receiver')
   );
 
 -- Walks parent_request_id both up (to the root of the case) and back
@@ -1166,10 +1177,21 @@ CREATE POLICY "responses_select_cc" ON responses
 -- guarantees the other org in the conversation can never see these
 -- rows: their get_my_org_id()/my_section_ids() can never match a
 -- section belonging to a different org.
+-- previous_section_id: same load-bearing "post-UPDATE row must stay
+-- visible under SELECT policy" clause as requests_select (see the
+-- comment there) — here it's what lets a PLAIN member of the current
+-- holding section (Return to Sender is deliberately open to any
+-- member, not supervisor-only) send an internal request back without
+-- their own UPDATE aborting: after the return, to_section_id points
+-- at the origin section and from_section_id already was the origin
+-- section, so the returner matches neither — only the trigger-set
+-- previous_section_id still points at them. Supervisors were covered
+-- by the org-wide fallback term; plain members weren't.
 CREATE POLICY "internal_requests_select" ON internal_requests
   FOR SELECT USING (
     from_section_id IN (SELECT my_section_ids())
     OR to_section_id IN (SELECT my_section_ids())
+    OR previous_section_id IN (SELECT my_section_ids())
     OR created_by = auth.uid()
     OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', to_section_id))
   );
@@ -1213,6 +1235,24 @@ CREATE POLICY "internal_requests_insert" ON internal_requests
     )
   );
 
+-- The EXISTS qualifies internal_requests.parent_request_id explicitly —
+-- the SAME shadowing trap already documented on internal_requests_insert
+-- above: requests also has a column literally named parent_request_id,
+-- so a bare reference inside `FROM requests r WHERE r.id =
+-- parent_request_id` resolves to r.parent_request_id ("is this request
+-- its own parent", always false), silently making the policy match
+-- ZERO rows — which broke every internal-collaboration update (Mark
+-- Received/Assign/Reroute/Close/Return) until caught empirically.
+--
+-- WITH CHECK is explicit, with one extra term: previous_section_id.
+-- Without it, Postgres reuses USING against the post-update row, and a
+-- return/re-route moves the row OUT of all three USING branches for a
+-- plain member of the returning section (see internal_requests_select's
+-- previous_section_id comment) — the trigger-set previous_section_id
+-- pointing back at the actor's own section is what lets their own
+-- hand-off pass its own WITH CHECK. USING is what scopes WHICH rows
+-- they can touch in the first place, so this doesn't widen who can
+-- start an update, only lets a legitimate mover complete it.
 CREATE POLICY "internal_requests_update" ON internal_requests
   FOR UPDATE USING (
     (
@@ -1223,7 +1263,16 @@ CREATE POLICY "internal_requests_update" ON internal_requests
     -- Frozen once the parent request is cancelled — no further Mark
     -- Received/Assign/Reroute/Close/Return to Sender, matching how
     -- is_locked already freezes attachments on a sent request/response.
-    AND EXISTS (SELECT 1 FROM requests r WHERE r.id = parent_request_id AND r.status <> 'cancelled')
+    AND EXISTS (SELECT 1 FROM requests r WHERE r.id = internal_requests.parent_request_id AND r.status <> 'cancelled')
+  )
+  WITH CHECK (
+    (
+      to_section_id IN (SELECT my_section_ids())
+      OR from_section_id IN (SELECT my_section_ids())
+      OR previous_section_id IN (SELECT my_section_ids())
+      OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', to_section_id))
+    )
+    AND EXISTS (SELECT 1 FROM requests r WHERE r.id = internal_requests.parent_request_id AND r.status <> 'cancelled')
   );
 
 -- The asking side (from_section / the internal request's creator) only
