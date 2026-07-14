@@ -326,6 +326,15 @@ CREATE TABLE internal_requests (
   received_by       UUID        REFERENCES users(id),
   received_at       TIMESTAMPTZ,
   assigned_to       UUID        REFERENCES users(id),
+  -- Same one-hop-back pointer as requests.previous_section_id
+  -- (trigger-maintained, see track_internal_previous_section below).
+  -- Load-bearing for RLS, not just display: Postgres re-checks the
+  -- post-UPDATE row against the SELECT policies whenever an UPDATE
+  -- reads any column (a WHERE clause is enough — see the comment on
+  -- requests_select in rls.sql), so the section that just returned or
+  -- re-routed this row away must retain visibility of it or their own
+  -- UPDATE aborts mid-flight.
+  previous_section_id UUID      REFERENCES sections(id),
   -- Set by whoever starts the loop-in — capped at the parent request's
   -- own deadline (enforced in internal_requests_insert's WITH CHECK,
   -- see rls.sql — a section gathering supporting info can't give itself
@@ -829,6 +838,25 @@ $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER track_previous_section BEFORE UPDATE OF to_section_id ON requests
   FOR EACH ROW EXECUTE FUNCTION trigger_track_previous_section();
+
+-- Same pointer for internal_requests — simpler than the external one:
+-- to_section_id is NOT NULL from creation (internal requests are
+-- always section-to-section, no front-desk phase), so no default-
+-- section fallback is needed. See the previous_section_id column
+-- comment on internal_requests for why this is load-bearing for RLS,
+-- not just display.
+CREATE OR REPLACE FUNCTION trigger_track_internal_previous_section()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.to_section_id IS DISTINCT FROM OLD.to_section_id AND OLD.to_section_id IS NOT NULL THEN
+    NEW.previous_section_id := OLD.to_section_id;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER track_internal_previous_section BEFORE UPDATE OF to_section_id ON internal_requests
+  FOR EACH ROW EXECUTE FUNCTION trigger_track_internal_previous_section();
 
 -- responses never actually reaches 'received' as a STATUS value (only
 -- requests does) — markResponseReceived() only sets received_by/

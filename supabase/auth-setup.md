@@ -231,6 +231,31 @@ match what changed since, instead of re-running the full files:
   still gets it). Safe to run before or after
   `patch-return-to-sender.sql` — both converge on the same final
   `audit_logs.action` CHECK list.
+- `supabase/patch-fix-routing-rls-visibility.sql` — fixes "new row
+  violates row-level security policy for table requests" when a
+  section-scoped supervisor routes or returns a request away from
+  their own section. Root cause (isolated by replicating the reporting
+  org's exact data on a local Postgres and bisecting policies):
+  Postgres re-checks the post-UPDATE row against the table's **SELECT**
+  policies on any UPDATE that reads columns — a WHERE clause alone is
+  enough, no RETURNING needed — so the very act of handing a case off
+  to a section the actor can't see aborted the hand-off itself. Fix:
+  the SELECT policies now include the trigger-maintained
+  `previous_section_id`, keeping the section that just handed a case
+  off visible to itself (one hop of history, overwritten on the next
+  move). Also fixes two more bugs found in the same investigation:
+  (1) `internal_requests_update`'s cancelled-parent EXISTS (from
+  `patch-cancel-request.sql`) referenced `parent_request_id`
+  unqualified — the same column-shadowing trap already documented on
+  `internal_requests_insert` — silently breaking EVERY internal-
+  collaboration update (Mark Received/Assign/Reroute/Close/Return);
+  (2) internal_requests needed its own `previous_section_id` +
+  explicit WITH CHECK so a plain member's Return to Sender doesn't
+  self-reject. Also reverts `patch-fix-section-receiver-supervisor-
+  conflict.sql`'s WITH CHECK loosening — verified empirically that
+  permissive policies' WITH CHECKs are OR'd, so that change was inert
+  and the original narrow rule is restored. **Run this even if you ran
+  every earlier patch — it supersedes the section-receiver one.**
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 
