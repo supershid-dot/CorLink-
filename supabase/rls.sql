@@ -849,12 +849,31 @@ CREATE POLICY "requests_update_assigned_receiver" ON requests
 -- additionally can't use this policy to move a request to a DIFFERENT
 -- section or un-route it back to NULL — only touch a request that stays
 -- routed to a section they still hold assigned_receiver in.
+--
+-- OR is_supervisor_or_above() in the WITH CHECK: Postgres RLS requires
+-- EVERY policy whose USING clause matches the pre-update row to ALSO
+-- have its WITH CHECK pass on the new row — a broader policy elsewhere
+-- (requests_update_supervisor) authorizing the write does NOT exempt a
+-- narrower policy whose USING also happened to match. A user who is
+-- BOTH a section supervisor AND that section's assigned_receiver (a
+-- normal combination) has this policy's USING match on every request
+-- routed to a section they hold assigned_receiver in — without this
+-- escape hatch, its WITH CHECK would then block them from routing that
+-- request anywhere else, even though their supervisor role alone
+-- should fully authorize it. Confirmed empirically against a real
+-- Postgres instance: a dual-role user's "Route to Another Section"
+-- (and, as of Return to Sender Section, "Return to Sender") both threw
+-- "new row violates row-level security policy" before this fix, purely
+-- because of this policy's USING also matching — despite
+-- requests_update_supervisor's own WITH CHECK independently evaluating
+-- true the whole time.
 CREATE POLICY "requests_update_section_receiver" ON requests
   FOR UPDATE USING (
     to_section_id IS NOT NULL AND has_role_in_section(to_section_id, 'assigned_receiver')
   )
   WITH CHECK (
-    to_section_id IS NOT NULL AND has_role_in_section(to_section_id, 'assigned_receiver')
+    (to_section_id IS NOT NULL AND has_role_in_section(to_section_id, 'assigned_receiver'))
+    OR is_supervisor_or_above()
   );
 
 -- Walks parent_request_id both up (to the root of the case) and back
