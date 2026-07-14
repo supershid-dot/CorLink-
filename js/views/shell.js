@@ -43,6 +43,17 @@ const AppShell = {
     return name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
   },
 
+  // Resolves the logged-in user's own organization logo (uploaded via
+  // Admin → Organization Settings, same AdminAPI.getOrgLogoUrl() the
+  // Admin org list/settings screens already use) — falls back to the
+  // generic CorLink mark when the org hasn't uploaded one, so the
+  // topbar never shows a broken image for an org that skipped this
+  // optional step.
+  orgLogoUrl(user) {
+    const path = user.organization?.logo_path;
+    return path ? AdminAPI.getOrgLogoUrl(path) : 'assets/logo.png';
+  },
+
   // A user can hold several (scope, role) assignments at once —
   // e.g. staff in one section and supervisor in another. Summarize them.
   roleSummary(user) {
@@ -121,7 +132,7 @@ const AppShell = {
       ${this.sidebarHtml(user, activeRoute)}
       <header class="topbar">
         <div class="topbar-brand">
-          <div class="topbar-logo-crop"><img src="assets/logo.png" alt="${APP_NAME} logo" /></div>
+          <div class="topbar-logo-crop${user.organization?.logo_path ? ' topbar-logo-crop--org' : ''}"><img src="${this.orgLogoUrl(user)}" alt="${user.organization?.name || APP_NAME} logo" /></div>
           <span class="topbar-appname">${user.organization?.name || APP_NAME}</span>
         </div>
         <nav class="topbar-nav" id="topbar-nav">

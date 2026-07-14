@@ -674,6 +674,17 @@ p  { line-height: 1.6; }
   max-width: none;
   transform: translate(-15%, -8%);
 }
+/* An org's own uploaded logo (Admin → Organization Settings) can be any
+   aspect ratio — the zoom/shift above is hand-tuned to the CorLink mark's
+   own padding specifically and would badly crop an arbitrary image, so
+   this variant swaps to a plain, non-distorting fit instead. */
+.topbar-logo-crop--org img {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  object-fit: contain;
+  transform: none;
+}
 
 .topbar-appname {
   font-size: 1.125rem;
@@ -1297,6 +1308,27 @@ p  { line-height: 1.6; }
      .bottom-nav replaces them with a fixed tab bar instead. */
   .topbar-nav { display: none; }
   .bottom-nav { display: flex; }
+
+  /* .notif-dropdown/.global-search-panel are `position: absolute;
+     right: 0` against their OWN icon's wrapper — correct when that
+     icon sits at the true right edge of the topbar, but the bell and
+     search icons both sit to the LEFT of the user-menu (the actual
+     rightmost item), so their fixed width (340-360px) extended left
+     from that inner anchor and ran off the left edge of the viewport
+     on phone widths, clipping the notification/search panel's text.
+     Anchoring to the viewport instead of the icon's own wrapper fixes
+     this regardless of where the icon sits or how long the org name
+     pushes it — 66px = the topbar's own 60px height + the 6px gap
+     these panels already use above this breakpoint. Confirmed via a
+     real browser measurement at 360/390/412px. */
+  .notif-dropdown, .global-search-panel {
+    position: fixed;
+    top: 66px;
+    left: 16px;
+    right: 16px;
+    width: auto;
+    max-width: none;
+  }
   .stat-grid { grid-template-columns: 1fr 1fr; }
   .panel { padding: 16px; }
   .modal-box { padding: 18px; }
