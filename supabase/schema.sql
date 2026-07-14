@@ -796,13 +796,32 @@ CREATE TRIGGER check_request_status BEFORE UPDATE OF status ON requests
 -- to_section_id change regardless of which code path makes it (route,
 -- re-route, or a Return to Sender itself, which naturally keeps
 -- ping-pong possible). IS DISTINCT FROM guards against a column-list
--- trigger firing on a same-value SET; OLD.to_section_id IS NOT NULL
--- skips the very first route, where there's no "previous section" yet.
+-- trigger firing on a same-value SET.
+--
+-- OLD.to_section_id IS NULL on the very first route (receiveAndRoute()
+-- jumps to_section_id straight from NULL to the chosen section in one
+-- step — the org's front-desk/default receiving section never actually
+-- appears as a to_section_id value to record here). Falls back to the
+-- receiving org's configured default_receiving_section_id in that case
+-- so "Return to Sender" still has somewhere to point on a request's
+-- very first routing, not just on a second-or-later re-route. Stays
+-- NULL (no return possible) if the org hasn't configured one, or if it
+-- happens to equal the section it's being routed to.
 CREATE OR REPLACE FUNCTION trigger_track_previous_section()
 RETURNS TRIGGER AS $$
+DECLARE
+  v_default_section UUID;
 BEGIN
-  IF NEW.to_section_id IS DISTINCT FROM OLD.to_section_id AND OLD.to_section_id IS NOT NULL THEN
-    NEW.previous_section_id := OLD.to_section_id;
+  IF NEW.to_section_id IS DISTINCT FROM OLD.to_section_id THEN
+    IF OLD.to_section_id IS NOT NULL THEN
+      NEW.previous_section_id := OLD.to_section_id;
+    ELSE
+      SELECT default_receiving_section_id INTO v_default_section
+      FROM organizations WHERE id = NEW.to_org_id;
+      IF v_default_section IS NOT NULL AND v_default_section <> NEW.to_section_id THEN
+        NEW.previous_section_id := v_default_section;
+      END IF;
+    END IF;
   END IF;
   RETURN NEW;
 END;
