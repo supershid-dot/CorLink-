@@ -480,11 +480,25 @@ const RequestsAPI = (() => {
     // broadcast default.
     async routeRequest(id, toSectionId, { notifySection = true } = {}) {
       const db = getSupabase();
+      // Read subject BEFORE moving the row, and update WITHOUT
+      // requesting it back (.select()) — a section supervisor whose
+      // visibility is scoped to only their OWN section legitimately
+      // loses SELECT access to this row the moment it's routed
+      // elsewhere (requests_select has no blanket "any supervisor in
+      // my org" fallback, unlike internal_requests_select). Postgres
+      // RLS requires an UPDATE...RETURNING row to also pass the SELECT
+      // policy, so keeping .select().single() here would abort the
+      // entire routing UPDATE for exactly that supervisor — the one
+      // person who legitimately loses visibility by handing the case
+      // off is also the one this bug would have blocked from handing
+      // it off at all.
+      const { data: before, error: beforeErr } = await db.from('requests').select('subject').eq('id', id).single();
+      if (beforeErr) throw wrapRowError(beforeErr);
       // assigned_to is cleared on every route — for first-time routing
       // it's already null, and on a RE-route the previous section's
       // assignee must not stay attached; the new section assigns its own.
-      const { data, error } = await db.from('requests')
-        .update({ to_section_id: toSectionId, status: 'in_progress', assigned_to: null }).eq('id', id).select().single();
+      const { error } = await db.from('requests')
+        .update({ to_section_id: toSectionId, status: 'in_progress', assigned_to: null }).eq('id', id);
       if (error) throw wrapRowError(error);
       const { data: section, error: sectionErr } = await db.from('sections').select('name').eq('id', toSectionId).single();
       if (sectionErr) console.warn('CorLink: failed to look up section name for routing audit log:', sectionErr.message);
@@ -493,10 +507,10 @@ const RequestsAPI = (() => {
         const recipients = await NotificationsAPI.sectionUserIds(toSectionId);
         await NotificationsAPI.notify(recipients, {
           type: 'new_request', recordType: 'request', recordId: id,
-          message: `"${data.subject}" has been routed to your section`,
+          message: `"${before.subject}" has been routed to your section`,
         });
       }
-      return data;
+      return before;
     },
 
     // ── Return to Sender Section ─────────────────────────────────────
@@ -510,18 +524,24 @@ const RequestsAPI = (() => {
     // than re-fetched here.
     async returnToPreviousSection(id, previousSectionId, comment) {
       const db = getSupabase();
-      const { data, error } = await db.from('requests')
+      // Same RLS/RETURNING trap as routeRequest above, and even more
+      // certain to hit it here — returning a request necessarily moves
+      // it OUT of the section the actor supervises, straight into a
+      // section they typically have no other visibility into at all.
+      const { data: before, error: beforeErr } = await db.from('requests').select('subject').eq('id', id).single();
+      if (beforeErr) throw wrapRowError(beforeErr);
+      const { error } = await db.from('requests')
         .update({ to_section_id: previousSectionId, status: 'in_progress', assigned_to: null })
-        .eq('id', id).select().single();
+        .eq('id', id);
       if (error) throw wrapRowError(error);
       const note = (comment || '').replace(/<[^>]+>/g, '').trim().slice(0, 200);
       await logAudit('returned_to_sender', 'request', id, `Sent back to previous section${note ? ': ' + note : ''}`);
       const recipients = await NotificationsAPI.sectionUserIds(previousSectionId);
       await NotificationsAPI.notify(recipients, {
         type: 'new_request', recordType: 'request', recordId: id,
-        message: `"${data.subject}" was sent back to your section${note ? ': ' + note : ''}`,
+        message: `"${before.subject}" was sent back to your section${note ? ': ' + note : ''}`,
       });
-      return data;
+      return before;
     },
 
     // ── Assignment (section supervisor/assigned_receiver) ───────────
