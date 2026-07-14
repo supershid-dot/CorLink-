@@ -241,7 +241,7 @@ CREATE TABLE requests (
   language          TEXT    NOT NULL DEFAULT 'en' CHECK (language IN ('en', 'dv')),
   status            TEXT    NOT NULL DEFAULT 'draft' CHECK (status IN (
                       'draft', 'pending_approval', 'sent', 'received',
-                      'in_progress', 'responded', 'closed', 'overdue'
+                      'in_progress', 'responded', 'closed', 'overdue', 'cancelled'
                     )),
   deadline          DATE,
   reference_number  TEXT    UNIQUE,    -- Generated on supervisor approval + send
@@ -259,6 +259,16 @@ CREATE TABLE requests (
   -- to_section_id (routing) — receiving happens first, then routing.
   received_by       UUID    REFERENCES users(id),
   received_at       TIMESTAMPTZ,
+  -- One hop back: the to_section_id value immediately before the
+  -- current one, trigger-maintained (see trigger_track_previous_section
+  -- below) — lets a wrongly-routed section send a request back to
+  -- whoever routed it to them, not a fixed org default. NULL until the
+  -- request has been routed at least once past its first landing.
+  previous_section_id UUID  REFERENCES sections(id),
+  -- Sender-initiated retraction — set together, never independently.
+  cancelled_by      UUID    REFERENCES users(id),
+  cancelled_at      TIMESTAMPTZ,
+  cancellation_reason TEXT,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -596,6 +606,7 @@ CREATE TABLE audit_logs (
   action       TEXT    NOT NULL CHECK (action IN (
                  'created', 'edited', 'submitted', 'approved', 'returned',
                  'sent', 'received', 'routed', 'assigned',
+                 'returned_to_sender', 'cancelled',
                  'extension_requested', 'extension_approved', 'extension_denied',
                  'viewed', 'login', 'logout', 'login_failed', 'locked',
                  'password_changed', 'user_created', 'user_deactivated'
@@ -618,7 +629,8 @@ CREATE TABLE notifications (
                  'new_request', 'new_response', 'approval_requested', 'draft_returned',
                  'deadline_warning', 'extension_requested', 'extension_decided',
                  'new_prisoner_letter', 'letter_replied',
-                 'new_external_correspondence', 'external_correspondence_replied'
+                 'new_external_correspondence', 'external_correspondence_replied',
+                 'request_cancelled'
                )),
   record_type  TEXT    NOT NULL,
   record_id    UUID    NOT NULL,
@@ -756,7 +768,13 @@ RETURNS BOOLEAN AS $$
     ('overdue', 'draft'),       -- was pending_approval, then returned
     ('overdue', 'received'),    -- was sent, then received
     ('overdue', 'in_progress'), -- was received, then routed
-    ('overdue', 'responded')    -- was in_progress, response approved
+    ('overdue', 'responded'),   -- was in_progress, response approved
+    -- Sender-initiated retraction, any time before a response is
+    -- actually sent — terminal, no edge leads back out of 'cancelled'.
+    ('sent', 'cancelled'),
+    ('received', 'cancelled'),
+    ('in_progress', 'cancelled'),
+    ('overdue', 'cancelled')
   );
 $$ LANGUAGE sql IMMUTABLE;
 
@@ -772,6 +790,26 @@ $$ LANGUAGE plpgsql;
 
 CREATE TRIGGER check_request_status BEFORE UPDATE OF status ON requests
   FOR EACH ROW EXECUTE FUNCTION trigger_check_request_status();
+
+-- Self-maintaining "who routed this to the current section" pointer —
+-- independent of the status trigger above, so it fires on every
+-- to_section_id change regardless of which code path makes it (route,
+-- re-route, or a Return to Sender itself, which naturally keeps
+-- ping-pong possible). IS DISTINCT FROM guards against a column-list
+-- trigger firing on a same-value SET; OLD.to_section_id IS NOT NULL
+-- skips the very first route, where there's no "previous section" yet.
+CREATE OR REPLACE FUNCTION trigger_track_previous_section()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.to_section_id IS DISTINCT FROM OLD.to_section_id AND OLD.to_section_id IS NOT NULL THEN
+    NEW.previous_section_id := OLD.to_section_id;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER track_previous_section BEFORE UPDATE OF to_section_id ON requests
+  FOR EACH ROW EXECUTE FUNCTION trigger_track_previous_section();
 
 -- responses never actually reaches 'received' as a STATUS value (only
 -- requests does) — markResponseReceived() only sets received_by/

@@ -201,6 +201,36 @@ match what changed since, instead of re-running the full files:
   request-detail.js actually renders instead of fetching (and
   RLS-evaluating) every action ever logged for a case, including a
   whole `response`-side query that was never even used.
+- `supabase/patch-return-to-sender.sql` — lets a wrongly-routed section
+  send an external request back to whoever routed it there — one hop
+  back (`requests.previous_section_id`, trigger-maintained), not a
+  fixed org default — so it naturally supports ping-pong if it gets
+  misrouted again. Internal Collaboration gets the equivalent for free
+  (`internal_requests.from_section_id` was already a permanent pointer)
+  with no schema or RLS change on that side. New `returned_to_sender`
+  audit action, kept distinct from the pre-existing `returned` (draft-
+  rejection) action so the two show up as separate, distinguishable
+  events in the case timeline.
+- `supabase/patch-cancel-request.sql` — lets the sender pull a request
+  back any time before a response has actually been sent (the original
+  creator, or a supervisor of the sending section). New `'cancelled'`
+  status (terminal, like `closed`) blocks further responses and
+  Internal Collaboration on that case at the database level, not just
+  in the UI. Bundles two incidental fixes found necessary while making
+  `'cancelled'` reachable (same pattern as `patch-narrow-supervisor-
+  visibility.sql`'s own incidental cross-org fix): (1)
+  `requests_update_supervisor` had no `WITH CHECK` at all, which would
+  have let a RECEIVING-org supervisor cancel a request too — added a
+  `WITH CHECK` that only restricts the new `'cancelled'` outcome, every
+  other transition through that policy is untouched; (2)
+  `check_deadlines()`'s nightly cron had no transition edge out of
+  `'cancelled'`, so the first cancelled-and-overdue row it hit would
+  `RAISE EXCEPTION` and abort the entire nightly run for every other
+  request that day — added `'cancelled'` to its exclusion list (this
+  patch re-applies that fix so a live DB that only runs patch files
+  still gets it). Safe to run before or after
+  `patch-return-to-sender.sql` — both converge on the same final
+  `audit_logs.action` CHECK list.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

@@ -67,7 +67,7 @@ BEGIN
     FROM requests
     WHERE deadline IS NOT NULL
       AND deadline < CURRENT_DATE
-      AND status NOT IN ('draft', 'closed', 'responded', 'overdue')
+      AND status NOT IN ('draft', 'closed', 'responded', 'overdue', 'cancelled')
   LOOP
     UPDATE requests SET status = 'overdue' WHERE id = r.id;
 

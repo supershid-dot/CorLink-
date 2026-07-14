@@ -308,7 +308,11 @@ const DashboardView = {
     if (!el) return;
 
     const today = new Date().toISOString().slice(0, 10);
-    const mine = inbox.filter(r => r.assigned_to === user.id);
+    // Cancelled items are excluded from 'mine' entirely (not folded into
+    // 'done') — counting a cancelled request as completed would inflate
+    // a staff member's completion percentage for work they never
+    // actually finished.
+    const mine = inbox.filter(r => r.assigned_to === user.id && r.status !== 'cancelled');
     const open = mine.filter(r => !['responded', 'closed'].includes(r.status));
     const done = mine.length - open.length;
     const notStarted = open.filter(r => (r.responses || []).length === 0).length;
@@ -356,7 +360,7 @@ const DashboardView = {
 
     const today = new Date().toISOString().slice(0, 10);
     const items = [...inbox, ...sent]
-      .filter(r => r.deadline && !['closed', 'responded'].includes(r.status))
+      .filter(r => r.deadline && !['closed', 'responded', 'cancelled'].includes(r.status))
       .sort((a, b) => a.deadline.localeCompare(b.deadline))
       .slice(0, 5);
 

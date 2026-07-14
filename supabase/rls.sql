@@ -764,10 +764,43 @@ CREATE POLICY "requests_update" ON requests
 -- gate, but wider than the UI surfaces" tradeoff used throughout this
 -- file (e.g. pending_approval_by is informational-only routing, not
 -- exclusive, for the same reason).
+-- WITH CHECK added alongside Cancel a Sent Request: without it, this
+-- policy's USING clause (reused verbatim as the implicit check on the
+-- post-update row) would let a RECEIVING-org supervisor set
+-- status='cancelled' too, once that value becomes reachable — silently
+-- bypassing the "sender only" rule via a direct API call, since Postgres
+-- ORs every permissive policy together and a narrower policy added
+-- elsewhere (requests_update_cancel, below) doesn't subtract permission
+-- granted by this one. Only the NEW 'cancelled' outcome is restricted;
+-- every other transition this policy already allows (route, assign,
+-- approve-response, close) is untouched.
 CREATE POLICY "requests_update_supervisor" ON requests
   FOR UPDATE USING (
     (from_org_id = get_my_org_id() OR to_org_id = get_my_org_id())
     AND is_supervisor_or_above()
+  )
+  WITH CHECK (
+    (from_org_id = get_my_org_id() OR to_org_id = get_my_org_id())
+    AND is_supervisor_or_above()
+    AND (status <> 'cancelled' OR from_org_id = get_my_org_id())
+  );
+
+-- Cancel a Sent Request — creator or a supervisor of the SENDING
+-- section can pull a request back any time before a response has
+-- actually been sent. WITH CHECK deliberately does NOT mirror USING's
+-- status-IN-list (that would reject its own update, the same trap
+-- requests_update/requests_update_assigned_receiver already document)
+-- — it requires the POST-update status to specifically be 'cancelled'.
+CREATE POLICY "requests_update_cancel" ON requests
+  FOR UPDATE USING (
+    from_org_id = get_my_org_id()
+    AND status IN ('sent', 'received', 'in_progress', 'overdue')
+    AND (created_by = auth.uid() OR (is_supervisor_or_above() AND from_section_id IN (SELECT my_section_ids())))
+  )
+  WITH CHECK (
+    from_org_id = get_my_org_id()
+    AND status = 'cancelled'
+    AND (created_by = auth.uid() OR (is_supervisor_or_above() AND from_section_id IN (SELECT my_section_ids())))
   );
 
 -- assigned_receiver was previously a purely decorative role label (no
@@ -901,6 +934,7 @@ CREATE POLICY "responses_insert" ON responses
       SELECT 1 FROM requests r
       WHERE r.id = request_id
         AND r.to_org_id = get_my_org_id()
+        AND r.status <> 'cancelled'
     )
   );
 
@@ -912,11 +946,13 @@ CREATE POLICY "responses_update" ON responses
     created_by = auth.uid()
     AND is_locked = FALSE
     AND status IN ('draft', 'pending_approval')
+    AND EXISTS (SELECT 1 FROM requests r WHERE r.id = request_id AND r.status <> 'cancelled')
   )
   WITH CHECK (
     created_by = auth.uid()
     AND is_locked = FALSE
     AND status IN ('draft', 'pending_approval')
+    AND EXISTS (SELECT 1 FROM requests r WHERE r.id = request_id AND r.status <> 'cancelled')
   );
 
 -- Same "stays broad on purpose" reasoning as requests_update_supervisor
@@ -929,6 +965,7 @@ CREATE POLICY "responses_update_supervisor" ON responses
       SELECT 1 FROM requests r
       WHERE r.id = request_id
         AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
+        AND r.status <> 'cancelled'
     )
     AND is_supervisor_or_above()
   );
@@ -1140,6 +1177,7 @@ CREATE POLICY "internal_requests_insert" ON internal_requests
     AND EXISTS (
       SELECT 1 FROM requests r WHERE r.id = internal_requests.parent_request_id
         AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
+        AND r.status <> 'cancelled'
     )
     -- A section gathering supporting info can't give itself more time
     -- than the case itself has — no cap if either deadline is unset.
@@ -1158,9 +1196,15 @@ CREATE POLICY "internal_requests_insert" ON internal_requests
 
 CREATE POLICY "internal_requests_update" ON internal_requests
   FOR UPDATE USING (
-    to_section_id IN (SELECT my_section_ids())
-    OR from_section_id IN (SELECT my_section_ids())
-    OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', to_section_id))
+    (
+      to_section_id IN (SELECT my_section_ids())
+      OR from_section_id IN (SELECT my_section_ids())
+      OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', to_section_id))
+    )
+    -- Frozen once the parent request is cancelled — no further Mark
+    -- Received/Assign/Reroute/Close/Return to Sender, matching how
+    -- is_locked already freezes attachments on a sent request/response.
+    AND EXISTS (SELECT 1 FROM requests r WHERE r.id = parent_request_id AND r.status <> 'cancelled')
   );
 
 -- The asking side (from_section / the internal request's creator) only
@@ -1188,8 +1232,11 @@ CREATE POLICY "internal_request_replies_insert" ON internal_request_replies
   FOR INSERT WITH CHECK (
     created_by = auth.uid()
     AND EXISTS (
-      SELECT 1 FROM internal_requests ir WHERE ir.id = internal_request_id
+      SELECT 1 FROM internal_requests ir
+      JOIN requests r ON r.id = ir.parent_request_id
+      WHERE ir.id = internal_request_id
         AND ir.to_section_id IN (SELECT my_section_ids())
+        AND r.status <> 'cancelled'
     )
   );
 
@@ -1201,19 +1248,33 @@ CREATE POLICY "internal_request_replies_insert" ON internal_request_replies
 -- row somewhere they couldn't touch (the requests_update lesson).
 CREATE POLICY "internal_request_replies_update" ON internal_request_replies
   FOR UPDATE USING (
-    (created_by = auth.uid() AND status IN ('draft', 'pending_approval'))
-    OR EXISTS (
-      SELECT 1 FROM internal_requests ir WHERE ir.id = internal_request_id
-        AND is_supervisor_or_above()
-        AND get_my_org_id() = scope_org_id('section', ir.to_section_id)
+    (
+      (created_by = auth.uid() AND status IN ('draft', 'pending_approval'))
+      OR EXISTS (
+        SELECT 1 FROM internal_requests ir WHERE ir.id = internal_request_id
+          AND is_supervisor_or_above()
+          AND get_my_org_id() = scope_org_id('section', ir.to_section_id)
+      )
+    )
+    AND EXISTS (
+      SELECT 1 FROM internal_requests ir
+      JOIN requests r ON r.id = ir.parent_request_id
+      WHERE ir.id = internal_request_id AND r.status <> 'cancelled'
     )
   )
   WITH CHECK (
-    (created_by = auth.uid() AND status IN ('draft', 'pending_approval'))
-    OR EXISTS (
-      SELECT 1 FROM internal_requests ir WHERE ir.id = internal_request_id
-        AND is_supervisor_or_above()
-        AND get_my_org_id() = scope_org_id('section', ir.to_section_id)
+    (
+      (created_by = auth.uid() AND status IN ('draft', 'pending_approval'))
+      OR EXISTS (
+        SELECT 1 FROM internal_requests ir WHERE ir.id = internal_request_id
+          AND is_supervisor_or_above()
+          AND get_my_org_id() = scope_org_id('section', ir.to_section_id)
+      )
+    )
+    AND EXISTS (
+      SELECT 1 FROM internal_requests ir
+      JOIN requests r ON r.id = ir.parent_request_id
+      WHERE ir.id = internal_request_id AND r.status <> 'cancelled'
     )
   );
 

@@ -236,7 +236,7 @@ const RequestsAPI = (() => {
         .select('id', { count: 'exact', head: true })
         .or(`from_org_id.eq.${orgId},to_org_id.eq.${orgId}`)
         .lt('deadline', today)
-        .not('status', 'in', '(closed,responded)');
+        .not('status', 'in', '(closed,responded,cancelled)');
       if (error) throw wrapRowError(error);
       return count || 0;
     },
@@ -254,7 +254,9 @@ const RequestsAPI = (() => {
           created_by_user:users!requests_created_by_fkey(full_name, service_number),
           assigned_to_user:users!requests_assigned_to_fkey(full_name, service_number),
           received_by_user:users!requests_received_by_fkey(full_name, designations(name)),
-          pending_approval_by_user:users!requests_pending_approval_by_fkey(full_name, designations(name))
+          pending_approval_by_user:users!requests_pending_approval_by_fkey(full_name, designations(name)),
+          previous_section:sections!requests_previous_section_id_fkey(name, code),
+          cancelled_by_user:users!requests_cancelled_by_fkey(full_name, designations(name))
         `)
         .eq('id', id).single();
       if (error) throw wrapRowError(error);
@@ -293,7 +295,9 @@ const RequestsAPI = (() => {
           created_by_user:users!requests_created_by_fkey(full_name, service_number),
           assigned_to_user:users!requests_assigned_to_fkey(full_name, service_number),
           received_by_user:users!requests_received_by_fkey(full_name, designations(name)),
-          pending_approval_by_user:users!requests_pending_approval_by_fkey(full_name, designations(name))
+          pending_approval_by_user:users!requests_pending_approval_by_fkey(full_name, designations(name)),
+          previous_section:sections!requests_previous_section_id_fkey(name, code),
+          cancelled_by_user:users!requests_cancelled_by_fkey(full_name, designations(name))
         `)
         .in('id', flatIds)
         .order('created_at', { ascending: true });
@@ -495,6 +499,31 @@ const RequestsAPI = (() => {
       return data;
     },
 
+    // ── Return to Sender Section ─────────────────────────────────────
+    // One hop back to whoever routed THIS request to the current
+    // to_section_id (requests.previous_section_id, trigger-maintained —
+    // see supabase/schema.sql's track_previous_section trigger). Not a
+    // fixed org default — the wrongly-routed section sends it back to
+    // its actual immediate predecessor, which may itself be a mid-chain
+    // section, not the org's front desk. previousSectionId is passed in
+    // by the caller (already in memory from getConversation()) rather
+    // than re-fetched here.
+    async returnToPreviousSection(id, previousSectionId, comment) {
+      const db = getSupabase();
+      const { data, error } = await db.from('requests')
+        .update({ to_section_id: previousSectionId, status: 'in_progress', assigned_to: null })
+        .eq('id', id).select().single();
+      if (error) throw wrapRowError(error);
+      const note = (comment || '').replace(/<[^>]+>/g, '').trim().slice(0, 200);
+      await logAudit('returned_to_sender', 'request', id, `Sent back to previous section${note ? ': ' + note : ''}`);
+      const recipients = await NotificationsAPI.sectionUserIds(previousSectionId);
+      await NotificationsAPI.notify(recipients, {
+        type: 'new_request', recordType: 'request', recordId: id,
+        message: `"${data.subject}" was sent back to your section${note ? ': ' + note : ''}`,
+      });
+      return data;
+    },
+
     // ── Assignment (section supervisor/assigned_receiver) ───────────
     // Hands off drafting the reply to a specific staff member in the
     // owning section — mirrors prisoner_letters.assigned_to.
@@ -666,6 +695,42 @@ const RequestsAPI = (() => {
       return data;
     },
 
+    // ── Cancel ───────────────────────────────────────────────────────
+    // Creator or a supervisor of the SENDING section can pull a request
+    // back any time before a response has actually been sent (RLS —
+    // requests_update_cancel — enforces the same status window and
+    // actor scope). is_locked is forced true here (not just implied by
+    // reaching 'sent') to also close a narrow case: a request that went
+    // pending_approval -> overdue and gets cancelled before ever
+    // reaching 'sent' would otherwise still have is_locked = FALSE.
+    async cancelRequest(id, reason) {
+      const db = getSupabase();
+      const session = await Auth.getSession();
+      const { data, error } = await db.from('requests')
+        .update({
+          status: 'cancelled', is_locked: true,
+          cancelled_by: session.user.id, cancelled_at: new Date().toISOString(),
+          cancellation_reason: reason,
+        })
+        .eq('id', id).select().single();
+      if (error) throw wrapRowError(error);
+      await logAudit('cancelled', 'request', id, `Cancelled request: ${reason}`);
+      // Only notify the receiving side if it was ever actually approved
+      // + sent (reference_number is the tell) — a request cancelled
+      // while still pending_approval/overdue-from-pending_approval has
+      // no to-org audience yet that's ever heard of it.
+      if (data.reference_number) {
+        const recipients = data.to_section_id
+          ? await NotificationsAPI.sectionUserIds(data.to_section_id)
+          : await NotificationsAPI.orgSupervisorUserIds(data.to_org_id);
+        await NotificationsAPI.notify(recipients, {
+          type: 'request_cancelled', recordType: 'request', recordId: id,
+          message: `"${data.subject}" (${data.reference_number}) was cancelled by the sender`,
+        });
+      }
+      return data;
+    },
+
     // ── Acknowledge & Close (one user action, composed) ─────────────
     // The originating org used to click "Mark Received" on the response
     // and then "Mark Closed" on the request as two separate steps — the
@@ -712,11 +777,11 @@ const RequestsAPI = (() => {
       const queries = [];
       if (requestIds.length) {
         queries.push(db.from('audit_logs').select('*, user:users(full_name, designations(name))')
-          .eq('record_type', 'request').in('record_id', requestIds).in('action', ['routed', 'assigned']));
+          .eq('record_type', 'request').in('record_id', requestIds).in('action', ['routed', 'assigned', 'returned_to_sender']));
       }
       if (internalRequestIds.length) {
         queries.push(db.from('audit_logs').select('*, user:users(full_name, designations(name))')
-          .eq('record_type', 'internal_request').in('record_id', internalRequestIds).in('action', ['received', 'routed', 'assigned']));
+          .eq('record_type', 'internal_request').in('record_id', internalRequestIds).in('action', ['received', 'routed', 'assigned', 'returned_to_sender']));
       }
       if (!queries.length) return [];
       const results = await Promise.all(queries);
