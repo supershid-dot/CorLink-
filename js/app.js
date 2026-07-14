@@ -17,7 +17,7 @@ async function init() {
   try {
     const session = await Auth.getSession();
     if (session) {
-      Auth.resumeSession();
+      await Auth.resumeSession();
       const hash = window.location.hash.slice(1).split('?')[0];
       if (!hash || hash === 'login') {
         Router.navigate('dashboard');

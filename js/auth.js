@@ -193,7 +193,13 @@ const Auth = (() => {
         .eq('user_id', data.user.id)
         .eq('is_active', true);
 
-      const profile = { ...profileRow, assignments: await resolveScopeNames(db, assignments || []) };
+      // Org name + logo ride in the cached profile so the (synchronous)
+      // app shell can show them in the header without its own fetch —
+      // see AppShell.orgLogoUrl() in shell.js.
+      const { data: org } = await db.from('organizations')
+        .select('name, code, logo_path').eq('id', profileRow.org_id).single();
+
+      const profile = { ...profileRow, organization: org || null, assignments: await resolveScopeNames(db, assignments || []) };
 
       await recordAttempt(db, sn, true);
       await logAuthEvent(db, 'login');
@@ -256,24 +262,39 @@ const Auth = (() => {
         .eq('user_id', session.user.id)
         .eq('is_active', true);
 
-      // Org name rides in the cached profile so the (synchronous) app
-      // shell can show "logo + organisation name" in the header without
-      // its own fetch. Falls back gracefully for stale caches that
-      // predate this field.
+      // Org name + logo ride in the cached profile so the (synchronous)
+      // app shell can show "logo + organisation name" in the header
+      // without its own fetch. Falls back gracefully for stale caches
+      // that predate this field. logo_path is a Supabase Storage path
+      // (org-logos bucket, public) — AppShell.orgLogoUrl() below
+      // resolves it to an actual <img> src, same helper Admin's own
+      // organization list/settings screens already use.
       const { data: org } = await db.from('organizations')
-        .select('name, code').eq('id', data.org_id).single();
+        .select('name, code, logo_path').eq('id', data.org_id).single();
 
       const profile = { ...data, organization: org || null, assignments: await resolveScopeNames(db, assignments || []) };
       localStorage.setItem(USER_KEY, JSON.stringify(profile));
       return profile;
     },
 
-    resumeSession() {
+    async resumeSession() {
       const profile = this.getCachedProfile();
       if (!profile) return false;
       touchActivity();
       bindActivityListeners();
       startSessionWatchdog();
+      // Backfill profiles cached before 'organization' (name + logo)
+      // was added to the shape signIn()/refreshProfile() write —
+      // without this, an already-logged-in user would have to sign out
+      // and back in to ever see their org's branding in the header. A
+      // fresh cache always has the 'organization' key (even when its
+      // value is legitimately null, e.g. a deleted org), so this only
+      // fires once per stale cache; a failed/offline refresh just
+      // leaves the stale (branding-less) cache in place rather than
+      // blocking resume.
+      if (!('organization' in profile)) {
+        try { await this.refreshProfile(); } catch (err) { console.warn('CorLink: profile backfill failed:', err.message || err); }
+      }
       return true;
     },
 
