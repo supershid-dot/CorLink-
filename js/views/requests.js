@@ -211,9 +211,10 @@ const RequestsView = {
           ['received', 'in_progress'].includes(r.status)
           || (r.status === 'overdue' && !(r.responses || []).some(x => x.status === 'sent')) },
       { key: 'drafts', label: 'Response Drafts', test: r => (r.responses || []).some(x => ['draft', 'pending_approval'].includes(x.status)) },
-      { key: 'overdue', label: 'Overdue', test: r => !!r.deadline && r.deadline < today && !['closed', 'responded'].includes(r.status) },
+      { key: 'overdue', label: 'Overdue', test: r => !!r.deadline && r.deadline < today && !['closed', 'responded', 'cancelled'].includes(r.status) },
       { key: 'looped_in', label: 'Looped In', test: r => (this._myLoopedInRequestIds || new Set()).has(r.id) },
       { key: 'closed', label: 'Completed', test: r => ['responded', 'closed'].includes(r.status) },
+      { key: 'cancelled', label: 'Cancelled', test: r => r.status === 'cancelled' },
       { key: 'all', label: 'All', test: () => true },
     ];
   },
@@ -238,9 +239,10 @@ const RequestsView = {
           ['sent', 'received', 'in_progress', 'overdue'].includes(r.status)
           && !(r.responses || []).some(x => x.status === 'sent') },
       { key: 'reply_received', label: 'Reply Received', test: r => (r.responses || []).some(x => x.status === 'sent') },
-      { key: 'overdue', label: 'Overdue', test: r => !!r.deadline && r.deadline < today && !['closed', 'responded'].includes(r.status) },
+      { key: 'overdue', label: 'Overdue', test: r => !!r.deadline && r.deadline < today && !['closed', 'responded', 'cancelled'].includes(r.status) },
       { key: 'looped_in', label: 'Looped In', test: r => (this._myLoopedInRequestIds || new Set()).has(r.id) },
       { key: 'closed', label: 'Closed', test: r => r.status === 'closed' },
+      { key: 'cancelled', label: 'Cancelled', test: r => r.status === 'cancelled' },
       { key: 'all', label: 'All', test: () => true },
     ];
   },
@@ -265,8 +267,9 @@ const RequestsView = {
       { key: 'response_sent', label: 'Sent', test: r =>
           (r.created_by === staffId && r.status === 'sent')
           || (r.responses || []).some(resp => resp.status === 'sent') },
-      { key: 'overdue', label: 'Overdue', test: r => !!r.deadline && r.deadline < today && !['closed', 'responded'].includes(r.status) },
+      { key: 'overdue', label: 'Overdue', test: r => !!r.deadline && r.deadline < today && !['closed', 'responded', 'cancelled'].includes(r.status) },
       { key: 'closed', label: 'Closed', test: r => ['responded', 'closed'].includes(r.status) },
+      { key: 'cancelled', label: 'Cancelled', test: r => r.status === 'cancelled' },
     ];
   },
 
@@ -769,7 +772,7 @@ const RequestsView = {
   // rather than duplicated.
   _statusBadge(status, deadline) {
     const today = new Date().toISOString().slice(0, 10);
-    const isOverdue = !!deadline && deadline < today && !['closed', 'responded'].includes(status);
+    const isOverdue = !!deadline && deadline < today && !['closed', 'responded', 'cancelled'].includes(status);
     if (isOverdue) return `<span class="badge badge-error">Overdue</span>`;
 
     const map = {
@@ -780,6 +783,7 @@ const RequestsView = {
       in_progress:       ['In Progress', 'badge-primary'],
       responded:         ['Responded', 'badge-success'],
       closed:            ['Closed', 'badge-muted'],
+      cancelled:         ['Cancelled', 'badge-muted'],
     };
     const [label, cls] = map[status] || [status, 'badge-outline'];
     return `<span class="badge ${cls}">${label}</span>`;
@@ -859,7 +863,7 @@ const RequestsView = {
   // date (nothing is "remaining" on a finished case).
   _deadlineCell(deadline, status) {
     if (!deadline) return '—';
-    if (['closed', 'responded'].includes(status)) return deadline;
+    if (['closed', 'responded', 'cancelled'].includes(status)) return deadline;
     const today = new Date().toISOString().slice(0, 10);
     const diff = Math.round((new Date(deadline + 'T00:00:00') - new Date(today + 'T00:00:00')) / 86400000);
     const label = diff < 0 ? `overdue ${-diff}d` : diff === 0 ? 'due today' : `${diff}d left`;

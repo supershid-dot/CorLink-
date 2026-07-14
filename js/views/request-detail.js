@@ -316,13 +316,15 @@ const RequestDetailView = {
       isAssignee:      r.assigned_to === user.id,
     };
     const step = this._nextStepFor(r, ctx, entry);
-    if (!step) return '';
-    const buttons = [...(step.primary || []), ...(step.secondary || [])].join('');
+    const cancelBtn = this._cancelButtonFor(r, ctx);
+    if (!step && !cancelBtn) return '';
+    const buttons = [...(step?.primary || []), ...(step?.secondary || []), cancelBtn].join('');
+    const tone = step?.tone || 'waiting';
     return `
-      <div class="next-step-banner next-step-banner--${step.tone}">
+      <div class="next-step-banner next-step-banner--${tone}">
         <div class="next-step-text">
-          <div class="next-step-title">${step.title}</div>
-          ${step.sub ? `<div class="next-step-sub">${step.sub}</div>` : ''}
+          <div class="next-step-title">${step?.title || 'You can cancel this request'}</div>
+          ${step?.sub ? `<div class="next-step-sub">${step.sub}</div>` : ''}
         </div>
         ${buttons ? `<div class="next-step-actions">${buttons}</div>` : ''}
       </div>
@@ -437,7 +439,10 @@ const RequestDetailView = {
         return {
           tone: 'action', title: `Routed to ${this._escapeHtml(sectionName)} — assign a staff member`,
           primary: [`<button class="btn btn-primary btn-sm" data-assign-request="${r.id}">Assign to Staff</button>`],
-          secondary: [`<button class="btn btn-secondary btn-sm" data-route-request="${r.id}">Route to Another Section</button>`],
+          secondary: [
+            `<button class="btn btn-secondary btn-sm" data-route-request="${r.id}">Route to Another Section</button>`,
+            r.previous_section_id ? `<button class="btn btn-secondary btn-sm" data-return-to-sender="${r.id}">Return to ${this._escapeHtml(r.previous_section?.name || 'previous section')}</button>` : '',
+          ],
         };
       }
       if (ctx.isAssignee && entry.responseDetails.length === 0) {
@@ -454,6 +459,7 @@ const RequestDetailView = {
           secondary: [
             `<button class="btn btn-secondary btn-sm" data-assign-request="${r.id}">Reassign</button>`,
             `<button class="btn btn-secondary btn-sm" data-route-request="${r.id}">Route to Another Section</button>`,
+            r.previous_section_id ? `<button class="btn btn-secondary btn-sm" data-return-to-sender="${r.id}">Return to ${this._escapeHtml(r.previous_section?.name || 'previous section')}</button>` : '',
           ],
         };
       }
@@ -504,7 +510,30 @@ const RequestDetailView = {
       };
     }
 
+    if (status === 'cancelled') {
+      return {
+        tone: 'waiting', title: 'Request cancelled',
+        sub: r.cancellation_reason ? this._escapeHtml(r.cancellation_reason) : '',
+      };
+    }
+
     return null;
+  },
+
+  // Cancelling is computed independently of _nextStepFor's state × role
+  // table above (not threaded into one of its branches) so it still
+  // renders even in a viewer/state combination where _nextStepFor
+  // itself returns null — e.g. a from-org member who isn't the
+  // assignee still needs to see Cancel while a request sits routed at
+  // the receiving org. Checks the raw r.status, not _effectiveStatus,
+  // to stay exactly in sync with what requests_update_cancel's RLS
+  // actually accepts (including the pending_approval -> overdue edge).
+  _cancelButtonFor(r, ctx) {
+    const cancellable = ['sent', 'received', 'in_progress', 'overdue'].includes(r.status)
+      && ctx.isFromOrgMember
+      && (ctx.isCreator || (this._isSupervisor && this._mySupervisedSections.some(s => s.id === r.from_section_id)));
+    if (!cancellable) return '';
+    return `<button class="btn btn-secondary btn-sm" data-cancel-request="${r.id}">Cancel Request</button>`;
   },
 
   // Each round-trip renders inside ONE bordered .round-section wrapper —
@@ -551,7 +580,7 @@ const RequestDetailView = {
             ${this._renderReviewComments('request', r, entry.reviewComments, ctx.isFromOrgMember)}
             ${this._renderLoopedIn(entry.ccRecipients)}
             ${this._renderPendingApprovalNote(r)}
-            ${this._renderActivityLog(this._renderReceipt(r) + (ctx.isToOrgMember ? this._renderProcessEvents(r.id) : ''))}
+            ${this._renderActivityLog(this._renderReceipt(r) + this._renderCancellation(r) + (ctx.isToOrgMember ? this._renderProcessEvents(r.id) : ''))}
           </div>
 
           ${this._renderApprovalHistory(entry.approvals, ctx.isFromOrgMember)}
@@ -602,6 +631,19 @@ const RequestDetailView = {
     `;
   },
 
+  _renderCancellation(record) {
+    if (!record.cancelled_at) return '';
+    const name = this._escapeHtml(record.cancelled_by_user?.full_name || 'Unknown');
+    const designation = record.cancelled_by_user?.designations?.name;
+    const reason = record.cancellation_reason ? `: ${this._escapeHtml(record.cancellation_reason)}` : '';
+    return `
+      <div class="thread-receipt">
+        <i class="ti ti-ban"></i>
+        <span>Cancelled by <strong>${name}</strong>${designation ? `, ${this._escapeHtml(designation)}` : ''} — ${new Date(record.cancelled_at).toLocaleString()}${reason}</span>
+      </div>
+    `;
+  },
+
   // Same-org, read-only CC list — RLS already scopes cc_recipients to
   // whoever's on the same side of the case, so an empty array here
   // just means "nobody CC'd" OR "the counterpart org's CC list, which
@@ -640,7 +682,7 @@ const RequestDetailView = {
   // _renderReceipt() so the whole case reads as one dated timeline
   // rather than routing/assignment being the only undated steps in it.
   _renderProcessEvents(requestId) {
-    return this._renderAuditEvents('request', requestId, ['routed', 'assigned']);
+    return this._renderAuditEvents('request', requestId, ['routed', 'assigned', 'returned_to_sender']);
   },
 
   // Shared by the external request timeline above and the internal
@@ -650,8 +692,8 @@ const RequestDetailView = {
     const events = (this._auditTrail || [])
       .filter(e => e.record_type === recordType && e.record_id === recordId && actions.includes(e.action));
     if (!events.length) return '';
-    const icons = { routed: 'ti-arrow-forward-up', assigned: 'ti-user-check', received: 'ti-circle-check' };
-    const labels = { routed: 'Routed', assigned: 'Assigned', received: 'Received' };
+    const icons = { routed: 'ti-arrow-forward-up', assigned: 'ti-user-check', received: 'ti-circle-check', returned_to_sender: 'ti-corner-up-left' };
+    const labels = { routed: 'Routed', assigned: 'Assigned', received: 'Received', returned_to_sender: 'Sent back' };
     return events.map(e => {
       const name = this._escapeHtml(e.user?.full_name || 'Unknown');
       const designation = e.user?.designations?.name;
@@ -913,7 +955,7 @@ const RequestDetailView = {
     // Section" here, which let a section that had only been looped in
     // on an earlier round start yet another round it has no business
     // starting.
-    const canStart = ctx.isAssignee;
+    const canStart = ctx.isAssignee && r.status !== 'cancelled';
     if (entry.internalRequestDetails.length === 0 && !canStart) return '';
 
     // Deliberately visually distinct from the external thread above it
@@ -949,6 +991,11 @@ const RequestDetailView = {
     // section-only, not blanket supervisor" pattern used throughout
     // this app's action gating.
     const canReceive = inToSection;
+    // Any member of the wrongly-routed section, not supervisor-only —
+    // deliberately looser than canAssign/Route, matching Mark Received's
+    // own gating. Available immediately (before Mark Received) since
+    // spotting an obvious misroute shouldn't require receiving it first.
+    const canReturnToSender = inToSection && ['sent', 'received', 'in_progress'].includes(ir.status);
     // Section-scoped, same fix already applied to the external
     // Assign/Reassign gate (this._mySupervisedSections, not the blanket
     // this._isSupervisor) — a supervisor of an unrelated section
@@ -1002,7 +1049,7 @@ const RequestDetailView = {
           <div class="thread-receipt"><i class="ti ti-send"></i>
             <span>Sent by <strong>${this._escapeHtml(ir.created_by_user?.full_name || 'Unknown')}</strong>${ir.created_by_user?.designations?.name ? ', ' + this._escapeHtml(ir.created_by_user.designations.name) : ''} — ${new Date(ir.created_at).toLocaleString()}</span>
           </div>
-          ${this._renderAuditEvents('internal_request', ir.id, ['received', 'routed', 'assigned'])}
+          ${this._renderAuditEvents('internal_request', ir.id, ['received', 'routed', 'assigned', 'returned_to_sender'])}
         `)}
         ${this._renderAttachments('internal_request', ir.id, ird.attachments, inToSection,
           ird.attachments.length === 0 && ir.created_by !== this._user.id)}
@@ -1012,6 +1059,7 @@ const RequestDetailView = {
           ${canReceiveNow ? `<button class="btn ${primaryAction === 'receive' ? 'btn-primary' : 'btn-secondary'} btn-xs" data-mark-internal-received="${ir.id}">Mark Received</button>` : ''}
           ${canAssignNow ? `<button class="btn ${primaryAction === 'assign' ? 'btn-primary' : 'btn-secondary'} btn-xs" data-assign-internal="${ir.id}">${ir.assigned_to ? 'Reassign' : 'Assign to Staff'}</button>` : ''}
           ${canAssignNow ? `<button class="btn btn-secondary btn-xs" data-reroute-internal="${ir.id}">Route to Another Section</button>` : ''}
+          ${canReturnToSender ? `<button class="btn btn-secondary btn-xs" data-return-internal-to-sender="${ir.id}">Return to ${this._escapeHtml(ir.from_section?.name || 'sender')}</button>` : ''}
           ${canReplyBtn ? `<button class="btn ${primaryAction === 'reply' ? 'btn-primary' : 'btn-secondary'} btn-xs" data-reply-internal="${ir.id}">Draft Reply</button>` : ''}
           ${canCloseNow ? `<button class="btn ${primaryAction === 'close' ? 'btn-primary' : 'btn-secondary'} btn-xs" data-close-internal="${ir.id}">Close</button>` : ''}
         </div>
@@ -1344,6 +1392,25 @@ const RequestDetailView = {
       btn.addEventListener('click', () => this._openRouteModal('request', btn.dataset.routeRequest));
     });
 
+    main.querySelectorAll('[data-return-to-sender]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.returnToSender;
+        const entry = this._conversation.find(e => e.request.id === id);
+        if (!entry || !entry.request.previous_section_id) return;
+        this._openCommentModal('Return to Sender Section', 'Return', async (comment) => {
+          await RequestsAPI.returnToPreviousSection(id, entry.request.previous_section_id, comment);
+        }, true);
+      });
+    });
+
+    main.querySelectorAll('[data-cancel-request]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this._openCommentModal('Cancel Request', 'Cancel Request', async (reason) => {
+          await RequestsAPI.cancelRequest(btn.dataset.cancelRequest, reason);
+        }, true);
+      });
+    });
+
     main.querySelectorAll('[data-assign-request]').forEach(btn => {
       btn.addEventListener('click', () => this._openAssignModal('request', btn.dataset.assignRequest));
     });
@@ -1392,6 +1459,15 @@ const RequestDetailView = {
     });
     main.querySelectorAll('[data-reroute-internal]').forEach(btn => {
       btn.addEventListener('click', () => this._openRouteModal('internal', btn.dataset.rerouteInternal));
+    });
+    main.querySelectorAll('[data-return-internal-to-sender]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const ir = this._findInternalRequest(btn.dataset.returnInternalToSender);
+        if (!ir) return;
+        this._openCommentModal('Return to Sender Section', 'Return', async (comment) => {
+          await InternalRequestsAPI.returnToSender(ir.id, ir, comment);
+        }, true);
+      });
     });
     main.querySelectorAll('[data-close-internal]').forEach(btn => {
       btn.addEventListener('click', () => this._runAction(() => InternalRequestsAPI.close(btn.dataset.closeInternal)));

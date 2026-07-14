@@ -206,6 +206,31 @@ const InternalRequestsAPI = (() => {
       return data;
     },
 
+    // Send a wrongly-routed internal request back to whoever sent it
+    // (from_section_id — permanent since creation, never touched by
+    // reroute() above, so it already IS the "who sent this to me"
+    // pointer with no extra column needed). Resets the receiving side
+    // exactly like reroute(), and notifies the whole origin section
+    // (not just the original drafter) since anyone there may re-triage it.
+    async returnToSender(id, internalRequest, comment) {
+      const db = getSupabase();
+      const { data, error } = await db.from('internal_requests')
+        .update({
+          to_section_id: internalRequest.from_section_id, status: 'sent',
+          received_by: null, received_at: null, assigned_to: null,
+        })
+        .eq('id', id).select().single();
+      if (error) throw error;
+      const note = (comment || '').replace(/<[^>]+>/g, '').trim().slice(0, 200);
+      await logAudit('returned_to_sender', id, `Sent back to originating section${note ? ': ' + note : ''}`);
+      const recipients = await NotificationsAPI.sectionUserIds(internalRequest.from_section_id);
+      await NotificationsAPI.notify(recipients, {
+        type: 'new_request', recordType: 'request', recordId: data.parent_request_id,
+        message: `"${data.subject}" — an internal request was sent back to your section${note ? ': ' + note : ''}`,
+      });
+      return data;
+    },
+
     // Assign to a staff member of the receiving section — the same
     // step external requests get after routing. Clearing (userId null)
     // drops back to 'received'.
