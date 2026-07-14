@@ -210,21 +210,32 @@ const RequestsAPI = (() => {
     },
 
     // ── Counts (dashboard stat cards) ───────────────────────────────
+    // Unfinished only — 'sent'/'received' alone (the pre-routing states)
+    // undercounted everything already routed and in_progress, which is
+    // just as much open inbox work. Matches countOverdue's own
+    // exclusion list below rather than an inclusion list, so a newly
+    // introduced in-flight status doesn't silently drop out of "open."
     async countInbox(orgId) {
       const db = getSupabase();
       const { count, error } = await db.from('requests')
         .select('id', { count: 'exact', head: true })
         .eq('to_org_id', orgId)
-        .in('status', ['sent', 'received']);
+        .not('status', 'in', '(closed,responded,cancelled)');
       if (error) throw wrapRowError(error);
       return count || 0;
     },
 
+    // Unfinished only — previously had no status filter at all, so this
+    // was a lifetime total (every draft/cancelled/closed request the
+    // user has ever sent), not "what's still open." 'responded' stays
+    // included: the sender's case isn't done until a supervisor
+    // actually closes it.
     async countSent(userId) {
       const db = getSupabase();
       const { count, error } = await db.from('requests')
         .select('id', { count: 'exact', head: true })
-        .eq('created_by', userId);
+        .eq('created_by', userId)
+        .not('status', 'in', '(closed,cancelled)');
       if (error) throw wrapRowError(error);
       return count || 0;
     },
