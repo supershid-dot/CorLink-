@@ -232,8 +232,15 @@ const DashboardView = {
 
       // "Responses not received from other organizations" — the other
       // org already sent their reply, this org hasn't acknowledged it.
-      const responseNotReceived = sent.filter(r => (r.responses || []).some(resp => resp.status === 'sent' && !resp.received_at)).length;
-      rows.push({ icon: 'ti-mail-opened', label: 'Reply Received — Acknowledge & Close', count: responseNotReceived, href: '#requests?tab=sent&view=needs_action' });
+      // Gated behind isSupervisor/canReceive: unlike every other row
+      // here, this one previously had no such gate at all, so a plain
+      // staff member with neither role saw a nonzero count for an
+      // action the Next Step banner (request-detail.js) never actually
+      // offers them a button for — a dead-end click, not a real task.
+      if (this._isSupervisor || this._canReceive) {
+        const responseNotReceived = sent.filter(r => (r.responses || []).some(resp => resp.status === 'sent' && !resp.received_at)).length;
+        rows.push({ icon: 'ti-mail-opened', label: 'Reply Received — Acknowledge & Close', count: responseNotReceived, href: '#requests?tab=sent&view=needs_action' });
+      }
 
       if (mySections.length > 0) {
         const sectionIds = mySections.map(s => s.id);
