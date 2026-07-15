@@ -298,7 +298,6 @@ const RequestsView = {
   // "what needs ME right now" is the default, because that's the
   // question people open this tab to answer.
   _inboxViews() {
-    const today = new Date().toISOString().slice(0, 10);
     const me = this._user.id;
     const supIds = new Set((this._mySupervisedSections || []).map(s => s.id));
     const isAdmin = AppShell.isAdmin(this._user);
@@ -320,7 +319,7 @@ const RequestsView = {
           ['received', 'in_progress'].includes(r.status)
           || (r.status === 'overdue' && !(r.responses || []).some(x => x.status === 'sent')) },
       { key: 'drafts', label: 'Response Drafts', test: r => (r.responses || []).some(x => ['draft', 'pending_approval'].includes(x.status)) },
-      { key: 'overdue', label: 'Overdue', test: r => !!r.deadline && r.deadline < today && !['closed', 'responded', 'cancelled'].includes(r.status) },
+      { key: 'overdue', label: 'Overdue', test: r => RequestsView._isDeadlineOverdue(r.deadline, r.status) },
       { key: 'looped_in', label: 'Looped In', test: r => (this._myLoopedInRequestIds || new Set()).has(r.id) },
       { key: 'closed', label: 'Completed', test: r => ['responded', 'closed'].includes(r.status) },
       { key: 'cancelled', label: 'Cancelled', test: r => r.status === 'cancelled' },
@@ -329,7 +328,6 @@ const RequestsView = {
   },
 
   _sentViews() {
-    const today = new Date().toISOString().slice(0, 10);
     const me = this._user.id;
     return [
       {
@@ -353,7 +351,7 @@ const RequestsView = {
       // and this chip would stop meaning "I have a reply to look at"
       // and start meaning "this case has ever had a reply, ever."
       { key: 'reply_received', label: 'Reply Received', test: r => (r.responses || []).some(x => x.status === 'sent') && r.status !== 'closed' },
-      { key: 'overdue', label: 'Overdue', test: r => !!r.deadline && r.deadline < today && !['closed', 'responded', 'cancelled'].includes(r.status) },
+      { key: 'overdue', label: 'Overdue', test: r => RequestsView._isDeadlineOverdue(r.deadline, r.status) },
       { key: 'looped_in', label: 'Looped In', test: r => (this._myLoopedInRequestIds || new Set()).has(r.id) },
       { key: 'closed', label: 'Closed', test: r => r.status === 'closed' },
       { key: 'cancelled', label: 'Cancelled', test: r => r.status === 'cancelled' },
@@ -369,7 +367,6 @@ const RequestsView = {
   // still writing doesn't get miscounted as an unstarted reply: "Drafts"
   // and "Sent" each check both sides explicitly instead.
   _teamFilters() {
-    const today = new Date().toISOString().slice(0, 10);
     const staffId = this._state.teamStaffId;
     return [
       { key: 'all', label: 'All', test: () => true },
@@ -386,7 +383,7 @@ const RequestsView = {
           r.status !== 'closed'
           && ((r.created_by === staffId && r.status === 'sent')
           || (r.responses || []).some(resp => resp.status === 'sent')) },
-      { key: 'overdue', label: 'Overdue', test: r => !!r.deadline && r.deadline < today && !['closed', 'responded', 'cancelled'].includes(r.status) },
+      { key: 'overdue', label: 'Overdue', test: r => RequestsView._isDeadlineOverdue(r.deadline, r.status) },
       { key: 'closed', label: 'Closed', test: r => ['responded', 'closed'].includes(r.status) },
       { key: 'cancelled', label: 'Cancelled', test: r => r.status === 'cancelled' },
     ];
@@ -912,9 +909,7 @@ const RequestsView = {
   // where most status badges render, but exposed via the view object
   // rather than duplicated.
   _statusBadge(status, deadline) {
-    const today = new Date().toISOString().slice(0, 10);
-    const isOverdue = !!deadline && deadline < today && !['closed', 'responded', 'cancelled'].includes(status);
-    if (isOverdue) return `<span class="badge badge-error">Overdue</span>`;
+    if (this._isDeadlineOverdue(deadline, status)) return `<span class="badge badge-error">Overdue</span>`;
 
     const map = {
       draft:             ['Draft', 'badge-muted'],
@@ -943,16 +938,70 @@ const RequestsView = {
   // does its own JS-side clamping too, since the native max attribute
   // alone doesn't stop a typed-in date or a days-derived date from
   // exceeding it in every browser.
+  // Time of day a date-only deadline defaults to (24-hour). Users can
+  // override it in the time input; a bare date lands at noon.
+  _defaultDeadlineTime: '12:00',
+
+  // Split a stored deadline (a TIMESTAMPTZ / ISO string, or a legacy bare
+  // 'YYYY-MM-DD') into the local date + time parts the two inputs use.
+  _deadlineParts(value) {
+    if (!value) return { date: '', time: this._defaultDeadlineTime };
+    const d = new Date(value);
+    if (isNaN(d.getTime())) {
+      // Not a full timestamp — treat as a plain calendar date.
+      return { date: String(value).slice(0, 10), time: this._defaultDeadlineTime };
+    }
+    const pad = (n) => String(n).padStart(2, '0');
+    return {
+      date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+      time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+    };
+  },
+
+  // Combine a date input (YYYY-MM-DD) + time input (HH:MM) into an ISO
+  // timestamp for storage. No date → null (no deadline); no time → noon.
+  // The date+time are read as local wall-clock, so a Maldives browser
+  // stores Maldives time — consistent with how everything else in the
+  // app formats timestamps (local, via new Date()).
+  _combineDeadline(dateStr, timeStr) {
+    if (!dateStr) return null;
+    const d = new Date(`${dateStr}T${timeStr || this._defaultDeadlineTime}`);
+    return isNaN(d.getTime()) ? null : d.toISOString();
+  },
+
+  // "YYYY-MM-DD HH:MM" (24-hour, local) for display.
+  _formatDeadline(value) {
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return String(value);
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  },
+
+  // Single source of truth for "past its deadline" — now keyed off the
+  // exact instant (deadline carries a time of day), not end-of-day.
+  // Shared by _statusBadge, _deadlineCell and every Overdue filter chip.
+  _isDeadlineOverdue(deadline, status) {
+    return !!deadline
+      && !['closed', 'responded', 'cancelled'].includes(status)
+      && new Date(deadline).getTime() < Date.now();
+  },
+
   _deadlineFieldHtml(value = '', maxDate = null) {
+    const { date, time } = this._deadlineParts(value);
+    // Native date `max` only understands a calendar date, so cap on the
+    // parent deadline's date part; the exact-time cap is enforced on submit.
+    const maxD = maxDate ? this._deadlineParts(maxDate).date : null;
+    const capHint = maxD ? `, no later than ${maxD}` : '';
     return `
       <div class="field-group">
         <label class="field-label">Deadline (optional)</label>
         <div class="deadline-input-row">
           <input class="field-input-plain deadline-days-input" type="number" min="1" max="365" placeholder="Days" data-deadline-days />
           <span class="deadline-input-or">or</span>
-          <input class="field-input-plain" type="date" name="deadline" value="${value}" data-deadline-date ${maxDate ? `max="${maxDate}"` : ''} />
+          <input class="field-input-plain deadline-date-input" type="date" name="deadline" value="${date}" data-deadline-date ${maxD ? `max="${maxD}"` : ''} />
+          <input class="field-input-plain deadline-time-input" type="time" name="deadlineTime" value="${time}" data-deadline-time aria-label="Deadline time (24-hour)" />
         </div>
-        <div class="field-hint" data-deadline-hint>${maxDate ? `Enter a number of days or pick an end date, no later than ${maxDate}.` : 'Enter a number of days or pick an end date.'}</div>
+        <div class="field-hint" data-deadline-hint>Enter a number of days or pick an end date${capHint}. Time is 24-hour, defaults to ${this._defaultDeadlineTime}.</div>
       </div>
     `;
   },
@@ -962,16 +1011,21 @@ const RequestsView = {
     const dateEl = form.querySelector('[data-deadline-date]');
     const hintEl = form.querySelector('[data-deadline-hint]');
     if (!daysEl || !dateEl) return;
+    // maxDate arrives as an ISO timestamp (the parent request's deadline);
+    // the day-level clamp below only compares calendar dates, so reduce it
+    // to its date part. The exact-time cap is enforced on submit.
+    const maxD = maxDate ? this._deadlineParts(maxDate).date : null;
     const MS_DAY = 86400000;
     // Same UTC-date convention as every other deadline comparison in
     // this file (new Date().toISOString().slice(0, 10)).
     const todayStart = () => new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00');
     const diffDays = (dateStr) => Math.round((new Date(dateStr + 'T00:00:00') - todayStart()) / MS_DAY);
-    const defaultHint = maxDate ? `Enter a number of days or pick an end date, no later than ${maxDate}.` : 'Enter a number of days or pick an end date.';
+    const capHint = maxD ? `, no later than ${maxD}` : '';
+    const defaultHint = `Enter a number of days or pick an end date${capHint}. Time is 24-hour, defaults to ${this._defaultDeadlineTime}.`;
     const updateHint = () => {
       if (!dateEl.value) { hintEl.textContent = defaultHint; return; }
-      if (maxDate && dateEl.value > maxDate) {
-        hintEl.textContent = `That date is after the case's own deadline (${maxDate}) — pick an earlier date.`;
+      if (maxD && dateEl.value > maxD) {
+        hintEl.textContent = `That date is after the case's own deadline (${maxD}) — pick an earlier date.`;
         return;
       }
       const diff = diffDays(dateEl.value);
@@ -983,12 +1037,12 @@ const RequestsView = {
       const days = parseInt(daysEl.value, 10);
       if (!days || days < 1) { updateHint(); return; }
       let candidate = new Date(todayStart().getTime() + days * MS_DAY).toISOString().slice(0, 10);
-      if (maxDate && candidate > maxDate) candidate = maxDate;
+      if (maxD && candidate > maxD) candidate = maxD;
       dateEl.value = candidate;
       updateHint();
     });
     dateEl.addEventListener('change', () => {
-      if (maxDate && dateEl.value > maxDate) dateEl.value = maxDate;
+      if (maxD && dateEl.value > maxD) dateEl.value = maxD;
       if (dateEl.value) {
         const diff = diffDays(dateEl.value);
         daysEl.value = diff > 0 ? diff : '';
@@ -1004,12 +1058,28 @@ const RequestsView = {
   // date (nothing is "remaining" on a finished case).
   _deadlineCell(deadline, status) {
     if (!deadline) return '—';
-    if (['closed', 'responded', 'cancelled'].includes(status)) return deadline;
-    const today = new Date().toISOString().slice(0, 10);
-    const diff = Math.round((new Date(deadline + 'T00:00:00') - new Date(today + 'T00:00:00')) / 86400000);
-    const label = diff < 0 ? `overdue ${-diff}d` : diff === 0 ? 'due today' : `${diff}d left`;
-    const cls = diff < 0 ? ' deadline-remaining--overdue' : diff <= 2 ? ' deadline-remaining--soon' : '';
-    return `${deadline} <span class="deadline-remaining${cls}">${label}</span>`;
+    const formatted = this._formatDeadline(deadline);
+    if (['closed', 'responded', 'cancelled'].includes(status)) return formatted;
+    const dl = new Date(deadline);
+    const now = new Date();
+    // Overdue is exact-instant (the deadline carries a time); the chip's
+    // "Xd left / overdue Xd" wording stays whole-day, measured between
+    // local calendar dates so it reads naturally.
+    const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const dayDiff = Math.round((startOfDay(dl) - startOfDay(now)) / 86400000);
+    let label, cls;
+    if (dl.getTime() < now.getTime()) {
+      const late = Math.max(0, -dayDiff);
+      label = late > 0 ? `overdue ${late}d` : 'overdue';
+      cls = ' deadline-remaining--overdue';
+    } else if (dayDiff === 0) {
+      label = 'due today';
+      cls = ' deadline-remaining--soon';
+    } else {
+      label = `${dayDiff}d left`;
+      cls = dayDiff <= 2 ? ' deadline-remaining--soon' : '';
+    }
+    return `${formatted} <span class="deadline-remaining${cls}">${label}</span>`;
   },
 
   // ── Loop In Staff (CC) ──────────────────────────────────────────
@@ -1214,7 +1284,7 @@ const RequestsView = {
     this._bindDeadlineField(form);
     this._bindLoopInField(form, loopInUsers);
     DraftAutosave.autoSaveForm(form, 'compose-request', editor, {
-      fieldNames: ['toOrgId', 'fromSectionId', 'subject', 'deadline'],
+      fieldNames: ['toOrgId', 'fromSectionId', 'subject', 'deadline', 'deadlineTime'],
       langToggles: [
         { name: 'subjectLanguage', onChange: syncSubjectLang },
         { name: 'language', onChange: syncMessageLang },
@@ -1285,7 +1355,7 @@ const RequestsView = {
           subjectLanguage: fd.get('subjectLanguage'),
           body,
           language: fd.get('language'),
-          deadline: fd.get('deadline') || null,
+          deadline: this._combineDeadline(fd.get('deadline'), fd.get('deadlineTime')),
         });
         const failures = [];
         for (const file of this._pendingFiles) {

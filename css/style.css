@@ -1257,6 +1257,7 @@ p  { line-height: 1.6; }
 }
 .deadline-date-month { display: block; font-size: 0.625rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
 .deadline-date-day { display: block; font-size: 1.0625rem; font-weight: 700; }
+.deadline-date-time { display: block; font-size: 0.5625rem; font-weight: 600; opacity: .8; letter-spacing: .02em; }
 .deadline-date--error     { background: var(--color-error-bg);     color: var(--color-error-dark); }
 .deadline-date--warning   { background: var(--color-warning-bg);   color: var(--color-warning-dark); }
 .deadline-date--secondary { background: var(--color-secondary-light); color: var(--color-secondary-dark); }
@@ -1505,13 +1506,15 @@ input.field-divehi, textarea.field-divehi, select.field-divehi {
   gap: 6px;
 }
 
-/* ── Deadline entry: days OR end date, kept in sync ──────────── */
+/* ── Deadline entry: days OR end date + time, kept in sync ─────── */
 .deadline-input-row {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex-wrap: wrap;
 }
 .deadline-days-input { max-width: 110px; }
+.deadline-time-input { max-width: 130px; }
 .deadline-input-or {
   color: var(--color-text-muted);
   font-size: 0.8125rem;

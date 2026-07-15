@@ -334,6 +334,21 @@ match what changed since, instead of re-running the full files:
   briefly locks writes on each table — run in a quiet window, or use
   `CREATE INDEX CONCURRENTLY` (which can't run in the patch's transaction
   block) if that matters for your deployment.
+- `supabase/patch-deadline-time.sql` — gives request deadlines a time of
+  day. Widens `requests.deadline` and `internal_requests.deadline` from
+  `DATE` to `TIMESTAMPTZ` so a deadline can be, e.g., "due 2026-07-20
+  16:30". The compose/edit forms now show a 24-hour time input next to the
+  date/days input; a date entered without a time defaults to 12:00 (noon).
+  Overdue is now keyed off the exact instant rather than end-of-day, both
+  in the UI (`new Date(deadline) < now`) and in `check_deadlines()` — so
+  **re-run `supabase/notifications.sql`** too, which now compares
+  `deadline < NOW()` (was `< CURRENT_DATE`) and formats the deadline with
+  its time in the overdue notification. Existing date-only rows migrate to
+  12:00 Maldives time (UTC+5), matching the noon default, so nothing
+  silently becomes due at 00:00. The patch is idempotent — each `ALTER` is
+  guarded to fire only while the column is still `DATE`. `prisoner_letters.
+  deadline` and `deadline_extensions.new_deadline` are intentionally left
+  as `DATE` (no UI surfaces a time for them).
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 
