@@ -1434,9 +1434,64 @@ input.field-divehi, textarea.field-divehi, select.field-divehi {
   transition: color var(--transition), border-color var(--transition);
   flex-shrink: 0;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .tab-btn:hover { color: var(--color-text); }
 .tab-btn--active { color: var(--color-primary-dark); border-bottom-color: var(--color-primary); }
+
+/* "Needs my action" count pill on a top-level tab (Inbox/Sent/Approvals/
+   Info Requests). Hidden via the [hidden] attribute when the count is 0,
+   so a tab with nothing outstanding stays clean. Reads as a quiet muted
+   pill until its tab is active, when it picks up the primary accent to
+   match the active underline. */
+.tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 0.6875rem;
+  font-weight: 700;
+}
+.tab-btn--active .tab-count { background: var(--color-primary); color: #fff; }
+
+/* "Needs my action" count on the Requests nav item, painted by
+   AppShell.loadActionCount() on every page so pending work is visible
+   from anywhere (the task equivalent of the notification bell). Primary
+   accent, NOT the notif bell's red — this is "you have things to do,"
+   not "something happened." Hidden via [hidden] when the count is 0. */
+.nav-action-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+  color: #fff;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.sidebar-link .nav-action-badge { margin-left: auto; }       /* push to the far right of the row */
+.topbar-link .nav-action-badge { margin-left: 6px; vertical-align: middle; }
+/* Bottom nav: small overlay on the corner of the icon. */
+.bottom-nav-icon-wrap { position: relative; display: inline-flex; }
+.nav-action-badge--corner {
+  position: absolute;
+  top: -6px; left: 100%;
+  transform: translateX(-45%);
+  min-width: 15px; height: 15px;
+  padding: 0 4px;
+  font-size: 0.5625rem;
+}
 
 /* Sub-tabs INSIDE a tab (Approvals: Requests | Responses) — same
    control, slightly smaller, sitting under the search box rather than
@@ -2402,6 +2457,11 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
 .next-step-banner--action  { border-left-color: var(--color-primary); background: var(--color-primary-light); }
 .next-step-banner--waiting { border-left-color: var(--color-border); background: var(--color-bg); }
 .next-step-banner--done    { border-left-color: var(--color-success); background: var(--color-success-bg); }
+/* Slimmer variant for the per-row banner inside an Internal Collaboration
+   request (which can stack several rows) — less padding, tighter margin,
+   smaller title than the one page-level banner up top. */
+.next-step-banner--compact { padding: 9px 13px; margin-bottom: 12px; border-radius: var(--radius); }
+.next-step-banner--compact .next-step-title { font-size: 0.875rem; }
 .next-step-text { min-width: 0; flex: 1 1 240px; }
 .next-step-title { font-weight: 600; overflow-wrap: break-word; }
 .next-step-sub {

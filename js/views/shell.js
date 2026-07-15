@@ -89,9 +89,9 @@ const AppShell = {
   sidebarHtml(user, activeRoute) {
     const admin = this.isAdmin(user);
     const canLetters = this.canAccessPrisonerLetters(user);
-    const item = (route, label, icon) =>
+    const item = (route, label, icon, withBadge) =>
       `<a href="#${route}" class="sidebar-link${activeRoute === route ? ' sidebar-link--active' : ''}">
-        <i class="ti ${icon}"></i><span>${label}</span>
+        <i class="ti ${icon}"></i><span>${label}</span>${withBadge ? '<span class="nav-action-badge" data-action-badge hidden></span>' : ''}
       </a>`;
 
     return `
@@ -105,7 +105,7 @@ const AppShell = {
         </div>
         <nav class="sidebar-nav">
           ${item('dashboard', 'Dashboard', 'ti-layout-dashboard')}
-          ${item('requests', 'Requests', 'ti-inbox')}
+          ${item('requests', 'Requests', 'ti-inbox', true)}
           ${item('entry', 'Entry', 'ti-mailbox')}
           ${canLetters ? item('prisoner-letters', 'Prisoner Letters', 'ti-mail') : ''}
           ${admin ? item('admin', 'Administration', 'ti-settings') : ''}
@@ -125,8 +125,8 @@ const AppShell = {
     const name = user.full_name;
     const admin = this.isAdmin(user);
     const canLetters = this.canAccessPrisonerLetters(user);
-    const link = (route, label) =>
-      `<a href="#${route}" class="topbar-link${activeRoute === route ? ' topbar-link--active' : ''}">${label}</a>`;
+    const link = (route, label, withBadge) =>
+      `<a href="#${route}" class="topbar-link${activeRoute === route ? ' topbar-link--active' : ''}">${label}${withBadge ? '<span class="nav-action-badge" data-action-badge hidden></span>' : ''}</a>`;
 
     return `
       ${this.sidebarHtml(user, activeRoute)}
@@ -137,7 +137,7 @@ const AppShell = {
         </div>
         <nav class="topbar-nav" id="topbar-nav">
           ${link('dashboard', 'Dashboard')}
-          ${link('requests', 'Requests')}
+          ${link('requests', 'Requests', true)}
           ${link('entry', 'Entry')}
           ${canLetters ? link('prisoner-letters', 'Letters') : ''}
           ${admin ? link('admin', 'Admin') : ''}
@@ -206,16 +206,16 @@ const AppShell = {
   bottomNavHtml(user, activeRoute) {
     const admin = this.isAdmin(user);
     const canLetters = this.canAccessPrisonerLetters(user);
-    const item = (route, label, icon) =>
+    const item = (route, label, icon, withBadge) =>
       `<a href="#${route}" class="bottom-nav-item${activeRoute === route ? ' bottom-nav-item--active' : ''}">
-        <i class="ti ${icon}"></i>
+        <span class="bottom-nav-icon-wrap"><i class="ti ${icon}"></i>${withBadge ? '<span class="nav-action-badge nav-action-badge--corner" data-action-badge hidden></span>' : ''}</span>
         <span>${label}</span>
       </a>`;
 
     return `
       <nav class="bottom-nav">
         ${item('dashboard', 'Home', 'ti-home')}
-        ${item('requests', 'Requests', 'ti-inbox')}
+        ${item('requests', 'Requests', 'ti-inbox', true)}
         ${item('entry', 'Entry', 'ti-mailbox')}
         ${canLetters ? item('prisoner-letters', 'Letters', 'ti-mail') : ''}
         ${admin ? item('admin', 'Admin', 'ti-settings') : ''}
@@ -295,7 +295,28 @@ const AppShell = {
     });
 
     this.loadNotifications();
+    this.loadActionCount();
     this._subscribeRealtime();
+  },
+
+  // Paints the "needs my action" total on the Requests nav item (sidebar,
+  // topbar, and bottom nav all carry a [data-action-badge] span). Runs on
+  // every page load via bindTopbar, same as the notification count — so
+  // the number is visible from anywhere, not just the Requests page, and
+  // refreshes whenever the user navigates or a view re-renders. The count
+  // itself comes from RequestsView so it reuses the exact needs_action
+  // predicates the Requests chips/tab-badges use (no drift).
+  async loadActionCount() {
+    if (typeof RequestsView === 'undefined' || !RequestsView.actionNeededCount) return;
+    try {
+      const count = await RequestsView.actionNeededCount();
+      document.querySelectorAll('[data-action-badge]').forEach(el => {
+        if (count > 0) { el.textContent = count > 99 ? '99+' : String(count); el.hidden = false; }
+        else { el.textContent = ''; el.hidden = true; }
+      });
+    } catch (err) {
+      console.error('CorLink: failed to load action count', err);
+    }
   },
 
   // Global topbar search — reachable from any view. Deliberately queries

@@ -1052,8 +1052,49 @@ const RequestDetailView = {
       : canCloseNow ? 'close'
       : null;
 
+    // Plain-language "what's needed next" banner at the top of the row —
+    // same tone semantics as the external Next Step banner (green when
+    // it's YOUR move, neutral when you're waiting on someone else). The
+    // action buttons stay in the row below; this just names which move
+    // matters right now, and which reply (if any) needs attention.
+    const meId = this._user.id;
+    const toSecName = this._escapeHtml(ir.to_section?.name || 'the section');
+    let nextStep = null;
+    if (ir.status === 'closed') {
+      nextStep = null; // resolved — no banner once it's done
+    } else if (canReceiveNow) {
+      nextStep = { tone: 'action', title: 'New information request — mark it received', sub: 'Then assign it and draft a reply.' };
+    } else if (canAssignNow && !ir.assigned_to) {
+      nextStep = { tone: 'action', title: 'Assign this to a staff member' };
+    } else if (openReply && openReply.reply.status === 'pending_approval') {
+      if (canApproveReturn) nextStep = { tone: 'action', title: 'A reply is awaiting your approval', sub: 'Review it below — approve &amp; send, or return it.' };
+      else if (openReply.reply.created_by === meId) nextStep = { tone: 'waiting', title: 'Reply submitted — awaiting approval' };
+      else nextStep = { tone: 'waiting', title: 'A reply is awaiting approval' };
+    } else if (openReply && openReply.reply.status === 'draft') {
+      if (openReply.reply.created_by === meId) nextStep = { tone: 'action', title: 'Finish your reply draft', sub: 'Submit it for approval below when it\'s ready.' };
+      else nextStep = { tone: 'waiting', title: 'A reply is being drafted' };
+    } else if (canReplyBtn) {
+      nextStep = { tone: 'action', title: 'Draft your reply' };
+    } else if (ir.status === 'in_progress' && ir.assigned_to && ir.assigned_to !== meId) {
+      nextStep = { tone: 'waiting', title: 'Assigned — a reply is in progress' };
+    } else if (ir.status === 'responded') {
+      if (canCloseNow) nextStep = { tone: 'action', title: `Reply received from ${toSecName} — acknowledge &amp; close` };
+      else nextStep = { tone: 'waiting', title: 'Replied — awaiting the asking section to close it' };
+    } else if (isCreatorSide) {
+      nextStep = ir.status === 'sent'
+        ? { tone: 'waiting', title: `Waiting for ${toSecName} to receive this` }
+        : { tone: 'waiting', title: `Waiting on ${toSecName} to respond` };
+    }
+
     return `
       <div class="internal-request-row" data-internal-request="${ir.id}">
+        ${nextStep ? `
+        <div class="next-step-banner next-step-banner--${nextStep.tone} next-step-banner--compact">
+          <div class="next-step-text">
+            <div class="next-step-title">${nextStep.title}</div>
+            ${nextStep.sub ? `<div class="next-step-sub">${nextStep.sub}</div>` : ''}
+          </div>
+        </div>` : ''}
         <div class="thread-message-header thread-message-header--split">
           <div class="thread-message-header-meta">
             <span class="structure-empty">${ir.from_section?.name || ''} → ${ir.to_section?.name || ''}</span>
