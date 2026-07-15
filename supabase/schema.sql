@@ -668,6 +668,31 @@ CREATE INDEX idx_requests_parent        ON requests(parent_request_id) WHERE par
 CREATE INDEX idx_responses_request_id   ON responses(request_id);
 CREATE INDEX idx_approvals_record       ON approvals(record_type, record_id);
 CREATE INDEX idx_attachments_record     ON attachments(record_type, record_id);
+
+-- Participant columns the users_select_correspondence RLS policy filters
+-- by. Every embedded users(...) join on the request-detail page (and
+-- anywhere else that resolves a name via a FK) makes Postgres apply that
+-- policy per user row; its body does EXISTS(SELECT 1 FROM requests WHERE
+-- created_by = users.id OR assigned_to = users.id OR received_by =
+-- users.id ...) — plus the same shape against responses/approvals/
+-- prisoner_letters/prisoner_replies. Without an index on each of those
+-- columns, that EXISTS is a SEQUENTIAL SCAN of the whole table, re-run
+-- once per user being resolved, and its cost grows linearly with the
+-- table — which is why the request-detail "canceling statement due to
+-- statement timeout" kept coming back as the data grew even after the
+-- earlier missing-index patches. Separate single-column indexes let
+-- Postgres BitmapOr them instead of scanning. (Verified against a
+-- 5k-request / 30k-audit local dataset: a cross-org user resolution
+-- dropped from a 12,973-cost seq scan to a 424-cost bitmap scan.)
+CREATE INDEX idx_requests_created_by     ON requests(created_by);
+CREATE INDEX idx_requests_assigned_to    ON requests(assigned_to);
+CREATE INDEX idx_requests_received_by    ON requests(received_by);
+CREATE INDEX idx_responses_created_by    ON responses(created_by);
+CREATE INDEX idx_responses_received_by   ON responses(received_by);
+CREATE INDEX idx_approvals_reviewed_by   ON approvals(reviewed_by);
+CREATE INDEX idx_prisoner_letters_submitted_by ON prisoner_letters(submitted_by);
+CREATE INDEX idx_prisoner_letters_assigned_to  ON prisoner_letters(assigned_to);
+CREATE INDEX idx_prisoner_replies_replied_by   ON prisoner_replies(replied_by);
 CREATE INDEX idx_internal_requests_parent    ON internal_requests(parent_request_id);
 CREATE INDEX idx_internal_request_replies_ir ON internal_request_replies(internal_request_id);
 CREATE INDEX idx_review_comments_record      ON review_comments(record_type, record_id);

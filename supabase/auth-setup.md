@@ -310,6 +310,30 @@ match what changed since, instead of re-running the full files:
   real local Postgres instance: deleting your own attachment on a
   still-draft request succeeds; deleting your own attachment on a
   locked/sent request now deletes 0 rows.
+- `supabase/patch-participant-column-indexes.sql` — third and (measured)
+  final root cause behind the recurring "Couldn't load this request:
+  canceling statement due to statement timeout" on the request-detail
+  page. The two earlier timeout patches (`patch-missing-indexes.sql`,
+  `patch-rls-scope-indexes.sql`) narrowed candidate rows and sped up the
+  section-hierarchy expansion; this one fixes a *different* cost that
+  scales linearly with total data volume — which is why the timeout kept
+  returning as history accumulated. Every embedded `users(...)` name
+  resolution on the page makes Postgres apply `users_select_correspondence`,
+  whose body does `EXISTS (SELECT 1 FROM requests WHERE created_by =
+  users.id OR assigned_to = users.id OR received_by = users.id ...)` — and
+  the same OR-of-participant-columns shape against responses/approvals/
+  prisoner_letters/prisoner_replies. None of those participant columns
+  were indexed, so each EXISTS was a full sequential scan of the table,
+  re-run once per user resolved and getting slower as the table grew.
+  Adds a single-column index on each so Postgres BitmapOrs index scans
+  instead. Indexes only — no behavior change. Verified against a
+  5,000-request / 30,000-audit_logs local dataset: one cross-org user
+  resolution dropped from a 12,973-cost sequential scan on `requests` to
+  a 424-cost bitmap index scan (and the latent `responses` branch from
+  251,269 to 5,118). Idempotent (`IF NOT EXISTS`). Note: `CREATE INDEX`
+  briefly locks writes on each table — run in a quiet window, or use
+  `CREATE INDEX CONCURRENTLY` (which can't run in the patch's transaction
+  block) if that matters for your deployment.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 
