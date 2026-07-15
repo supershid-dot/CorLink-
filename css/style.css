@@ -1434,9 +1434,32 @@ input.field-divehi, textarea.field-divehi, select.field-divehi {
   transition: color var(--transition), border-color var(--transition);
   flex-shrink: 0;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .tab-btn:hover { color: var(--color-text); }
 .tab-btn--active { color: var(--color-primary-dark); border-bottom-color: var(--color-primary); }
+
+/* "Needs my action" count pill on a top-level tab (Inbox/Sent/Approvals/
+   Info Requests). Hidden via the [hidden] attribute when the count is 0,
+   so a tab with nothing outstanding stays clean. Reads as a quiet muted
+   pill until its tab is active, when it picks up the primary accent to
+   match the active underline. */
+.tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 0.6875rem;
+  font-weight: 700;
+}
+.tab-btn--active .tab-count { background: var(--color-primary); color: #fff; }
 
 /* Sub-tabs INSIDE a tab (Approvals: Requests | Responses) — same
    control, slightly smaller, sitting under the search box rather than

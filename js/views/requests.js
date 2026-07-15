@@ -98,11 +98,71 @@ const RequestsView = {
 
     container.innerHTML = this._shell();
     this._bindShell();
+
+    // Kick off the per-tab "Needs My Action" counts (the badge on each
+    // tab). Each countable tab's data is fetched once, up front, and the
+    // promises are STORED so the tab renderers below reuse them instead
+    // of fetching a second time — the tab you land on consumes its own
+    // prefetched promise. Counts use the exact same needs_action
+    // predicate the chips do, so a tab badge and its default chip never
+    // disagree. Not awaited: the tabs render immediately and each badge
+    // fills in when its query returns.
+    this._prefetch = {
+      inbox: RequestsAPI.listInbox(this._user.org_id),
+      sent: RequestsAPI.listSent(this._user.org_id),
+    };
+    if (this._isSupervisor) {
+      this._prefetch.approvals = Promise.all([
+        RequestsAPI.listPendingApprovals(this._user.org_id),
+        RequestsAPI.listPendingResponseApprovals(this._user.org_id),
+      ]).then(([requestApprovals, responseApprovals]) => ({ requestApprovals, responseApprovals }));
+    }
+    if (this._mySections.length > 0) {
+      this._prefetch.info = InternalRequestsAPI.listOutstandingForSections(this._mySections.map(s => s.id));
+    }
+    this._loadTabCounts();
+
     await this._renderTab();
 
     // Deep-link from the dashboard's "New Request" quick action, e.g.
     // #requests?action=compose — same modal the compose-btn opens.
     if (params.action === 'compose') this._openComposeModal();
+  },
+
+  // Fills the count badge on each tab with its "unfinished, needs me"
+  // total. Attaches to the prefetched promises synchronously (before any
+  // tab renderer can consume/clear them), then updates each badge when
+  // its query resolves. A count of 0 hides the badge rather than showing
+  // a "0" — a tab is navigation, not a filter toggle like the chips.
+  _loadTabCounts() {
+    const setBadge = (tab, count) => {
+      const el = document.querySelector(`[data-tab-count="${tab}"]`);
+      if (!el) return;
+      if (count > 0) { el.textContent = count; el.hidden = false; }
+      else { el.textContent = ''; el.hidden = true; }
+    };
+    const inboxNeeds = this._inboxViews().find(v => v.key === 'needs_action');
+    this._prefetch.inbox
+      .then(({ items }) => setBadge('inbox', items.filter(inboxNeeds.test).length))
+      .catch(() => {});
+    const sentNeeds = this._sentViews().find(v => v.key === 'needs_action');
+    this._prefetch.sent
+      .then(({ items }) => setBadge('sent', items.filter(sentNeeds.test).length))
+      .catch(() => {});
+    if (this._prefetch.approvals) {
+      this._prefetch.approvals
+        .then(({ requestApprovals, responseApprovals }) => setBadge('approvals', requestApprovals.length + responseApprovals.length))
+        .catch(() => {});
+    }
+    if (this._prefetch.info) {
+      // "Awaiting Your Reply" only — the queue where MY section owes a
+      // reply, matching the Info Requests tab's own default sub-tab.
+      // "Awaiting Their Reply" is something I'm waiting ON, not a task on me.
+      const mySet = new Set((this._mySections || []).map(s => s.id));
+      this._prefetch.info
+        .then(items => setBadge('info', items.filter(ir => mySet.has(ir.to_section_id)).length))
+        .catch(() => {});
+    }
   },
 
   bind() {
@@ -124,10 +184,10 @@ const RequestsView = {
           </div>
 
           <div class="tabs" id="requests-tabs">
-            <button class="tab-btn" data-tab="inbox">Inbox</button>
-            <button class="tab-btn" data-tab="sent">Sent</button>
-            ${this._isSupervisor ? `<button class="tab-btn" data-tab="approvals">Approvals</button>` : ''}
-            ${this._mySections.length > 0 ? `<button class="tab-btn" data-tab="info">Info Requests</button>` : ''}
+            <button class="tab-btn" data-tab="inbox">Inbox<span class="tab-count" data-tab-count="inbox" hidden></span></button>
+            <button class="tab-btn" data-tab="sent">Sent<span class="tab-count" data-tab-count="sent" hidden></span></button>
+            ${this._isSupervisor ? `<button class="tab-btn" data-tab="approvals">Approvals<span class="tab-count" data-tab-count="approvals" hidden></span></button>` : ''}
+            ${this._mySections.length > 0 ? `<button class="tab-btn" data-tab="info">Info Requests<span class="tab-count" data-tab-count="info" hidden></span></button>` : ''}
             ${this._mySupervisedSections.length > 0 ? `<button class="tab-btn" data-tab="team">Team</button>` : ''}
           </div>
 
@@ -383,9 +443,18 @@ const RequestsView = {
   // which org embed they display.
   async _renderMailTab(content, kind) {
     const isInbox = kind === 'inbox';
-    const { items, totalCount } = isInbox
-      ? await RequestsAPI.listInbox(this._user.org_id)
-      : await RequestsAPI.listSent(this._user.org_id);
+    // Reuse the promise the tab-count prefetch already kicked off (consume
+    // once, then re-fetch fresh on later visits to this tab).
+    let result;
+    if (this._prefetch && this._prefetch[kind]) {
+      result = await this._prefetch[kind];
+      delete this._prefetch[kind];
+    } else {
+      result = isInbox
+        ? await RequestsAPI.listInbox(this._user.org_id)
+        : await RequestsAPI.listSent(this._user.org_id);
+    }
+    const { items, totalCount } = result;
     this[isInbox ? '_inboxItems' : '_sentItems'] = items;
     content.innerHTML = `
       <div class="list-toolbar">
@@ -533,10 +602,17 @@ const RequestsView = {
   // way to discover a drafted response awaiting approval was opening
   // the request it belonged to and noticing it there).
   async _renderApprovals(content) {
-    const [requestApprovals, responseApprovals] = await Promise.all([
-      RequestsAPI.listPendingApprovals(this._user.org_id),
-      RequestsAPI.listPendingResponseApprovals(this._user.org_id),
-    ]);
+    // Reuse the tab-count prefetch (consume once, re-fetch on later visits).
+    let requestApprovals, responseApprovals;
+    if (this._prefetch && this._prefetch.approvals) {
+      ({ requestApprovals, responseApprovals } = await this._prefetch.approvals);
+      delete this._prefetch.approvals;
+    } else {
+      [requestApprovals, responseApprovals] = await Promise.all([
+        RequestsAPI.listPendingApprovals(this._user.org_id),
+        RequestsAPI.listPendingResponseApprovals(this._user.org_id),
+      ]);
+    }
     this._approvalsData = { requestApprovals, responseApprovals };
     content.innerHTML = `
       ${this._searchBoxHtml('approvalsSearch', 'Search subject or message…', this._state.approvalsSearch)}
@@ -610,7 +686,13 @@ const RequestsView = {
   // open (see InternalRequestsAPI.listOutstandingForSections).
   async _renderInfoRequests(content) {
     const sectionIds = (this._mySections || []).map(s => s.id);
-    this._infoRequestItems = await InternalRequestsAPI.listOutstandingForSections(sectionIds);
+    // Reuse the tab-count prefetch (consume once, re-fetch on later visits).
+    if (this._prefetch && this._prefetch.info) {
+      this._infoRequestItems = await this._prefetch.info;
+      delete this._prefetch.info;
+    } else {
+      this._infoRequestItems = await InternalRequestsAPI.listOutstandingForSections(sectionIds);
+    }
     content.innerHTML = `
       ${this._searchBoxHtml('infoSearch', 'Search subject or message…', this._state.infoSearch)}
       <div id="info-results"></div>
