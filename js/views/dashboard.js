@@ -361,6 +361,12 @@ const DashboardView = {
     `;
   },
 
+  _escapeHtml(value) {
+    const div = document.createElement('div');
+    div.textContent = value == null ? '' : String(value);
+    return div.innerHTML;
+  },
+
   _renderUpcomingDeadlines(inbox, sent) {
     const listEl = document.getElementById('deadline-list');
     if (!listEl) return;
@@ -386,7 +392,7 @@ const DashboardView = {
           </div>
           <div class="deadline-row-body">
             <div class="deadline-row-ref">${r.reference_number || 'Draft'}</div>
-            <div class="deadline-row-subject"><span class="${RichEditor.dvClass(r.subject, r.subject_language)}">${r.subject}</span></div>
+            <div class="deadline-row-subject"><span class="${RichEditor.dvClass(r.subject, r.subject_language)}">${this._escapeHtml(r.subject)}</span></div>
           </div>
           <span class="deadline-row-status deadline-row-status--${urgency}">${statusLabel}</span>
         </a>

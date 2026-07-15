@@ -579,6 +579,50 @@ CREATE POLICY "users_update_admin" ON users
     (is_admin() AND org_id = get_my_org_id())
   );
 
+-- Neither UPDATE policy above has a WITH CHECK, so RLS alone only
+-- restricts which ROW a caller can touch, not which COLUMNS change on
+-- it — a self-service PATCH via users_update_own_prefs could otherwise
+-- set is_super_admin/org_id/is_active/is_prisoner_letters_staff on the
+-- caller's own row (self-escalation to super admin), and an org admin
+-- going through users_update_admin could do the same to any OTHER user
+-- in their org. Postgres RLS's WITH CHECK can't compare OLD vs NEW in
+-- one expression (it only sees the post-update row), so this needs a
+-- trigger, not a policy — same reason the status-transition guards on
+-- requests/responses/external_correspondence are triggers, not RLS.
+-- Lives here (not alongside those in schema.sql) because it calls
+-- is_admin()/is_super_admin(), which aren't defined until this file
+-- runs.
+--
+-- Two tiers, matching what the app's own admin UI actually does:
+--   - is_active / is_prisoner_letters_staff: org admins legitimately
+--     toggle these on their own org's users today (admin.js) — allowed
+--     for any is_admin().
+--   - is_super_admin / org_id: no UI flow ever touches these (super
+--     admin is granted once via create-super-admin.sql, and a user's
+--     org never changes post-creation) — restricted to is_super_admin()
+--     specifically, so an org admin can't grant themselves or anyone
+--     else super-admin, or move a user to a different org.
+CREATE OR REPLACE FUNCTION trigger_protect_privileged_user_columns()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF (NEW.is_super_admin IS DISTINCT FROM OLD.is_super_admin
+      OR NEW.org_id IS DISTINCT FROM OLD.org_id)
+     AND NOT is_super_admin() THEN
+    RAISE EXCEPTION 'Only a super admin can change is_super_admin or org_id on a user';
+  END IF;
+  IF (NEW.is_active IS DISTINCT FROM OLD.is_active
+      OR NEW.is_prisoner_letters_staff IS DISTINCT FROM OLD.is_prisoner_letters_staff)
+     AND NOT is_admin() THEN
+    RAISE EXCEPTION 'Only an admin can change privilege or account-status fields on a user';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS protect_privileged_user_columns ON users;
+CREATE TRIGGER protect_privileged_user_columns BEFORE UPDATE ON users
+  FOR EACH ROW EXECUTE FUNCTION trigger_protect_privileged_user_columns();
+
 -- ─── user_assignments ─────────────────────────────────────────
 -- Own assignments: always readable (needed to know your own roles/sections).
 -- Same-org assignments: readable (needed for routing, approval-chain display).
@@ -1642,8 +1686,62 @@ CREATE POLICY "attachments_insert" ON attachments
     )
   );
 
+-- Previously just uploaded_by = auth.uid(), with no lock/editability
+-- check at all — unlike attachments_insert (above), which blocks new
+-- uploads once the parent record is locked/sent/closed. That let an
+-- uploader delete their own attachment from a request/response AFTER
+-- it had been approved and sent (or an internal reply/Entry record
+-- after it left draft), silently removing evidence from what's
+-- supposed to be an immutable case record. Now mirrors
+-- attachments_insert's own per-record_type editability conditions
+-- exactly, so "can I delete this?" and "could I have uploaded this
+-- right now?" are the same question.
 CREATE POLICY "attachments_delete" ON attachments
-  FOR DELETE USING (uploaded_by = auth.uid());
+  FOR DELETE USING (
+    uploaded_by = auth.uid()
+    AND (
+      (record_type = 'request' AND EXISTS (
+        SELECT 1 FROM requests r WHERE r.id = record_id
+          AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
+          AND r.is_locked = FALSE
+      ))
+      OR (record_type = 'response' AND EXISTS (
+        SELECT 1 FROM responses re JOIN requests r ON r.id = re.request_id
+        WHERE re.id = record_id
+          AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
+          AND re.is_locked = FALSE
+      ))
+      OR (record_type = 'internal_request' AND EXISTS (
+        SELECT 1 FROM internal_requests ir WHERE ir.id = record_id
+          AND (
+            ir.from_section_id IN (SELECT my_section_ids())
+            OR ir.to_section_id IN (SELECT my_section_ids())
+            OR ir.created_by = auth.uid()
+          )
+      ))
+      OR (record_type = 'prisoner_letter' AND is_prisoner_letters_staff() AND EXISTS (
+        SELECT 1 FROM prisoner_letters pl WHERE pl.id = record_id
+          AND (pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
+      ))
+      OR (record_type = 'prisoner_reply' AND is_prisoner_letters_staff() AND EXISTS (
+        SELECT 1 FROM prisoner_replies pr JOIN prisoner_letters pl ON pl.id = pr.letter_id
+        WHERE pr.id = record_id
+          AND (pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
+      ))
+      OR (record_type = 'internal_reply' AND EXISTS (
+        SELECT 1 FROM internal_request_replies irr WHERE irr.id = record_id
+          AND irr.created_by = auth.uid() AND irr.status IN ('draft', 'pending_approval')
+      ))
+      OR (record_type = 'external_correspondence' AND EXISTS (
+        SELECT 1 FROM external_correspondence ec WHERE ec.id = record_id
+          AND ec.org_id = get_my_org_id() AND is_entry_staff(ec.org_id) AND ec.status != 'closed'
+      ))
+      OR (record_type = 'external_correspondence_reply' AND EXISTS (
+        SELECT 1 FROM external_correspondence_replies ecr WHERE ecr.id = record_id
+          AND ecr.created_by = auth.uid() AND ecr.status IN ('draft', 'pending_approval')
+      ))
+    )
+  );
 
 -- ─── prisoners (registry) ───────────────────────────────────
 -- Select used to be org-wide ("every MCS staffer needs to search the

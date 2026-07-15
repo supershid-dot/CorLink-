@@ -256,6 +256,60 @@ match what changed since, instead of re-running the full files:
   permissive policies' WITH CHECKs are OR'd, so that change was inert
   and the original narrow rule is restored. **Run this even if you ran
   every earlier patch — it supersedes the section-receiver one.**
+- `supabase/patch-protect-user-privilege-columns.sql` — closes a self
+  privilege-escalation gap: `users_update_own_prefs`
+  (`id = auth.uid()`) and `users_update_admin` both have USING but no
+  WITH CHECK, and RLS only restricts which ROW an UPDATE can touch, not
+  which COLUMNS change on it. Concretely, any authenticated user could
+  PATCH their own row with `{"is_super_admin": true}` (or
+  `org_id`/`is_active`/`is_prisoner_letters_staff`) via
+  `users_update_own_prefs` — still just `id = auth.uid()` on both
+  sides — and self-escalate to super admin; an org admin could do the
+  same to any user in their own org via `users_update_admin`, including
+  granting super-admin, a privilege the app's own UI never grants (it's
+  only ever set by the one-time `create-super-admin.sql` script). A
+  WITH CHECK addition can't fix this — Postgres RLS's WITH CHECK can't
+  compare OLD vs NEW in one expression, it only sees the post-update
+  row — so this adds a `BEFORE UPDATE ON users` trigger instead, same
+  pattern as the existing status-transition guards on
+  requests/responses/external_correspondence. Two tiers, matching what
+  the app's admin UI actually does today: `is_active`/
+  `is_prisoner_letters_staff` stay reachable by any `is_admin()` (org
+  admins legitimately toggle these on their own org's users);
+  `is_super_admin`/`org_id` are restricted to `is_super_admin()`
+  specifically, since no UI flow ever touches them. Verified against a
+  real local Postgres instance (a super admin, an org admin, and two
+  regular staff, one org): a staffer's self-PATCH to `is_super_admin`
+  is rejected while their own harmless self-update (password/name)
+  still succeeds; an org admin's `is_active`/`is_prisoner_letters_staff`
+  toggle on another org member still succeeds (matches `admin.js`)
+  while their attempt to grant super-admin or reassign a user's org is
+  rejected; a super admin's own super-admin grant still succeeds.
+  (Also observed, unrelated to this patch: `users_select_same_org`
+  having no `is_super_admin()` bypass means a super admin's `org_id`
+  reassignment is independently blocked by Postgres re-checking the
+  post-UPDATE row against SELECT policies — same class of bug as
+  `patch-fix-routing-rls-visibility.sql`'s `requests` finding. Not
+  fixed here since nothing in the app ever reassigns `org_id`, and it
+  only makes that column stricter, never weaker.)
+- `supabase/patch-lock-attachment-delete.sql` — `attachments_delete`
+  previously only checked `uploaded_by = auth.uid()`, with no lock/
+  editability check at all, unlike `attachments_insert` (which blocks
+  new uploads once the parent record is locked/sent/closed). That let
+  an uploader delete their own attachment from a request or response
+  AFTER it had been approved and sent (or an internal reply/Entry
+  record after it left draft), silently removing a file from what's
+  supposed to be an immutable case record — a real evidence-integrity
+  gap for a correctional-service correspondence system. Now mirrors
+  `attachments_insert`'s own per-`record_type` editability conditions
+  exactly (request/response: only while `is_locked = FALSE`; internal
+  reply/Entry reply: only while draft/pending_approval; Entry record:
+  only while not closed; internal_request/prisoner_letter/
+  prisoner_reply: same org/section conditions as insert, matching
+  insert's own lack of a lock concept on those). Verified against a
+  real local Postgres instance: deleting your own attachment on a
+  still-draft request succeeds; deleting your own attachment on a
+  locked/sent request now deletes 0 rows.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

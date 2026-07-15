@@ -590,7 +590,7 @@ const RequestsView = {
             ${items.map(resp => `
               <tr>
                 <td data-label="Reference">${resp.request?.reference_number || '—'}</td>
-                <td data-label="Request Subject" class="${RichEditor.dvClass(resp.request?.subject, resp.request?.subject_language)}">${resp.request?.subject || ''}</td>
+                <td data-label="Request Subject" class="${RichEditor.dvClass(resp.request?.subject, resp.request?.subject_language)}">${this._escapeHtml(resp.request?.subject || '')}</td>
                 <td data-label="From">${resp.request?.from_org?.name || ''}</td>
                 <td data-label="Submitted">${new Date(resp.created_at).toLocaleDateString()}</td>
                 <td data-label="Actions"><a class="btn btn-secondary btn-xs" href="#request-detail?id=${resp.request?.id}">View</a></td>
@@ -679,8 +679,8 @@ const RequestsView = {
           <tbody>
             ${items.map(ir => `
               <tr>
-                <td data-label="Case">${ir.parent_request?.reference_number || ir.parent_request?.subject || '—'}</td>
-                <td data-label="Subject" class="${RichEditor.dvClass(ir.subject, ir.subject_language)}">${ir.subject}</td>
+                <td data-label="Case">${ir.parent_request?.reference_number || this._escapeHtml(ir.parent_request?.subject || '') || '—'}</td>
+                <td data-label="Subject" class="${RichEditor.dvClass(ir.subject, ir.subject_language)}">${this._escapeHtml(ir.subject)}</td>
                 <td data-label="From → To">${ir.from_section?.name || ''} → ${ir.to_section?.name || ''}</td>
                 <td data-label="Status"><span class="badge badge-outline">${ir.status.replace(/_/g, ' ')}</span></td>
                 <td data-label="Sent">${new Date(ir.created_at).toLocaleDateString()}</td>
@@ -756,7 +756,7 @@ const RequestsView = {
     return `
       <tr>
         <td data-label="Reference">${r.reference_number || '<span class="structure-empty">Draft</span>'}</td>
-        <td data-label="Subject" class="${RichEditor.dvClass(r.subject, r.subject_language)}">${r.subject}</td>
+        <td data-label="Subject" class="${RichEditor.dvClass(r.subject, r.subject_language)}">${this._escapeHtml(r.subject)}</td>
         <td data-label="${opts.orgCol}">${orgName}</td>
         <td data-label="Status">${this._statusBadge(r.status, r.deadline)}</td>
         <td data-label="Deadline">${this._deadlineCell(r.deadline, r.status)}</td>
@@ -1217,7 +1217,7 @@ const RequestsView = {
     }
 
     this._openModal(`
-      <h3>Receive &amp; Route — <span class="${RichEditor.dvClass(request.subject, request.subject_language)}">${request.subject}</span></h3>
+      <h3>Receive &amp; Route — <span class="${RichEditor.dvClass(request.subject, request.subject_language)}">${this._escapeHtml(request.subject)}</span></h3>
       ${request.status === 'sent' ? `<div class="alert alert-info"><i class="ti ti-info-circle"></i> This will record the request as received by you and route it in one step.</div>` : ''}
       <form id="receive-route-form" class="modal-form">
         <div class="field-group">
