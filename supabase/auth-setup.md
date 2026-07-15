@@ -292,6 +292,24 @@ match what changed since, instead of re-running the full files:
   `patch-fix-routing-rls-visibility.sql`'s `requests` finding. Not
   fixed here since nothing in the app ever reassigns `org_id`, and it
   only makes that column stricter, never weaker.)
+- `supabase/patch-lock-attachment-delete.sql` — `attachments_delete`
+  previously only checked `uploaded_by = auth.uid()`, with no lock/
+  editability check at all, unlike `attachments_insert` (which blocks
+  new uploads once the parent record is locked/sent/closed). That let
+  an uploader delete their own attachment from a request or response
+  AFTER it had been approved and sent (or an internal reply/Entry
+  record after it left draft), silently removing a file from what's
+  supposed to be an immutable case record — a real evidence-integrity
+  gap for a correctional-service correspondence system. Now mirrors
+  `attachments_insert`'s own per-`record_type` editability conditions
+  exactly (request/response: only while `is_locked = FALSE`; internal
+  reply/Entry reply: only while draft/pending_approval; Entry record:
+  only while not closed; internal_request/prisoner_letter/
+  prisoner_reply: same org/section conditions as insert, matching
+  insert's own lack of a lock concept on those). Verified against a
+  real local Postgres instance: deleting your own attachment on a
+  still-draft request succeeds; deleting your own attachment on a
+  locked/sent request now deletes 0 rows.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 
