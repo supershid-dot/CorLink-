@@ -2425,6 +2425,11 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
 .next-step-banner--action  { border-left-color: var(--color-primary); background: var(--color-primary-light); }
 .next-step-banner--waiting { border-left-color: var(--color-border); background: var(--color-bg); }
 .next-step-banner--done    { border-left-color: var(--color-success); background: var(--color-success-bg); }
+/* Slimmer variant for the per-row banner inside an Internal Collaboration
+   request (which can stack several rows) — less padding, tighter margin,
+   smaller title than the one page-level banner up top. */
+.next-step-banner--compact { padding: 9px 13px; margin-bottom: 12px; border-radius: var(--radius); }
+.next-step-banner--compact .next-step-title { font-size: 0.875rem; }
 .next-step-text { min-width: 0; flex: 1 1 240px; }
 .next-step-title { font-weight: 600; overflow-wrap: break-word; }
 .next-step-sub {
