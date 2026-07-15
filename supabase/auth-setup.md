@@ -349,6 +349,37 @@ match what changed since, instead of re-running the full files:
   guarded to fire only while the column is still `DATE`. `prisoner_letters.
   deadline` and `deadline_extensions.new_deadline` are intentionally left
   as `DATE` (no UI surfaces a time for them).
+- `supabase/patch-internal-and-letters-indexes.sql` — a scalability audit
+  found `internal_requests` and `prisoner_letters` had the same missing-
+  index gap `patch-participant-column-indexes.sql` fixed on
+  requests/responses, just not yet triggered on these smaller tables.
+  `internal_requests_select`'s RLS and `listOutstandingForSections`/
+  `listAssignedToUser` (`internal-requests-api.js`) filter directly on
+  `from_section_id`/`to_section_id`/`status`/`assigned_to`/`created_by`/
+  `previous_section_id` — only `parent_request_id` was indexed.
+  `prisoner_letters.listInbox` filters on `to_org_id`, which also had no
+  index (`from_prison_id`, `listSent`'s own filter, already did). Indexes
+  only — no behavior change. Idempotent (`IF NOT EXISTS`). Verified
+  against a local Postgres instance: all 7 indexes created on first run,
+  second run a clean no-op.
+- Request-detail's Realtime subscription (`js/views/request-detail.js`,
+  `_subscribeRealtime`) is now filtered to the specific case being
+  viewed instead of subscribing unfiltered to all 4 tables. The previous
+  version relied on "Realtime only delivers rows my RLS lets me SELECT"
+  for correctness, which is true but not free — an unfiltered
+  `postgres_changes` subscription evaluates RLS for every write on those
+  tables *anywhere in the org* against every open request-detail tab,
+  which doesn't scale with concurrent viewers. `filter: id=in.(...)` (built
+  from the case's request/internal-request ids, since a case spans
+  multiple `requests` rows via `parent_request_id` chaining) narrows what
+  reaches the RLS check at all, with no visibility change — filters apply
+  in addition to RLS, not instead of it. Re-subscribes on every reload
+  (not just page load) so a round or loop-in added mid-session gets
+  covered by the next subscription. One known, narrow tradeoff: a reply
+  added to an internal request that was *itself* created in the same
+  viewing session, before any reload, won't trigger its own toast (the
+  internal request's own creation already did). No SQL involved — pure
+  client-side change.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

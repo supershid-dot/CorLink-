@@ -52,7 +52,6 @@ const RequestDetailView = {
     }
 
     await this._load();
-    this._subscribeRealtime(params.id);
   },
 
   bind() {
@@ -64,14 +63,36 @@ const RequestDetailView = {
   // reload would blow away an in-progress Draft Response/reply the
   // viewer is mid-typing (main.innerHTML gets fully replaced on every
   // _load()) the instant the other side does anything, which is worse
-  // than just not having live updates at all. Scoped to requests/
-  // responses/internal_requests/internal_request_replies without a
-  // server-side filter — Realtime already only delivers rows the
-  // caller's own RLS lets them SELECT, so an unfiltered subscription
-  // here is bounded by the same visibility this page's own queries
-  // already respect, not a firehose of every org's traffic. Debounced
-  // since one user action (e.g. approving a response) can touch more
-  // than one of these tables in the same moment.
+  // than just not having live updates at all. Debounced since one user
+  // action (e.g. approving a response) can touch more than one of these
+  // tables in the same moment.
+  //
+  // Filtered to just THIS case's rows, not the whole table — an earlier
+  // version had no filter at all and relied on "Realtime only delivers
+  // rows my RLS lets me SELECT" for correctness, which is true but not
+  // free: unfiltered postgres_changes evaluates RLS for every write on
+  // these 4 tables against every open request-detail tab org-wide, which
+  // doesn't scale with concurrent viewers × org write rate. filter=in.(...)
+  // narrows what reaches the RLS check at all.
+  //
+  // A case can span multiple `requests` rows (getConversation() walks
+  // parent_request_id both directions) and multiple internal_requests, so
+  // "this case's ids" means the whole set from this._conversation, not
+  // just requestId — built fresh on every call (see the comment at this
+  // method's call site in _load()) so a round or loop-in added mid-
+  // session is covered by the next reload's subscription, not just the
+  // very first one.
+  //
+  // requests gets TWO listeners: one for changes to rows already in the
+  // conversation (filter on id), and one for INSERTs of a brand-new
+  // follow-up round branching off a known round (filter on
+  // parent_request_id) — a new round's own id can't be in the first
+  // filter's list since it didn't exist yet when the subscription was
+  // built. internal_request_replies is only subscribed when the case
+  // already has at least one internal_request — a reply can't exist
+  // before its parent row does, so an empty list means nothing to filter
+  // on yet (that internal_request's own creation, once it happens, is
+  // itself what triggers the next reload/re-subscribe).
   _subscribeRealtime(requestId) {
     this._teardownRealtime();
     const db = getSupabase();
@@ -80,12 +101,21 @@ const RequestDetailView = {
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => this._showUpdateToast(), 500);
     };
-    this._realtimeChannel = db.channel('request-detail-' + requestId)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'requests' }, notify)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'responses' }, notify)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'internal_requests' }, notify)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'internal_request_replies' }, notify)
-      .subscribe();
+    const caseRequestIds = (this._conversation || []).map(entry => entry.request.id);
+    const caseInternalRequestIds = (this._conversation || [])
+      .flatMap(entry => entry.internalRequestDetails.map(d => d.internalRequest.id));
+    if (caseRequestIds.length === 0) return;
+    const inList = (ids) => `in.(${ids.join(',')})`;
+
+    let channel = db.channel('request-detail-' + requestId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'requests', filter: `id=${inList(caseRequestIds)}` }, notify)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'requests', filter: `parent_request_id=${inList(caseRequestIds)}` }, notify)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'responses', filter: `request_id=${inList(caseRequestIds)}` }, notify)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'internal_requests', filter: `parent_request_id=${inList(caseRequestIds)}` }, notify);
+    if (caseInternalRequestIds.length > 0) {
+      channel = channel.on('postgres_changes', { event: '*', schema: 'public', table: 'internal_request_replies', filter: `internal_request_id=${inList(caseInternalRequestIds)}` }, notify);
+    }
+    this._realtimeChannel = channel.subscribe();
 
     // No per-view unmount hook exists in router.js (every render() just
     // overwrites #app's innerHTML) — this is the one place a Realtime
@@ -268,6 +298,12 @@ const RequestDetailView = {
 
       main.innerHTML = this._renderContent();
       this._bindActions();
+      // Re-subscribes on every load, not just the first — the filter
+      // below is built from this._conversation, so a case that grows a
+      // new round or a new loop-in mid-session needs a fresh subscription
+      // covering the new ids. _subscribeRealtime tears down the old
+      // channel/listener first, so calling it repeatedly is safe.
+      this._subscribeRealtime(this._requestId);
     } catch (err) {
       console.error('CorLink: failed to load request', err);
       main.innerHTML = `<div class="alert alert-error"><i class="ti ti-alert-triangle"></i> Couldn't load this request: ${err.message || 'unknown error'}.</div>`;

@@ -700,10 +700,29 @@ CREATE INDEX idx_prisoner_letters_submitted_by ON prisoner_letters(submitted_by)
 CREATE INDEX idx_prisoner_letters_assigned_to  ON prisoner_letters(assigned_to);
 CREATE INDEX idx_prisoner_replies_replied_by   ON prisoner_replies(replied_by);
 CREATE INDEX idx_internal_requests_parent    ON internal_requests(parent_request_id);
+-- internal_requests_select's RLS (rls.sql) and listOutstandingForSections/
+-- listAssignedToUser (internal-requests-api.js) filter directly on these
+-- columns, same shape as the participant-column indexes above on
+-- requests/responses — without them this table hits the identical
+-- sequential-scan cost that caused the recurring request-detail statement
+-- timeout, just not yet triggered because internal_requests stays smaller
+-- than requests/responses early on.
+CREATE INDEX idx_internal_requests_from_section ON internal_requests(from_section_id);
+CREATE INDEX idx_internal_requests_to_section   ON internal_requests(to_section_id);
+CREATE INDEX idx_internal_requests_status       ON internal_requests(status);
+CREATE INDEX idx_internal_requests_assigned_to  ON internal_requests(assigned_to) WHERE assigned_to IS NOT NULL;
+CREATE INDEX idx_internal_requests_created_by   ON internal_requests(created_by);
+-- previous_section_id is the Return-to-Sender pointer (see the column's
+-- own comment) — checked on every internal_requests_select evaluation.
+CREATE INDEX idx_internal_requests_previous_section ON internal_requests(previous_section_id) WHERE previous_section_id IS NOT NULL;
 CREATE INDEX idx_internal_request_replies_ir ON internal_request_replies(internal_request_id);
 CREATE INDEX idx_review_comments_record      ON review_comments(record_type, record_id);
 CREATE INDEX idx_cc_recipients_user          ON cc_recipients(user_id);
 CREATE INDEX idx_prisoner_letters_org   ON prisoner_letters(from_prison_id);
+-- listInbox (prisoner-letters-api.js) filters on to_org_id directly —
+-- from_prison_id (above) covers listSent's own filter, but the inbox
+-- side had no matching index.
+CREATE INDEX idx_prisoner_letters_to_org ON prisoner_letters(to_org_id);
 CREATE INDEX idx_external_correspondence_org      ON external_correspondence(org_id);
 CREATE INDEX idx_external_correspondence_section  ON external_correspondence(to_section_id) WHERE to_section_id IS NOT NULL;
 CREATE INDEX idx_external_correspondence_status   ON external_correspondence(status);
