@@ -1203,19 +1203,21 @@ const RequestsView = {
     this._openModal(`
       <h3>New Request</h3>
       <form id="compose-form" class="modal-form">
-        <div class="field-group">
-          <label class="field-label">To Organization</label>
-          <select class="field-select" name="toOrgId">
-            ${otherOrgs.map(o => `<option value="${o.id}">${o.name}</option>`).join('')}
-          </select>
+        <div class="field-row">
+          <div class="field-group">
+            <label class="field-label">To Organization</label>
+            <select class="field-select" name="toOrgId">
+              ${otherOrgs.map(o => `<option value="${o.id}">${o.name}</option>`).join('')}
+            </select>
+          </div>
+          ${sections.length > 1 ? `
+          <div class="field-group">
+            <label class="field-label">From Section</label>
+            <select class="field-select" name="fromSectionId">
+              ${sections.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
+            </select>
+          </div>` : `<input type="hidden" name="fromSectionId" value="${sections[0].id}" />`}
         </div>
-        ${sections.length > 1 ? `
-        <div class="field-group">
-          <label class="field-label">From Section</label>
-          <select class="field-select" name="fromSectionId">
-            ${sections.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
-          </select>
-        </div>` : `<input type="hidden" name="fromSectionId" value="${sections[0].id}" />`}
         <div class="field-group">
           <div class="field-group-row">
             <label class="field-label">Subject</label>
@@ -1230,21 +1232,25 @@ const RequestsView = {
           </div>
           <div id="compose-body"></div>
         </div>
-        ${this._deadlineFieldHtml()}
-        ${this._loopInFieldHtml(loopInUsers)}
-        <div class="field-group">
-          <label class="field-label">Attachments</label>
-          <label class="attachment-dropzone" id="compose-dropzone">
-            <i class="ti ti-cloud-upload"></i>
-            <span>Drag files here, or <span class="attachment-browse-link">browse</span></span>
-            <input type="file" multiple class="hidden" id="compose-file-input" />
-          </label>
-          <div class="attachments-list" id="compose-pending-files"></div>
+        <div class="field-row">
+          ${this._deadlineFieldHtml()}
+          ${this._loopInFieldHtml(loopInUsers)}
         </div>
-        <div class="field-group">
-          <label class="field-label">Approving Supervisor</label>
-          <select class="field-select" name="approverId" id="compose-approver"></select>
-          <div class="field-hint">Needed only if you submit for approval now — includes supervisors at the section, department, and command level. Save Draft skips this.</div>
+        <div class="field-row">
+          <div class="field-group">
+            <label class="field-label">Attachments</label>
+            <label class="attachment-dropzone" id="compose-dropzone">
+              <i class="ti ti-cloud-upload"></i>
+              <span>Drag files here, or <span class="attachment-browse-link">browse</span></span>
+              <input type="file" multiple class="hidden" id="compose-file-input" />
+            </label>
+            <div class="attachments-list" id="compose-pending-files"></div>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Approving Supervisor</label>
+            <select class="field-select" name="approverId" id="compose-approver"></select>
+            <div class="field-hint">Needed only if you submit for approval now — includes supervisors at the section, department, and command level. Save Draft skips this.</div>
+          </div>
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
