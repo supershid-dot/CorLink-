@@ -165,6 +165,55 @@ const RequestsView = {
     }
   },
 
+  // Total "needs my action" count across the Requests module, for the
+  // badge AppShell paints on the Requests nav item (visible from every
+  // page). Self-contained — does NOT depend on render() having run, and
+  // deliberately mutates nothing on RequestsView: it builds a throwaway
+  // context object and evaluates the SAME needs_action predicates the
+  // Inbox/Sent chips use via .call(ctx), so this number and the tab
+  // badges can never drift.
+  //
+  // Sums Inbox + Sent + Info-awaiting-my-reply only. Approvals are NOT
+  // added separately: a request/response awaiting a supervisor's approval
+  // already satisfies the Inbox/Sent needs_action tests (pending_approval
+  // request -> Sent; pending_approval response -> Inbox), so adding the
+  // Approvals queue on top would double-count the very same items.
+  async actionNeededCount() {
+    const user = Auth.getCachedProfile();
+    if (!user) return 0;
+    const ctx = {
+      _user: user,
+      _isSupervisor: AppShell.isSupervisorOrAbove(user),
+      _mySections: [],
+      _mySupervisedSections: [],
+      _myLoopedInRequestIds: new Set(),
+    };
+    ctx._canReceive = ctx._isSupervisor || AppShell.hasRole(user, 'assigned_receiver');
+
+    const [mySections, mySupervised] = await Promise.all([
+      RequestsAPI.mySections().catch(() => []),
+      ctx._isSupervisor ? RequestsAPI.mySupervisedSections().catch(() => []) : Promise.resolve([]),
+    ]);
+    ctx._mySections = mySections;
+    ctx._mySupervisedSections = mySupervised;
+
+    const [inboxRes, sentRes, info] = await Promise.all([
+      RequestsAPI.listInbox(user.org_id).catch(() => ({ items: [] })),
+      RequestsAPI.listSent(user.org_id).catch(() => ({ items: [] })),
+      mySections.length
+        ? InternalRequestsAPI.listOutstandingForSections(mySections.map(s => s.id)).catch(() => [])
+        : Promise.resolve([]),
+    ]);
+
+    const inboxNeeds = this._inboxViews.call(ctx).find(v => v.key === 'needs_action');
+    const sentNeeds = this._sentViews.call(ctx).find(v => v.key === 'needs_action');
+    const mySet = new Set(mySections.map(s => s.id));
+
+    return (inboxRes.items || []).filter(inboxNeeds.test).length
+      + (sentRes.items || []).filter(sentNeeds.test).length
+      + (info || []).filter(ir => mySet.has(ir.to_section_id)).length;
+  },
+
   bind() {
     // Binding happens inline during render() since tabs re-render dynamically.
   },
