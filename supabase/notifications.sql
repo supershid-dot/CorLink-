@@ -66,14 +66,19 @@ BEGIN
     SELECT id, from_section_id, to_section_id, subject, deadline
     FROM requests
     WHERE deadline IS NOT NULL
-      AND deadline < CURRENT_DATE
+      -- deadline is a full TIMESTAMPTZ (carries a time of day), so compare
+      -- against NOW() rather than CURRENT_DATE. A deadline that falls due
+      -- mid-day is flagged 'overdue' by the next nightly run; the UI already
+      -- computes overdue in real time (new Date(deadline) < now) regardless.
+      AND deadline < NOW()
       AND status NOT IN ('draft', 'closed', 'responded', 'overdue', 'cancelled')
   LOOP
     UPDATE requests SET status = 'overdue' WHERE id = r.id;
 
     INSERT INTO notifications (user_id, type, record_type, record_id, message)
     SELECT uid, 'deadline_warning', 'request', r.id,
-           'Request "' || r.subject || '" is overdue (deadline was ' || r.deadline || ')'
+           'Request "' || r.subject || '" is overdue (deadline was '
+             || to_char(r.deadline, 'YYYY-MM-DD HH24:MI') || ')'
     FROM (
       SELECT user_id AS uid FROM section_user_ids(
         COALESCE(r.to_section_id, r.from_section_id),

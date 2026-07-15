@@ -314,7 +314,6 @@ const DashboardView = {
     const el = document.getElementById('workload-panel');
     if (!el) return;
 
-    const today = new Date().toISOString().slice(0, 10);
     // Cancelled items are excluded from 'mine' entirely (not folded into
     // 'done') — counting a cancelled request as completed would inflate
     // a staff member's completion percentage for work they never
@@ -325,7 +324,8 @@ const DashboardView = {
     const notStarted = open.filter(r => (r.responses || []).length === 0).length;
     const drafting = open.length - notStarted;
     const internalMine = (outstanding || []).filter(ir => ir.assigned_to === user.id).length;
-    const overdueOpen = open.filter(r => r.deadline && r.deadline < today).length;
+    // deadline is a full timestamp now — overdue is exact-instant, not end-of-day.
+    const overdueOpen = open.filter(r => r.deadline && new Date(r.deadline).getTime() < Date.now()).length;
 
     const completionPct = mine.length ? Math.round((done / mine.length) * 100) : 0;
     const onTrackPct = open.length ? Math.round(((open.length - overdueOpen) / open.length) * 100) : 100;
@@ -371,24 +371,32 @@ const DashboardView = {
     const listEl = document.getElementById('deadline-list');
     if (!listEl) return;
 
-    const today = new Date().toISOString().slice(0, 10);
     const items = [...inbox, ...sent]
       .filter(r => r.deadline && !['closed', 'responded', 'cancelled'].includes(r.status))
-      .sort((a, b) => a.deadline.localeCompare(b.deadline))
+      // deadline is a full timestamp now — sort by the exact instant.
+      .sort((a, b) => new Date(a.deadline) - new Date(b.deadline))
       .slice(0, 5);
 
     listEl.innerHTML = items.map(r => {
-      const diffDays = Math.round((new Date(r.deadline) - new Date(today)) / 86400000);
-      const urgency = diffDays < 0 ? 'error' : diffDays <= 2 ? 'warning' : 'secondary';
-      const statusLabel = diffDays < 0 ? 'Overdue' : diffDays === 0 ? 'Due today' : `${diffDays} day${diffDays === 1 ? '' : 's'} left`;
-      const d = new Date(r.deadline + 'T00:00:00');
-      const month = d.toLocaleDateString(undefined, { month: 'short' }).toUpperCase();
+      const dl = new Date(r.deadline);
+      const now = new Date();
+      // Whole-day difference between local calendar dates for the label,
+      // but "Overdue" keyed off the exact instant (deadline carries a time).
+      const startOfDay = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+      const dayDiff = Math.round((startOfDay(dl) - startOfDay(now)) / 86400000);
+      const overdue = dl.getTime() < now.getTime();
+      const urgency = overdue ? 'error' : dayDiff <= 2 ? 'warning' : 'secondary';
+      const statusLabel = overdue ? 'Overdue' : dayDiff === 0 ? 'Due today' : `${dayDiff} day${dayDiff === 1 ? '' : 's'} left`;
+      const month = dl.toLocaleDateString(undefined, { month: 'short' }).toUpperCase();
+      const pad = (n) => String(n).padStart(2, '0');
+      const time = `${pad(dl.getHours())}:${pad(dl.getMinutes())}`;
 
       return `
         <a href="#request-detail?id=${r.id}" class="deadline-row">
           <div class="deadline-date deadline-date--${urgency}">
             <span class="deadline-date-month">${month}</span>
-            <span class="deadline-date-day">${d.getDate()}</span>
+            <span class="deadline-date-day">${dl.getDate()}</span>
+            <span class="deadline-date-time">${time}</span>
           </div>
           <div class="deadline-row-body">
             <div class="deadline-row-ref">${r.reference_number || 'Draft'}</div>

@@ -242,11 +242,12 @@ const RequestsAPI = (() => {
 
     async countOverdue(orgId) {
       const db = getSupabase();
-      const today = new Date().toISOString().slice(0, 10);
+      // deadline is a TIMESTAMPTZ now, so compare against the exact instant
+      // (NOW), not the calendar date — a deadline due earlier today counts.
       const { count, error } = await db.from('requests')
         .select('id', { count: 'exact', head: true })
         .or(`from_org_id.eq.${orgId},to_org_id.eq.${orgId}`)
-        .lt('deadline', today)
+        .lt('deadline', new Date().toISOString())
         .not('status', 'in', '(closed,responded,cancelled)');
       if (error) throw wrapRowError(error);
       return count || 0;

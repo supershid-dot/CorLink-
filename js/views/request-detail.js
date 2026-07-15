@@ -2075,7 +2075,7 @@ const RequestDetailView = {
     const syncEditMessageLang = (lang) => editor.setLanguage(lang);
     RichEditor.bindLangToggle(form, 'language', syncEditMessageLang);
     DraftAutosave.autoSaveForm(form, `edit-request:${requestId}`, editor, {
-      fieldNames: ['subject', 'deadline'],
+      fieldNames: ['subject', 'deadline', 'deadlineTime'],
       langToggles: [
         { name: 'subjectLanguage', onChange: syncEditSubjectLang },
         { name: 'language', onChange: syncEditMessageLang },
@@ -2095,7 +2095,7 @@ const RequestDetailView = {
         await RequestsAPI.updateRequestDraft(requestId, {
           subject: fd.get('subject'), subject_language: fd.get('subjectLanguage'),
           body, language: fd.get('language'),
-          deadline: fd.get('deadline') || null,
+          deadline: RequestsView._combineDeadline(fd.get('deadline'), fd.get('deadlineTime')),
         });
         DraftAutosave.clear(`edit-request:${requestId}`);
         this._closeModal();
@@ -2259,7 +2259,7 @@ const RequestDetailView = {
     const syncFollowupMessageLang = (lang) => editor.setLanguage(lang);
     RichEditor.bindLangToggle(form, 'language', syncFollowupMessageLang);
     DraftAutosave.autoSaveForm(form, `followup:${r.id}`, editor, {
-      fieldNames: ['fromSectionId', 'subject', 'deadline'],
+      fieldNames: ['fromSectionId', 'subject', 'deadline', 'deadlineTime'],
       langToggles: [
         { name: 'subjectLanguage', onChange: syncFollowupSubjectLang },
         { name: 'language', onChange: syncFollowupMessageLang },
@@ -2281,7 +2281,7 @@ const RequestDetailView = {
           fromOrgId: r.from_org_id, fromSectionId: fd.get('fromSectionId'), toOrgId: r.to_org_id,
           subject: fd.get('subject'), subjectLanguage: fd.get('subjectLanguage'),
           body, language: fd.get('language'),
-          deadline: fd.get('deadline') || null, parentRequestId: r.id,
+          deadline: RequestsView._combineDeadline(fd.get('deadline'), fd.get('deadlineTime')), parentRequestId: r.id,
         });
         const failures = [];
         try {
@@ -2373,7 +2373,7 @@ const RequestDetailView = {
     RichEditor.bindLangToggle(form, 'language', syncInternalMessageLang);
     RequestsView._bindDeadlineField(form, entry.request.deadline);
     DraftAutosave.autoSaveForm(form, `internal-request:${parentRequestId}`, editor, {
-      fieldNames: ['toSectionId', 'subject', 'deadline'],
+      fieldNames: ['toSectionId', 'subject', 'deadline', 'deadlineTime'],
       langToggles: [
         { name: 'subjectLanguage', onChange: syncInternalSubjectLang },
         { name: 'language', onChange: syncInternalMessageLang },
@@ -2389,9 +2389,9 @@ const RequestDetailView = {
         errEl.classList.remove('hidden');
         return;
       }
-      const deadline = fd.get('deadline') || null;
-      if (deadline && entry.request.deadline && deadline > entry.request.deadline) {
-        errEl.textContent = `Deadline can't be later than the case's own deadline (${entry.request.deadline}).`;
+      const deadline = RequestsView._combineDeadline(fd.get('deadline'), fd.get('deadlineTime'));
+      if (deadline && entry.request.deadline && new Date(deadline) > new Date(entry.request.deadline)) {
+        errEl.textContent = `Deadline can't be later than the case's own deadline (${RequestsView._formatDeadline(entry.request.deadline)}).`;
         errEl.classList.remove('hidden');
         return;
       }

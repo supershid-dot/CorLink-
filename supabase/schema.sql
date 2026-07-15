@@ -243,7 +243,12 @@ CREATE TABLE requests (
                       'draft', 'pending_approval', 'sent', 'received',
                       'in_progress', 'responded', 'closed', 'overdue', 'cancelled'
                     )),
-  deadline          DATE,
+  -- Full timestamp (not a bare DATE) so a deadline carries a time of day,
+  -- e.g. "due 2026-07-20 16:30". The compose/edit forms let the user pick
+  -- the time (24-hour); a date-only entry defaults to 12:00 (noon).
+  -- Overdue is now keyed off the exact instant (check_deadlines() compares
+  -- against NOW(), the UI against new Date()), not end-of-day.
+  deadline          TIMESTAMPTZ,
   reference_number  TEXT    UNIQUE,    -- Generated on supervisor approval + send
   is_locked         BOOLEAN NOT NULL DEFAULT FALSE,
   -- The specific supervisor the creator chose to send this to on
@@ -338,8 +343,9 @@ CREATE TABLE internal_requests (
   -- Set by whoever starts the loop-in — capped at the parent request's
   -- own deadline (enforced in internal_requests_insert's WITH CHECK,
   -- see rls.sql — a section gathering supporting info can't give itself
-  -- more time than the case itself has).
-  deadline          DATE,
+  -- more time than the case itself has). Full timestamp (with time of
+  -- day), same as requests.deadline — see the note there.
+  deadline          TIMESTAMPTZ,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
