@@ -234,18 +234,36 @@ const RequestDetailView = {
       // _composeResponseHtml/_openFollowupModal's Loop In Staff picker
       // can read from a plain sync array instead of needing its own
       // async fetch mid-render.
+      //
+      // Only the viewer's OWN org's staff list is fetched. Loop In Staff
+      // is a same-org, read-only CC: the to-org's members loop in to-org
+      // colleagues when drafting a response (_toOrgUsers), the from-org's
+      // members loop in from-org colleagues when drafting a follow-up
+      // (_fromOrgUsers) — and a viewer only ever composes on their own
+      // side, so the opposite list was fetched but never shown. Worse,
+      // fetching the OTHER org's full user list is the app's single most
+      // expensive user-resolution: every one of those cross-org users the
+      // viewer shares no visible case with falls through the users_select
+      // RLS chain to appears_in_visible_audit_trail(), which scans that
+      // user's whole audit history — a cost that grows unbounded with the
+      // audit_logs table. Skipping the unused opposite-org fetch drops
+      // that entirely (and halves this step's queries) with no UI change.
       const root = this._conversation[0].request;
+      this._toOrgUsers = [];
+      this._fromOrgUsers = [];
       try {
-        const [toOrgUsers, fromOrgUsers] = await Promise.all([
-          AdminAPI.listUsersByOrg(root.to_org_id),
-          AdminAPI.listUsersByOrg(root.from_org_id),
-        ]);
-        this._toOrgUsers = toOrgUsers.filter(u => u.is_active && u.id !== this._user.id);
-        this._fromOrgUsers = fromOrgUsers.filter(u => u.is_active && u.id !== this._user.id);
+        const viewerOrg = this._user.org_id;
+        const ownOrgId = viewerOrg === root.to_org_id ? root.to_org_id
+          : viewerOrg === root.from_org_id ? root.from_org_id
+          : null;
+        if (ownOrgId) {
+          const users = (await AdminAPI.listUsersByOrg(ownOrgId))
+            .filter(u => u.is_active && u.id !== this._user.id);
+          if (ownOrgId === root.to_org_id) this._toOrgUsers = users;
+          else this._fromOrgUsers = users;
+        }
       } catch (err) {
         console.error('CorLink: failed to load org staff for Loop In Staff', err);
-        this._toOrgUsers = [];
-        this._fromOrgUsers = [];
       }
 
       main.innerHTML = this._renderContent();
