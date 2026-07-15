@@ -579,6 +579,50 @@ CREATE POLICY "users_update_admin" ON users
     (is_admin() AND org_id = get_my_org_id())
   );
 
+-- Neither UPDATE policy above has a WITH CHECK, so RLS alone only
+-- restricts which ROW a caller can touch, not which COLUMNS change on
+-- it — a self-service PATCH via users_update_own_prefs could otherwise
+-- set is_super_admin/org_id/is_active/is_prisoner_letters_staff on the
+-- caller's own row (self-escalation to super admin), and an org admin
+-- going through users_update_admin could do the same to any OTHER user
+-- in their org. Postgres RLS's WITH CHECK can't compare OLD vs NEW in
+-- one expression (it only sees the post-update row), so this needs a
+-- trigger, not a policy — same reason the status-transition guards on
+-- requests/responses/external_correspondence are triggers, not RLS.
+-- Lives here (not alongside those in schema.sql) because it calls
+-- is_admin()/is_super_admin(), which aren't defined until this file
+-- runs.
+--
+-- Two tiers, matching what the app's own admin UI actually does:
+--   - is_active / is_prisoner_letters_staff: org admins legitimately
+--     toggle these on their own org's users today (admin.js) — allowed
+--     for any is_admin().
+--   - is_super_admin / org_id: no UI flow ever touches these (super
+--     admin is granted once via create-super-admin.sql, and a user's
+--     org never changes post-creation) — restricted to is_super_admin()
+--     specifically, so an org admin can't grant themselves or anyone
+--     else super-admin, or move a user to a different org.
+CREATE OR REPLACE FUNCTION trigger_protect_privileged_user_columns()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF (NEW.is_super_admin IS DISTINCT FROM OLD.is_super_admin
+      OR NEW.org_id IS DISTINCT FROM OLD.org_id)
+     AND NOT is_super_admin() THEN
+    RAISE EXCEPTION 'Only a super admin can change is_super_admin or org_id on a user';
+  END IF;
+  IF (NEW.is_active IS DISTINCT FROM OLD.is_active
+      OR NEW.is_prisoner_letters_staff IS DISTINCT FROM OLD.is_prisoner_letters_staff)
+     AND NOT is_admin() THEN
+    RAISE EXCEPTION 'Only an admin can change privilege or account-status fields on a user';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS protect_privileged_user_columns ON users;
+CREATE TRIGGER protect_privileged_user_columns BEFORE UPDATE ON users
+  FOR EACH ROW EXECUTE FUNCTION trigger_protect_privileged_user_columns();
+
 -- ─── user_assignments ─────────────────────────────────────────
 -- Own assignments: always readable (needed to know your own roles/sections).
 -- Same-org assignments: readable (needed for routing, approval-chain display).

@@ -272,7 +272,7 @@ const RequestDetailView = {
       <div class="detail-header">
         <a href="#requests" class="btn btn-secondary btn-sm"><i class="ti ti-arrow-left"></i> Back</a>
         <div class="detail-header-title">
-          <h2 class="page-title${RichEditor.dvClass(root.subject, root.subject_language)}">${root.subject}</h2>
+          <h2 class="page-title${RichEditor.dvClass(root.subject, root.subject_language)}">${this._escapeHtml(root.subject)}</h2>
           ${multiRound ? `<span class="badge badge-outline">${this._conversation.length} round-trips</span>` : ''}
         </div>
       </div>
@@ -1042,7 +1042,7 @@ const RequestDetailView = {
             <span class="badge ${statusBadge[1]}">${statusBadge[0]}</span>
             ${ir.deadline ? `<span class="structure-empty">Due ${RequestsView._deadlineCell(ir.deadline, ir.status)}</span>` : ''}
           </div>
-          <strong class="internal-request-subject${RichEditor.dvClass(ir.subject, ir.subject_language)}">${ir.subject}</strong>
+          <strong class="internal-request-subject${RichEditor.dvClass(ir.subject, ir.subject_language)}">${this._escapeHtml(ir.subject)}</strong>
         </div>
         <div class="thread-message-body${ir.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(ir.body)}</div>
         ${this._renderActivityLog(`
@@ -2149,7 +2149,7 @@ const RequestDetailView = {
             <label class="field-label">Subject</label>
             ${RichEditor.langToggleHtml('subjectLanguage', 'dv')}
           </div>
-          <input class="field-input-plain field-divehi" name="subject" id="followup-subject" required value="Re: ${r.subject}" />
+          <input class="field-input-plain field-divehi" name="subject" id="followup-subject" required value="Re: ${this._escapeHtml(r.subject)}" />
         </div>
         <div class="field-group">
           <div class="field-group-row">
