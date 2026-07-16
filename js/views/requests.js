@@ -722,7 +722,12 @@ const RequestsView = {
     } else {
       result = await InternalRequestsAPI.listOutstandingForSections(sectionIds);
     }
-    this._infoRequestItems = result.items;
+    // Scoped to request-anchored loop-ins only — Entry's own Info
+    // Requests tab (js/views/entry.js) shows the entry-anchored half of
+    // this same shared queue, keeping each module's queue feeling
+    // scoped to its own domain even though the underlying table/API
+    // call (InternalRequestsAPI.listOutstandingForSections) is shared.
+    this._infoRequestItems = result.items.filter(ir => ir.parent_request_id);
     this._infoRequestTotalCount = result.totalCount;
     content.innerHTML = `
       ${this._searchBoxHtml('infoSearch', 'Search subject or message…', this._state.infoSearch)}
@@ -794,13 +799,15 @@ const RequestsView = {
           <tbody>
             ${items.map(ir => `
               <tr>
-                <td data-label="Case">${ir.parent_request?.reference_number || this._escapeHtml(ir.parent_request?.subject || '') || '—'}</td>
+                <td data-label="Case">${ir.parent_request?.reference_number || ir.parent_entry?.reference_number || this._escapeHtml(ir.parent_request?.subject || ir.parent_entry?.subject || '') || '—'}</td>
                 <td data-label="Subject" class="${RichEditor.dvClass(ir.subject, ir.subject_language)}">${this._escapeHtml(ir.subject)}</td>
                 <td data-label="From → To">${ir.from_section?.name || ''} → ${ir.to_section?.name || ''}</td>
                 <td data-label="Status"><span class="badge badge-outline">${ir.status.replace(/_/g, ' ')}</span></td>
                 <td data-label="Sent">${new Date(ir.created_at).toLocaleDateString()}</td>
                 <td data-label="Actions">${ir.parent_request?.id
                   ? `<a class="btn btn-secondary btn-xs" href="#request-detail?id=${ir.parent_request.id}">View</a>`
+                  : ir.parent_entry?.id
+                  ? `<a class="btn btn-secondary btn-xs" href="#entry-detail?id=${ir.parent_entry.id}">View</a>`
                   : ''}</td>
               </tr>
             `).join('') || emptyHtml || `<tr><td colspan="6" class="structure-empty">Nothing here yet.</td></tr>`}

@@ -97,15 +97,24 @@ ALTER TABLE organizations
 ALTER TABLE organizations
   ADD COLUMN prisoner_registry_section_id UUID REFERENCES sections(id);
 
--- Same shape again, for the Entry module (external_correspondence,
--- further down this file): which section (if any) logs correspondence
--- that arrives from OUTSIDE the CorLink network entirely — the public,
--- prisoners' families, non-participating outside offices, and
--- prisoner-submitted written complaints — and routes it to whoever
--- internally should respond (see is_entry_staff() in rls.sql). NULL =
--- any org member, same never-breaks-on-upgrade shape as the two above.
-ALTER TABLE organizations
-  ADD COLUMN entry_section_id UUID REFERENCES sections(id);
+-- Entry module (external_correspondence, further down this file): which
+-- section(s), if any, log correspondence that arrives from OUTSIDE the
+-- CorLink network entirely — the public, prisoners' families,
+-- non-participating outside offices, and prisoner-submitted written
+-- complaints — and route it to whoever internally should respond (see
+-- is_entry_staff() in rls.sql). Unlike default_receiving_section_id/
+-- prisoner_registry_section_id above, an org may want MORE THAN ONE
+-- desk logging incoming correspondence (e.g. both a front-office and a
+-- legal-affairs section), so this is a join table rather than a single
+-- FK column — zero rows for an org means "any org member", same
+-- never-breaks-on-upgrade shape as the single-column fields above.
+CREATE TABLE entry_sections (
+  org_id     UUID        NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  section_id UUID        NOT NULL REFERENCES sections(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (org_id, section_id)
+);
+CREATE INDEX idx_entry_sections_org ON entry_sections(org_id);
 
 -- ─── Designations (job titles / positions within an organization) ──
 -- Org-specific picklist (e.g. "Legal Officer", "Case Manager") — the
@@ -317,7 +326,12 @@ CREATE TABLE responses (
 -- their RLS visibility that a foreign section id could ever satisfy.
 CREATE TABLE internal_requests (
   id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  parent_request_id UUID        NOT NULL REFERENCES requests(id),
+  -- Anchored to exactly ONE parent — either an external request, or (via
+  -- parent_entry_id, added by ALTER TABLE further down this file once
+  -- external_correspondence exists) an Entry case. Entry cases have no
+  -- from_org_id/to_org_id duality either, so the same "structurally
+  -- invisible to anyone outside the section chain" property holds.
+  parent_request_id UUID        REFERENCES requests(id),
   from_section_id   UUID        NOT NULL REFERENCES sections(id),
   to_section_id     UUID        NOT NULL REFERENCES sections(id),
   created_by        UUID        NOT NULL REFERENCES users(id),
@@ -395,7 +409,7 @@ CREATE TABLE approvals (
 -- until the supervisor approves.
 CREATE TABLE review_comments (
   id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  record_type  TEXT        NOT NULL CHECK (record_type IN ('request', 'response', 'internal_reply')),
+  record_type  TEXT        NOT NULL CHECK (record_type IN ('request', 'response', 'internal_reply', 'entry_reply')),
   record_id    UUID        NOT NULL,
   quoted_text  TEXT,
   comment      TEXT        NOT NULL,
@@ -519,7 +533,7 @@ CREATE TABLE prisoner_replies (
 -- `requests` (which assumes both from_org_id and to_org_id are real,
 -- registered organizations) this is deliberately its own table rather
 -- than a variant of it. A staff member in the org's designated Entry
--- section (organizations.entry_section_id above) logs what arrived,
+-- section (entry_sections above) logs what arrived,
 -- then routes it to whichever internal section is responsible for
 -- responding — mirroring requests' "receive, then route" shape, but
 -- entirely within one organization: no from_org_id/to_org_id duality,
@@ -570,6 +584,20 @@ CREATE TABLE external_correspondence_replies (
   created_by          UUID        NOT NULL REFERENCES users(id),
   created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- internal_requests can now be anchored to an Entry case instead of an
+-- external request (Internal Collaboration for Entry — the receiving
+-- section asks another section for info while keeping ownership of the
+-- entry). Added here, after external_correspondence exists, rather than
+-- inline on internal_requests' own CREATE TABLE further up this file.
+ALTER TABLE internal_requests
+  ADD COLUMN parent_entry_id UUID REFERENCES external_correspondence(id);
+ALTER TABLE internal_requests
+  ADD CONSTRAINT internal_requests_one_parent CHECK (
+    (parent_request_id IS NOT NULL AND parent_entry_id IS NULL) OR
+    (parent_request_id IS NULL AND parent_entry_id IS NOT NULL)
+  );
+CREATE INDEX idx_internal_requests_parent_entry ON internal_requests(parent_entry_id) WHERE parent_entry_id IS NOT NULL;
 
 -- Org-level yearly sequence, same shape as letter_reference_sequences —
 -- generated at logging time (there's no section yet to key a per-
@@ -699,7 +727,7 @@ CREATE INDEX idx_approvals_reviewed_by   ON approvals(reviewed_by);
 CREATE INDEX idx_prisoner_letters_submitted_by ON prisoner_letters(submitted_by);
 CREATE INDEX idx_prisoner_letters_assigned_to  ON prisoner_letters(assigned_to);
 CREATE INDEX idx_prisoner_replies_replied_by   ON prisoner_replies(replied_by);
-CREATE INDEX idx_internal_requests_parent    ON internal_requests(parent_request_id);
+CREATE INDEX idx_internal_requests_parent    ON internal_requests(parent_request_id) WHERE parent_request_id IS NOT NULL;
 -- internal_requests_select's RLS (rls.sql) and listOutstandingForSections/
 -- listAssignedToUser (internal-requests-api.js) filter directly on these
 -- columns, same shape as the participant-column indexes above on

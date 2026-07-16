@@ -43,8 +43,11 @@ const ReviewCommentsAPI = (() => {
     },
 
     // notifyUserId = the draft's creator; navRecordId = what the
-    // notification should open (the request detail page).
-    async add({ recordType, recordId, quotedText, comment, notifyUserId, navRecordId, subject }) {
+    // notification should open (the request detail page by default, or
+    // the entry detail page for entry_reply comments — navRecordType
+    // must match whatever key shell.js's notification bell route table
+    // expects, see js/views/shell.js's _renderNotifList).
+    async add({ recordType, recordId, quotedText, comment, notifyUserId, navRecordId, navRecordType = 'request', subject }) {
       const db = getSupabase();
       const session = await Auth.getSession();
       const { data, error } = await db.from('review_comments').insert({
@@ -55,7 +58,7 @@ const ReviewCommentsAPI = (() => {
       if (error) throw error;
       if (notifyUserId && notifyUserId !== session.user.id) {
         await NotificationsAPI.notify([notifyUserId], {
-          type: 'draft_returned', recordType: 'request', recordId: navRecordId,
+          type: 'draft_returned', recordType: navRecordType, recordId: navRecordId,
           message: `"${subject}" — a supervisor commented on your draft`,
         });
       }

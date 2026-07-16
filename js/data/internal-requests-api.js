@@ -1,10 +1,11 @@
 // ─── Internal Requests Data API ────────────────────────────────
-// Org-only collaboration between sections, anchored to one external
-// request (parent_request_id) — never visible to the other org in the
-// conversation (see supabase/rls.sql for why that's structurally true,
-// not just a UI convention). Covers looping extra sections in when
-// routing, and a section gathering supporting info from another
-// section while drafting a reply.
+// Org-only collaboration between sections, anchored to exactly ONE
+// parent case — either an external request (parent_request_id) or an
+// Entry case (parent_entry_id, external_correspondence) — never visible
+// to the other org in the conversation (see supabase/rls.sql for why
+// that's structurally true, not just a UI convention). Covers looping
+// extra sections in when routing, and a section gathering supporting
+// info from another section while drafting a reply.
 //
 // Status flow mirrors external requests: sent -> received ->
 // in_progress (assigned to a staff member) -> responded (an approved
@@ -24,6 +25,18 @@ const InternalRequestsAPI = (() => {
     });
   }
 
+  // Resolves which parent an internal_requests row is anchored to (an
+  // external request or an Entry case — exactly one, per the table's
+  // own CHECK constraint) into the {recordType, recordId} shape
+  // NotificationsAPI.notify() expects — without this, a notification
+  // for an entry-anchored row would navigate to the wrong detail page
+  // (#request-detail instead of #entry-detail).
+  function parentRef(row) {
+    return row.parent_request_id
+      ? { recordType: 'request', recordId: row.parent_request_id }
+      : { recordType: 'external_correspondence', recordId: row.parent_entry_id };
+  }
+
   return {
     async list(parentRequestId) {
       const db = getSupabase();
@@ -37,6 +50,27 @@ const InternalRequestsAPI = (() => {
           assigned_to_user:users!internal_requests_assigned_to_fkey(full_name, designations(name))
         `)
         .eq('parent_request_id', parentRequestId)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      return data;
+    },
+
+    // Same as list() above but for an Entry-anchored case (Internal
+    // Collaboration on external_correspondence, not requests) — Entry
+    // has no multi-round "conversation" the way requests does, so this
+    // is the whole of what entry-detail.js needs to fetch.
+    async listForEntry(entryId) {
+      const db = getSupabase();
+      const { data, error } = await db.from('internal_requests')
+        .select(`
+          *,
+          from_section:sections!internal_requests_from_section_id_fkey(name, code),
+          to_section:sections!internal_requests_to_section_id_fkey(name, code),
+          created_by_user:users!internal_requests_created_by_fkey(full_name, service_number, designations(name)),
+          received_by_user:users!internal_requests_received_by_fkey(full_name, designations(name)),
+          assigned_to_user:users!internal_requests_assigned_to_fkey(full_name, designations(name))
+        `)
+        .eq('parent_entry_id', entryId)
         .order('created_at', { ascending: true });
       if (error) throw error;
       return data;
@@ -73,6 +107,7 @@ const InternalRequestsAPI = (() => {
           from_section:sections!internal_requests_from_section_id_fkey(name, code),
           to_section:sections!internal_requests_to_section_id_fkey(name, code),
           parent_request:requests!internal_requests_parent_request_id_fkey(id, subject, reference_number),
+          parent_entry:external_correspondence!internal_requests_parent_entry_id_fkey(id, subject, reference_number, subject_language),
           replies:internal_request_replies(status)
         `, { count: 'exact' })
         .or(`from_section_id.in.(${sectionIds.join(',')}),to_section_id.in.(${sectionIds.join(',')})`)
@@ -102,7 +137,8 @@ const InternalRequestsAPI = (() => {
           *,
           from_section:sections!internal_requests_from_section_id_fkey(name, code),
           to_section:sections!internal_requests_to_section_id_fkey(name, code),
-          parent_request:requests!internal_requests_parent_request_id_fkey(id, subject, reference_number)
+          parent_request:requests!internal_requests_parent_request_id_fkey(id, subject, reference_number),
+          parent_entry:external_correspondence!internal_requests_parent_entry_id_fkey(id, subject, reference_number, subject_language)
         `, { count: 'exact' })
         .eq('assigned_to', userId)
         .order('created_at', { ascending: false })
@@ -164,14 +200,17 @@ const InternalRequestsAPI = (() => {
       return data;
     },
 
-    // deadline is capped at the parent request's own deadline —
-    // enforced server-side too (internal_requests_insert's WITH CHECK,
-    // see supabase/rls.sql), this is just the UX-level pass-through.
-    async create({ parentRequestId, fromSectionId, toSectionId, subject, subjectLanguage, body, language, deadline }) {
+    // deadline is capped at the parent's own deadline — enforced
+    // server-side too (internal_requests_insert's WITH CHECK, see
+    // supabase/rls.sql), this is just the UX-level pass-through. Exactly
+    // one of parentRequestId/parentEntryId must be set (mirrors the
+    // table's own internal_requests_one_parent CHECK constraint).
+    async create({ parentRequestId, parentEntryId, fromSectionId, toSectionId, subject, subjectLanguage, body, language, deadline }) {
       const db = getSupabase();
       const session = await Auth.getSession();
       const { data, error } = await db.from('internal_requests').insert({
-        parent_request_id: parentRequestId, from_section_id: fromSectionId, to_section_id: toSectionId,
+        parent_request_id: parentRequestId || null, parent_entry_id: parentEntryId || null,
+        from_section_id: fromSectionId, to_section_id: toSectionId,
         created_by: session.user.id, subject, subject_language: subjectLanguage || 'en',
         body: RichEditor.sanitize(body), language: language || 'en', deadline: deadline || null,
       }).select().single();
@@ -179,7 +218,7 @@ const InternalRequestsAPI = (() => {
       await logAudit('created', data.id, `Created internal request "${subject}"`);
       const recipients = await NotificationsAPI.sectionUserIds(toSectionId);
       await NotificationsAPI.notify(recipients, {
-        type: 'new_request', recordType: 'request', recordId: parentRequestId,
+        type: 'new_request', ...parentRef(data),
         message: `"${subject}" — an internal request needs your section's input`,
       });
       return data;
@@ -213,7 +252,7 @@ const InternalRequestsAPI = (() => {
       await logAudit('routed', id, `Re-routed internal request to ${section?.name || 'another section'}`);
       const recipients = await NotificationsAPI.sectionUserIds(toSectionId);
       await NotificationsAPI.notify(recipients, {
-        type: 'new_request', recordType: 'request', recordId: data.parent_request_id,
+        type: 'new_request', ...parentRef(data),
         message: `"${data.subject}" — an internal request was routed to your section`,
       });
       return data;
@@ -238,7 +277,7 @@ const InternalRequestsAPI = (() => {
       await logAudit('returned_to_sender', id, `Sent back to originating section${note ? ': ' + note : ''}`);
       const recipients = await NotificationsAPI.sectionUserIds(internalRequest.from_section_id);
       await NotificationsAPI.notify(recipients, {
-        type: 'new_request', recordType: 'request', recordId: data.parent_request_id,
+        type: 'new_request', ...parentRef(data),
         message: `"${data.subject}" — an internal request was sent back to your section${note ? ': ' + note : ''}`,
       });
       return data;
@@ -262,7 +301,7 @@ const InternalRequestsAPI = (() => {
       await logAudit('assigned', id, note);
       if (userId) {
         await NotificationsAPI.notify([userId], {
-          type: 'new_request', recordType: 'request', recordId: data.parent_request_id,
+          type: 'new_request', ...parentRef(data),
           message: `"${data.subject}" — an internal request was assigned to you`,
         });
       }
@@ -305,7 +344,7 @@ const InternalRequestsAPI = (() => {
         ? [approverId]
         : await NotificationsAPI.sectionUserIds(internalRequest.to_section_id, ['mcs_admin', 'authority_admin', 'supervisor']);
       await NotificationsAPI.notify(recipients, {
-        type: 'approval_requested', recordType: 'request', recordId: internalRequest.parent_request_id,
+        type: 'approval_requested', ...parentRef(internalRequest),
         message: `"${internalRequest.subject}" — an internal reply awaits your approval`,
       });
       return data;
@@ -327,7 +366,7 @@ const InternalRequestsAPI = (() => {
       askingSide.add(internalRequest.created_by);
       const note = (comment || '').replace(/<[^>]+>/g, '').trim().slice(0, 200);
       await NotificationsAPI.notify([...askingSide], {
-        type: 'new_response', recordType: 'request', recordId: internalRequest.parent_request_id,
+        type: 'new_response', ...parentRef(internalRequest),
         message: `"${internalRequest.subject}" — your internal request received a reply${note ? ': ' + note : ''}`,
       });
       return data;
@@ -345,7 +384,7 @@ const InternalRequestsAPI = (() => {
       await logAudit('returned', internalRequest.id, 'Returned internal reply for changes');
       const note = (comment || '').replace(/<[^>]+>/g, '').trim().slice(0, 200);
       await NotificationsAPI.notify([data.created_by], {
-        type: 'draft_returned', recordType: 'request', recordId: internalRequest.parent_request_id,
+        type: 'draft_returned', ...parentRef(internalRequest),
         message: `"${internalRequest.subject}" — your internal reply was returned for changes${note ? ': ' + note : ''}`,
       });
       return data;
