@@ -254,12 +254,14 @@ const DashboardView = {
       if (mySections.length > 0) {
         const sectionIds = mySections.map(s => s.id);
         const mySet = new Set(sectionIds);
-        // Scoped to request-anchored loop-ins only — this block's rows
-        // all link to #requests?tab=info, which (js/views/requests.js's
-        // _renderInfoRequests) only shows request-anchored rows too;
-        // entry-anchored Internal Collaboration gets its own dashboard
-        // rows further down, linking to #entry instead.
-        outstanding = (await InternalRequestsAPI.listOutstandingForSections(sectionIds)).items.filter(ir => ir.parent_request_id);
+        // One fetch, split by parent — request-anchored rows below link
+        // to #requests?tab=info (js/views/requests.js's _renderInfoRequests
+        // only shows request-anchored rows too); entry-anchored rows get
+        // their own block further down, linking to #entry?tab=info instead
+        // (js/views/entry.js's own Info Requests tab, same sub=mine/theirs
+        // shape).
+        const allOutstandingIC = (await InternalRequestsAPI.listOutstandingForSections(sectionIds)).items;
+        outstanding = allOutstandingIC.filter(ir => ir.parent_request_id);
         const awaitingTheirReply = outstanding.filter(ir => mySet.has(ir.from_section_id) && !mySet.has(ir.to_section_id)).length;
         rows.push({ icon: 'ti-clock', label: 'Information Requested — Awaiting Reply', count: awaitingTheirReply, href: '#requests?tab=info&sub=theirs' });
 
@@ -305,6 +307,28 @@ const DashboardView = {
 
         const entryReplyPendingApproval = myEntries.filter(e => iSupervise(e.to_section_id) && (e.replies || []).some(r => r.status === 'pending_approval')).length;
         rows.push({ icon: 'ti-clipboard-check', label: 'Entry Reply Pending Approval', count: entryReplyPendingApproval, href: '#entry?tab=inbox' });
+
+        // Entry-anchored Internal Collaboration ("Loop in a Section") —
+        // same buckets/logic as the request-anchored block above, just
+        // filtered to ir.parent_entry_id and linking to #entry?tab=info.
+        // This was previously missing entirely (despite a comment above
+        // claiming it existed further down) — a section looped in on an
+        // entry saw no dashboard row at all, not even once received.
+        const entryOutstandingIC = allOutstandingIC.filter(ir => ir.parent_entry_id);
+        const entryAwaitingTheirReply = entryOutstandingIC.filter(ir => mySet.has(ir.from_section_id) && !mySet.has(ir.to_section_id)).length;
+        rows.push({ icon: 'ti-clock', label: 'Entry Information Requested — Awaiting Reply', count: entryAwaitingTheirReply, href: '#entry?tab=info&sub=theirs' });
+
+        const entryIncomingIC = entryOutstandingIC.filter(ir => mySet.has(ir.to_section_id));
+        const entryNotAssignedIC = ir => ['received', 'in_progress'].includes(ir.status) && !ir.assigned_to && iSupervise(ir.to_section_id);
+        const entryReplyNotStartedIC = ir => ir.status === 'in_progress' && ir.assigned_to === user.id && (ir.replies || []).length === 0;
+        const entryPendingApprovalIC = ir => iSupervise(ir.to_section_id) && (ir.replies || []).some(r => r.status === 'pending_approval');
+
+        rows.push({ icon: 'ti-user-question', label: 'Entry Internal Request Not Assigned', count: entryIncomingIC.filter(entryNotAssignedIC).length, href: '#entry?tab=info&sub=mine' });
+        rows.push({ icon: 'ti-edit-off', label: 'Entry Internal Reply Not Started', count: entryIncomingIC.filter(entryReplyNotStartedIC).length, href: '#entry?tab=info&sub=mine' });
+        rows.push({ icon: 'ti-clipboard-check', label: 'Entry Internal Reply Pending Approval', count: entryIncomingIC.filter(entryPendingApprovalIC).length, href: '#entry?tab=info&sub=mine' });
+
+        const entryNeedsMyReplyIC = entryIncomingIC.filter(ir => !entryNotAssignedIC(ir) && !entryReplyNotStartedIC(ir) && !entryPendingApprovalIC(ir)).length;
+        rows.push({ icon: 'ti-message-question', label: 'Entry Information Requests — Needs Your Reply', count: entryNeedsMyReplyIC, href: '#entry?tab=info&sub=mine' });
       }
 
       // Zero-count rows are hidden entirely — a padded list of zeros

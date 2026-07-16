@@ -186,26 +186,32 @@ $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
 -- True if the caller may log/route p_org_id's external correspondence
 -- (Entry module — public/family/outside-office mail and prisoner
--- complaints that arrive from outside the CorLink network entirely): a
--- supervisor/admin of that org, OR (if the org has designated one or
--- more entry_sections) any member of any of those sections regardless
--- of role, OR (if none are configured yet) any member of the org at
--- all — same never-breaks-on-upgrade shape as is_prisoner_registry_
--- manager() above, except an org may designate MULTIPLE entry sections
--- (entry_sections is a join table, not a single FK column), since more
--- than one desk may need to log incoming correspondence.
+-- complaints that arrive from outside the CorLink network entirely):
+-- a member of one of the org's designated entry_sections, OR (if none
+-- are configured yet) any member of the org at all — same never-
+-- breaks-on-upgrade shape as is_prisoner_registry_manager() above,
+-- except an org may designate MULTIPLE entry sections (entry_sections
+-- is a join table, not a single FK column), since more than one desk
+-- may need to log incoming correspondence.
+--
+-- Deliberately NOT a blanket is_supervisor_or_above() bypass (a
+-- previous version of this function had one) — that let every
+-- supervisor/admin org-wide see and manage every logged entry
+-- regardless of section, which is exactly the "all entries visible to
+-- all supervisors" bug this was reported as. Visibility into a
+-- specific entry not covered by entry_sections membership still comes
+-- from external_correspondence_select's other branches (to_section_id
+-- membership, assigned_to, entered_by), same as any other row.
 CREATE OR REPLACE FUNCTION is_entry_staff(p_org_id UUID)
 RETURNS BOOLEAN AS $$
-  SELECT
-    (get_my_org_id() = p_org_id AND is_supervisor_or_above())
-    OR CASE
-      WHEN EXISTS (SELECT 1 FROM entry_sections WHERE org_id = p_org_id)
-        THEN EXISTS (
-          SELECT 1 FROM entry_sections es
-          WHERE es.org_id = p_org_id AND es.section_id IN (SELECT my_section_ids())
-        )
-      ELSE get_my_org_id() = p_org_id
-    END;
+  SELECT CASE
+    WHEN EXISTS (SELECT 1 FROM entry_sections WHERE org_id = p_org_id)
+      THEN EXISTS (
+        SELECT 1 FROM entry_sections es
+        WHERE es.org_id = p_org_id AND es.section_id IN (SELECT my_section_ids())
+      )
+    ELSE get_my_org_id() = p_org_id
+  END;
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
 
 -- True if the user has been individually designated to handle prisoner

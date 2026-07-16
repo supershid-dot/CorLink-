@@ -359,7 +359,7 @@ const EntryDetailView = {
   // _renderAuditEvents/_renderActivityLog — ported verbatim since
   // they're already fully generic over recordType/recordId/actions.
   _renderProcessEvents(entryId) {
-    return this._renderAuditEvents('external_correspondence', entryId, ['routed', 'assigned']);
+    return this._renderAuditEvents('external_correspondence', entryId, ['routed', 'assigned', 'received']);
   },
 
   _renderAuditEvents(recordType, recordId, actions) {
@@ -492,7 +492,6 @@ const EntryDetailView = {
       <details class="internal-collab-panel" ${items.length > 0 ? 'open' : ''}>
         <summary>
           <i class="ti ti-lock"></i> Internal Collaboration
-          <span class="badge badge-muted">Not visible outside this organization</span>
           ${items.length > 0 ? `<span class="badge badge-outline">${items.length}</span>` : ''}
         </summary>
         <div class="internal-collab-body">
@@ -1011,6 +1010,7 @@ const EntryDetailView = {
     const blocks = [];
 
     if (e.status === 'logged' && ctx.canManage) {
+      blocks.push(`<button class="btn btn-secondary btn-sm" id="edit-entry-btn">Edit Draft</button>`);
       blocks.push(`<button class="btn btn-primary btn-sm" id="route-entry-btn">Route to Section</button>`);
     }
 
@@ -1106,6 +1106,7 @@ const EntryDetailView = {
   _bindActions() {
     const main = document.getElementById('entry-detail-main');
 
+    document.getElementById('edit-entry-btn')?.addEventListener('click', () => this._openEditEntryModal());
     document.getElementById('route-entry-btn')?.addEventListener('click', () => this._openRouteModal());
     document.getElementById('receive-entry-btn')?.addEventListener('click', () => this._runAction(() => EntryAPI.markReceived(this._entry.id)));
     document.getElementById('assign-entry-btn')?.addEventListener('click', () => this._openAssignModal());
@@ -1344,6 +1345,70 @@ const EntryDetailView = {
     } catch (err) {
       alert(err.message || 'Something went wrong.');
     }
+  },
+
+  // Same shape as request-detail.js's _openEditRequestModal — subject +
+  // body + deadline, only offered while status is still 'logged' (see
+  // _renderActions' gate on the Edit Draft button).
+  _openEditEntryModal() {
+    const e = this._entry;
+    this._openModal(`
+      <h3>Edit Draft</h3>
+      <form id="edit-entry-form" class="modal-form">
+        <div class="field-group">
+          <div class="field-group-row">
+            <label class="field-label">Subject</label>
+            ${RichEditor.langToggleHtml('subjectLanguage', e.subject_language || 'en')}
+          </div>
+          <input class="field-input-plain${e.subject_language === 'dv' ? ' field-divehi' : ''}" name="subject" id="edit-entry-subject" required value="${this._escapeHtml(e.subject)}" />
+        </div>
+        <div class="field-group">
+          <div class="field-group-row">
+            <label class="field-label">Message</label>
+            ${RichEditor.langToggleHtml('language', e.language || 'en')}
+          </div>
+          <div id="edit-entry-body"></div>
+        </div>
+        ${RequestsView._deadlineFieldHtml(e.deadline || '')}
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Changes</button>
+        </div>
+      </form>
+    `, { large: true });
+    const form = document.getElementById('edit-entry-form');
+    const editor = RichEditor.create(document.getElementById('edit-entry-body'), { language: e.language || 'en' });
+    editor.setHTML(e.body);
+    const editSubject = document.getElementById('edit-entry-subject');
+    RequestsView._bindDeadlineField(form);
+    const syncEditSubjectLang = (lang) => editSubject.classList.toggle('field-divehi', lang === 'dv');
+    RichEditor.bindLangToggle(form, 'subjectLanguage', syncEditSubjectLang);
+    RichEditor.bindAutoDetect(editSubject, form, 'subjectLanguage', syncEditSubjectLang);
+    RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const fd = new FormData(form);
+      const errEl = form.querySelector('.modal-error');
+      const body = editor.getHTML();
+      if (!body || body === '<p><br></p>') {
+        errEl.textContent = 'Message cannot be empty.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      const deadline = RequestsView._combineDeadline(fd.get('deadline'), fd.get('deadlineTime'));
+      try {
+        await EntryAPI.updateDraft(e.id, {
+          subject: fd.get('subject'), subject_language: fd.get('subjectLanguage'),
+          body, language: fd.get('language'), deadline,
+        });
+        this._closeModal();
+        await this._load();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
   },
 
   async _openRouteModal() {

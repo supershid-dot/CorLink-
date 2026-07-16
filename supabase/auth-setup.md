@@ -492,6 +492,46 @@ match what changed since, instead of re-running the full files:
   hides once the entry leaves `logged` status; and the Entry reply
   approval line now uses the same green `.thread-approval--approved`
   banner style as Requests. Idempotent.
+- Entry's Internal Collaboration panel brought to full UI parity with
+  Requests' own (per-row next-step banner, Route to Another Section,
+  Return to Sender, review comments + Edit Draft on internal replies,
+  comment-capture on approve/return, supervisor picker on submit,
+  primary-action highlighting) — no schema/RLS changes, the underlying
+  `internal-requests-api.js` functions and `review_comments` RLS were
+  already parent-agnostic.
+- `supabase/patch-entry-staff-scope.sql` — fixes a real RLS bug:
+  `is_entry_staff()` used to OR in `is_supervisor_or_above()` unscoped
+  by section, so every supervisor/admin in the org could see (and, via
+  the policies that gate on `is_entry_staff()`, manage) every logged
+  entry regardless of section — reported as "all the entry is visible
+  to all the supervisors." Fixed by dropping that clause entirely;
+  visibility is now: a member of one of the org's designated
+  `entry_sections` (or any org member when none are configured yet,
+  same fallback as before), OR — unchanged, via `external_
+  correspondence_select`'s other branches — the entry's `to_section_id`
+  member, the assigned staff member, or whoever logged it. Verified
+  against a local Postgres instance: an unrelated supervisor (not in
+  any entry section, not the to_section, not assigned, not the
+  logger) went from seeing a routed entry (bug reproduced against the
+  old function) to correctly getting zero rows after the fix, while an
+  entry_sections member and the to_section member both still see it.
+  Idempotent.
+- Also this round: `_renderProcessEvents`'s audit-action allowlist was
+  missing `'received'` (added in the patch above), so "Marked as
+  Received" never actually showed up in the Activity Log despite being
+  recorded — fixed. An "Edit Draft" action was added for the Logged
+  Entry itself, available only while `status = 'logged'` (before
+  routing) — `EntryAPI.updateDraft()`, no RLS change needed since
+  `external_correspondence_update_entry` already allows entry staff to
+  update any column. The "Not visible outside this organization" badge
+  was removed from Entry's Internal Collaboration panel — meaningless
+  there since, unlike Requests, Entry has no cross-org counterpart to
+  hide anything from. Dashboard's Internal Collaboration "Action
+  Needed" rows were scoped to request-anchored `internal_requests`
+  only; added the missing entry-anchored equivalent (same buckets,
+  linking to `#entry?tab=info` instead of `#requests?tab=info`) — a
+  section looped in on an entry previously saw nothing on their
+  dashboard at all, not even once received.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 
