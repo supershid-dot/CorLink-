@@ -1347,7 +1347,14 @@ CREATE POLICY "internal_requests_insert" ON internal_requests
     AND EXISTS (
       SELECT 1 FROM requests r WHERE r.id = internal_requests.parent_request_id
         AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
-        AND r.status <> 'cancelled'
+        -- A brand-new "Loop in a Section" has no reason to start on a case
+        -- that's already done — cancelled, closed, or responded (awaiting
+        -- only acknowledge-and-close, not further section work). Narrower
+        -- than internal_requests_update below on purpose: an internal_
+        -- request already IN FLIGHT when the case reaches one of these
+        -- statuses stays updatable there so it can still be finished, but
+        -- nothing new should be startable once the case itself is done.
+        AND r.status NOT IN ('cancelled', 'closed', 'responded')
     )
     -- A section gathering supporting info can't give itself more time
     -- than the case itself has — no cap if either deadline is unset.

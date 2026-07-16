@@ -407,6 +407,20 @@ match what changed since, instead of re-running the full files:
   every branch of both predicates across 4 roles (plain staff, section
   supervisor, org-wide admin, assigned_receiver-only) — every count
   matched a manual row-by-row check. Idempotent (`CREATE OR REPLACE`).
+- `supabase/patch-internal-collab-freeze-on-close.sql` — `internal_requests_
+  insert`'s WITH CHECK only blocked starting a brand-new "Loop in a
+  Section" round on a `cancelled` case; a `closed` or `responded` case
+  still let the assignee start one, despite there being no more work
+  left to do. The button was visible in the UI on a closed case (real
+  gap, not cosmetic) — now blocked for `cancelled`/`closed`/`responded`
+  alike. Narrower than `internal_requests_update` on purpose: an
+  internal_request already IN FLIGHT when the case reaches one of these
+  statuses stays updatable there so it can still be finished — only
+  starting a NEW one is blocked. `request-detail.js`'s `canStart` gate
+  updated to match (UI courtesy; RLS is the real gate). Verified against
+  a local Postgres instance: INSERT allowed on sent/received/in_progress/
+  overdue, rejected on cancelled/closed/responded. Idempotent (`DROP
+  POLICY IF EXISTS` + `CREATE POLICY`).
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 
