@@ -185,6 +185,20 @@ const EntryAPI = (() => {
       return data;
     },
 
+    // Edit the logged entry itself — available while it's still
+    // unrouted (entry-detail.js only shows the Edit Draft button at
+    // status 'logged'; external_correspondence_update_entry RLS doesn't
+    // itself narrow by status, same "UI is the courtesy gate" shape as
+    // elsewhere in this app).
+    async updateDraft(id, patch) {
+      const db = getSupabase();
+      if (patch.body != null) patch = { ...patch, body: RichEditor.sanitize(patch.body) };
+      const { data, error } = await db.from('external_correspondence').update(patch).eq('id', id).select().single();
+      if (error) throw wrapRowError(error);
+      await logAudit('edited', id, 'Edited entry draft');
+      return data;
+    },
+
     // ── Route (Entry staff) ──────────────────────────────────────
     async route(id, { toSectionId, assignedTo }) {
       const db = getSupabase();
