@@ -555,6 +555,8 @@ CREATE TABLE external_correspondence (
   received_date     DATE        NOT NULL DEFAULT CURRENT_DATE,  -- When the correspondence itself arrived — may predate created_at (Entry logging it)
   entered_by        UUID        NOT NULL REFERENCES users(id),
   to_section_id     UUID        REFERENCES sections(id),   -- Internal section responsible for responding; NULL until routed
+  received_by       UUID        REFERENCES users(id),  -- Distinct from received_date above: this is the to_section acknowledging receipt of the routed case, same received_by/received_at shape as requests/internal_requests
+  received_at       TIMESTAMPTZ,
   assigned_to       UUID        REFERENCES users(id),
   status            TEXT        NOT NULL DEFAULT 'logged' CHECK (status IN ('logged', 'routed', 'responded', 'closed')),
   deadline          DATE,

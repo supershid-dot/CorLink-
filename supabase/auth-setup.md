@@ -477,6 +477,21 @@ match what changed since, instead of re-running the full files:
   later-time case, a day-after-deadline case still correctly rejected,
   and an unrelated section confirmed still unable to see the entry.
   Idempotent.
+- `supabase/patch-entry-received.sql` — adds `received_by`/`received_at`
+  to `external_correspondence`: once an entry is routed, the receiving
+  section can explicitly mark it as received (same receipt shape as
+  requests/responses/internal_requests), and that shows up in the
+  Activity Log with staff name + timestamp. Distinct from the
+  pre-existing `received_date`, which just records when the
+  correspondence itself arrived. No RLS changes — `external_
+  correspondence_update_section` already grants the receiving section
+  unrestricted UPDATE. Also: the "Routed" activity-log line now names
+  the destination section instead of a generic "to section"; the
+  Internal Collaboration panel moved to render below the Logged Entry
+  thread instead of above it; the Logged Entry's own upload box now
+  hides once the entry leaves `logged` status; and the Entry reply
+  approval line now uses the same green `.thread-approval--approved`
+  banner style as Requests. Idempotent.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

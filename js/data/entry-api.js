@@ -191,9 +191,10 @@ const EntryAPI = (() => {
       const patch = { to_section_id: toSectionId, status: 'routed' };
       if (assignedTo) patch.assigned_to = assignedTo;
       const { data, error } = await db.from('external_correspondence')
-        .update(patch).eq('id', id).select().single();
+        .update(patch).eq('id', id)
+        .select('*, to_section:sections!external_correspondence_to_section_id_fkey(name)').single();
       if (error) throw wrapRowError(error);
-      await logAudit('routed', id, 'Routed external correspondence to section');
+      await logAudit('routed', id, `Routed to ${data.to_section?.name || 'a section'}`);
       if (assignedTo) {
         await NotificationsAPI.notify([assignedTo], {
           type: 'new_external_correspondence', recordType: 'external_correspondence', recordId: id,
@@ -206,6 +207,23 @@ const EntryAPI = (() => {
           message: `External correspondence "${data.subject}" has been routed to your section`,
         });
       }
+      return data;
+    },
+
+    // The receiving section acknowledging receipt of the routed case —
+    // same received_by/received_at receipt shape as requests/responses/
+    // internal_requests. .is('received_by', null) guards against a
+    // double-click race the same way .eq('status', currentStatus) guards
+    // requests-api.js's receive-first steps.
+    async markReceived(id) {
+      const db = getSupabase();
+      const session = await Auth.getSession();
+      if (!session) throw new Error('Not signed in.');
+      const { data, error } = await db.from('external_correspondence')
+        .update({ received_by: session.user.id, received_at: new Date().toISOString() })
+        .eq('id', id).is('received_by', null).select().single();
+      if (error) throw wrapRowError(error);
+      await logAudit('received', id, 'Marked entry as received by section');
       return data;
     },
 
@@ -335,7 +353,7 @@ const EntryAPI = (() => {
       const queries = [];
       if (entryIds.length) {
         queries.push(db.from('audit_logs').select('*, user:users(full_name, designations(name))')
-          .eq('record_type', 'external_correspondence').in('record_id', entryIds).in('action', ['routed', 'assigned']));
+          .eq('record_type', 'external_correspondence').in('record_id', entryIds).in('action', ['routed', 'assigned', 'received']));
       }
       if (internalRequestIds.length) {
         queries.push(db.from('audit_logs').select('*, user:users(full_name, designations(name))')

@@ -148,8 +148,6 @@ const EntryDetailView = {
         </div>
       </div>
 
-      ${this._renderInternalCollab(e, { inToSection, canManage, canSupervise })}
-
       <div class="thread">
         <div class="thread-message thread-message--request">
           <div class="thread-message-kind">Logged Entry</div>
@@ -158,12 +156,14 @@ const EntryDetailView = {
             <span class="structure-empty">${new Date(e.created_at).toLocaleString()}</span>
           </div>
           <div class="thread-message-body${RichEditor.dvClass(e.body, e.language)}">${RichEditor.sanitize(e.body)}</div>
-          ${this._renderAttachments('external_correspondence', e.id, this._attachments, canManage && e.status !== 'closed')}
+          ${this._renderAttachments('external_correspondence', e.id, this._attachments, canManage && e.status === 'logged')}
           ${this._renderActivityLog(this._renderProcessEvents(e.id))}
         </div>
 
         ${this._replies.filter(r => r.status === 'sent' || r.created_by === this._user.id || canSupervise || inToSection).map(r => this._renderReply(r, inToSection, canSupervise, canManage)).join('')}
       </div>
+
+      ${this._renderInternalCollab(e, { inToSection, canManage, canSupervise })}
 
       <div id="detail-actions" class="detail-actions-panel">
         ${this._renderActions(e, { inToSection, canManage, canSupervise })}
@@ -192,7 +192,8 @@ const EntryDetailView = {
         </div>
         <div class="thread-message-body${RichEditor.dvClass(r.body, r.language)}">${RichEditor.sanitize(r.body)}</div>
         ${r.approved_by ? `
-          <div class="thread-receipt"><i class="ti ti-circle-check"></i>
+          <div class="thread-approval thread-approval--approved">
+            <i class="ti ti-circle-check"></i>
             <span>Approved by <strong>${this._escapeHtml(r.approved_by_user?.full_name || 'Unknown')}</strong>${r.approved_by_user?.designations?.name ? ', ' + this._escapeHtml(r.approved_by_user.designations.name) : ''} — ${new Date(r.approved_at).toLocaleString()}</span>
           </div>` : ''}
         ${r.delivery_method ? `<div class="thread-receipt"><i class="ti ti-send"></i><span>Sent back to the sender via <strong>${this._sourceLabel(r.delivery_method)}</strong>${r.sent_at ? ' — ' + new Date(r.sent_at).toLocaleString() : ''}</span></div>` : ''}
@@ -407,6 +408,11 @@ const EntryDetailView = {
     }
 
     if (e.status === 'routed') {
+      if (!e.received_by) {
+        return ctx.inToSection
+          ? { tone: 'action', title: 'Mark this entry as received' }
+          : { tone: 'waiting', title: 'Waiting for the section to mark this as received' };
+      }
       if (!e.assigned_to) {
         return ctx.canSupervise
           ? { tone: 'action', title: 'Assign this entry to a staff member' }
@@ -570,8 +576,9 @@ const EntryDetailView = {
         </div>
         <div class="thread-message-body${reply.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(reply.body)}</div>
         ${reply.status === 'sent' && reply.approved_by_user ? `
-          <div class="thread-receipt"><i class="ti ti-circle-check"></i>
-            Approved &amp; sent by <strong>${this._escapeHtml(reply.approved_by_user.full_name)}</strong>${reply.approved_at ? ' — ' + new Date(reply.approved_at).toLocaleString() : ''}
+          <div class="thread-approval thread-approval--approved">
+            <i class="ti ti-circle-check"></i>
+            <span>Approved &amp; sent by <strong>${this._escapeHtml(reply.approved_by_user.full_name)}</strong>${reply.approved_at ? ' — ' + new Date(reply.approved_at).toLocaleString() : ''}</span>
           </div>` : ''}
         ${this._renderAttachments('internal_reply', reply.id, rd.attachments || [], canUpload)}
         <div class="detail-actions">
@@ -726,6 +733,10 @@ const EntryDetailView = {
       blocks.push(`<button class="btn btn-primary btn-sm" id="route-entry-btn">Route to Section</button>`);
     }
 
+    if (e.to_section_id && e.status === 'routed' && !e.received_by && ctx.inToSection) {
+      blocks.push(`<button class="btn btn-primary btn-sm" id="receive-entry-btn">Mark as Received</button>`);
+    }
+
     if (e.to_section_id && ['routed'].includes(e.status) && ctx.canSupervise) {
       blocks.push(`<button class="btn btn-secondary btn-sm" id="assign-entry-btn">${e.assigned_to ? 'Reassign' : 'Assign to Staff'}</button>`);
     }
@@ -815,6 +826,7 @@ const EntryDetailView = {
     const main = document.getElementById('entry-detail-main');
 
     document.getElementById('route-entry-btn')?.addEventListener('click', () => this._openRouteModal());
+    document.getElementById('receive-entry-btn')?.addEventListener('click', () => this._runAction(() => EntryAPI.markReceived(this._entry.id)));
     document.getElementById('assign-entry-btn')?.addEventListener('click', () => this._openAssignModal());
     document.getElementById('close-entry-btn')?.addEventListener('click', () => this._runAction(() => EntryAPI.close(this._entry.id)));
 
