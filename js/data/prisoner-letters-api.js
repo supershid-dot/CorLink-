@@ -66,24 +66,33 @@ const PrisonerLettersAPI = (() => {
 
   return {
     // ── Lists ────────────────────────────────────────────────────
-    async listInbox(orgId) {
+    // Capped at INBOX_LIST_CAP (most recent first) rather than truly
+    // unbounded — same fix, same reasoning, as RequestsAPI.listInbox/
+    // listSent (see the comment there): an org that accumulates enough
+    // letter history would otherwise re-create the "one page load, one
+    // enormous query" shape that caused the recurring request-detail
+    // statement timeout. { count: 'exact' } reports the true total
+    // regardless of the .limit() below, in the same round trip.
+    async listInbox(orgId, limit = INBOX_LIST_CAP) {
       const db = getSupabase();
-      const { data, error } = await db.from('prisoner_letters')
-        .select('*, from_org:organizations!prisoner_letters_from_prison_id_fkey(name, code), prisoner:prisoners!prisoner_letters_prisoner_ref_fkey(file_number, prison)')
+      const { data, error, count } = await db.from('prisoner_letters')
+        .select('*, from_org:organizations!prisoner_letters_from_prison_id_fkey(name, code), prisoner:prisoners!prisoner_letters_prisoner_ref_fkey(file_number, prison)', { count: 'exact' })
         .eq('to_org_id', orgId)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(limit);
       if (error) throw wrapRowError(error);
-      return data;
+      return { items: data, totalCount: count ?? data.length };
     },
 
-    async listSent(orgId) {
+    async listSent(orgId, limit = INBOX_LIST_CAP) {
       const db = getSupabase();
-      const { data, error } = await db.from('prisoner_letters')
-        .select('*, to_org:organizations!prisoner_letters_to_org_id_fkey(name, code), prisoner:prisoners!prisoner_letters_prisoner_ref_fkey(file_number, prison)')
+      const { data, error, count } = await db.from('prisoner_letters')
+        .select('*, to_org:organizations!prisoner_letters_to_org_id_fkey(name, code), prisoner:prisoners!prisoner_letters_prisoner_ref_fkey(file_number, prison)', { count: 'exact' })
         .eq('from_prison_id', orgId)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(limit);
       if (error) throw wrapRowError(error);
-      return data;
+      return { items: data, totalCount: count ?? data.length };
     },
 
     // Global topbar search — matches prisoner name OR reference number

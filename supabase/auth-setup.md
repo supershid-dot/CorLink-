@@ -380,6 +380,47 @@ match what changed since, instead of re-running the full files:
   viewing session, before any reload, won't trigger its own toast (the
   internal request's own creation already did). No SQL involved — pure
   client-side change.
+- Capped 5 more previously-unbounded list functions at INBOX_LIST_CAP,
+  same fix/reasoning as RequestsAPI.listInbox/listSent: `PrisonerLettersAPI.
+  listInbox/listSent`, `EntryAPI.listAll/listUnrouted/listForSections`,
+  `InternalRequestsAPI.listOutstandingForSections/listAssignedToUser`, and
+  `RequestsAPI.listStaffWorkload`. Each now returns `{ items, totalCount }`
+  instead of a bare array — every call site (Prisoner Letters Inbox/Sent,
+  the Entry module's "All Entries" view, the Requests page's Info Requests
+  tab and Team tab, and the dashboard's Internal Collaboration rows)
+  updated to match, with a "showing most recent N of M" hint wherever a
+  list is actually truncated. No SQL — pure client-side change.
+- `supabase/patch-action-needed-counts-rpc.sql` — new
+  `requests_action_needed_counts()` RPC. The Requests nav badge (shown on
+  every page) and the Requests page's own Inbox/Sent/Info tab badges used
+  to compute their "needs my action" totals by fetching the (now-capped)
+  inbox/sent/info lists into the browser and counting matches in JS — this
+  does the counting in Postgres instead, via a single lightweight query,
+  so the number stays exact regardless of any list's cap. The SQL is a
+  verbatim port of the exact predicates `_inboxViews`/`_sentViews`'
+  `needs_action` test already uses (js/views/requests.js) — those tab
+  chips/filters still use the JS version against the fetched list, so if
+  either one ever needs to change, the other must change with it (see the
+  function's own comment in rls.sql). SECURITY INVOKER (not DEFINER) —
+  runs under the caller's own RLS, same as a normal query. Verified
+  against a local Postgres instance with a hand-built dataset covering
+  every branch of both predicates across 4 roles (plain staff, section
+  supervisor, org-wide admin, assigned_receiver-only) — every count
+  matched a manual row-by-row check. Idempotent (`CREATE OR REPLACE`).
+- `supabase/patch-internal-collab-freeze-on-close.sql` — `internal_requests_
+  insert`'s WITH CHECK only blocked starting a brand-new "Loop in a
+  Section" round on a `cancelled` case; a `closed` or `responded` case
+  still let the assignee start one, despite there being no more work
+  left to do. The button was visible in the UI on a closed case (real
+  gap, not cosmetic) — now blocked for `cancelled`/`closed`/`responded`
+  alike. Narrower than `internal_requests_update` on purpose: an
+  internal_request already IN FLIGHT when the case reaches one of these
+  statuses stays updatable there so it can still be finished — only
+  starting a NEW one is blocked. `request-detail.js`'s `canStart` gate
+  updated to match (UI courtesy; RLS is the real gate). Verified against
+  a local Postgres instance: INSERT allowed on sent/received/in_progress/
+  overdue, rejected on cancelled/closed/responded. Idempotent (`DROP
+  POLICY IF EXISTS` + `CREATE POLICY`).
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

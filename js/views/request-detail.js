@@ -1009,7 +1009,12 @@ const RequestDetailView = {
     // Section" here, which let a section that had only been looped in
     // on an earlier round start yet another round it has no business
     // starting.
-    const canStart = ctx.isAssignee && r.status !== 'cancelled';
+    //
+    // Also hidden once the case is done (cancelled/closed/responded) —
+    // matches internal_requests_insert's own RLS guard (rls.sql), which
+    // is the real gate; this just avoids a dead-end click on a button
+    // that would fail server-side anyway.
+    const canStart = ctx.isAssignee && !['cancelled', 'closed', 'responded'].includes(r.status);
     if (entry.internalRequestDetails.length === 0 && !canStart) return '';
 
     // Deliberately visually distinct from the external thread above it

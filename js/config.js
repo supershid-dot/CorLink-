@@ -21,9 +21,13 @@ const APP_TAGLINE = 'Secure. Structured. Accountable.';
 const APP_VERSION = '1.0.0';
 
 // ─── List Fetch Caps ──────────────────────────────────────────
-// RequestsAPI.listInbox/listSent (most-recent-first) cap how many rows
-// a single page load pulls, rather than fetching an org's entire
-// history unbounded — see the comment above listInbox in
-// js/data/requests-api.js for why. High enough that no real org using
-// this app today will ever notice it; exists so one never can't.
+// Shared cap for every most-recent-first list function across the data
+// layer (RequestsAPI.listInbox/listSent/listStaffWorkload,
+// PrisonerLettersAPI.listInbox/listSent, EntryAPI.listAll/listUnrouted/
+// listForSections, InternalRequestsAPI.listOutstandingForSections/
+// listAssignedToUser) — each caps how many rows a single page load
+// pulls, rather than fetching an org's entire history unbounded — see
+// the comment above RequestsAPI.listInbox in js/data/requests-api.js
+// for why. High enough that no real org using this app today will ever
+// notice it; exists so one never can't.
 const INBOX_LIST_CAP = 1000;

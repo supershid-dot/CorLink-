@@ -99,14 +99,13 @@ const RequestsView = {
     container.innerHTML = this._shell();
     this._bindShell();
 
-    // Kick off the per-tab "Needs My Action" counts (the badge on each
-    // tab). Each countable tab's data is fetched once, up front, and the
-    // promises are STORED so the tab renderers below reuse them instead
-    // of fetching a second time — the tab you land on consumes its own
-    // prefetched promise. Counts use the exact same needs_action
-    // predicate the chips do, so a tab badge and its default chip never
-    // disagree. Not awaited: the tabs render immediately and each badge
-    // fills in when its query returns.
+    // Prefetch each tab's own list data, up front, so the tab renderers
+    // below reuse it instead of fetching a second time — the tab you
+    // land on consumes its own prefetched promise. The Inbox/Sent/Info
+    // tab BADGES (the count shown on the tab button) are filled in
+    // separately by _loadTabCounts() via a dedicated RPC, not from these
+    // lists — see that method's comment for why. Not awaited: the tabs
+    // render immediately and each list fills in when its query returns.
     this._prefetch = {
       inbox: RequestsAPI.listInbox(this._user.org_id),
       sent: RequestsAPI.listSent(this._user.org_id),
@@ -130,10 +129,18 @@ const RequestsView = {
   },
 
   // Fills the count badge on each tab with its "unfinished, needs me"
-  // total. Attaches to the prefetched promises synchronously (before any
-  // tab renderer can consume/clear them), then updates each badge when
-  // its query resolves. A count of 0 hides the badge rather than showing
-  // a "0" — a tab is navigation, not a filter toggle like the chips.
+  // total. A count of 0 hides the badge rather than showing a "0" — a
+  // tab is navigation, not a filter toggle like the chips.
+  //
+  // Inbox/Sent/Info badges come from RequestsAPI.actionNeededCounts()
+  // (one lightweight COUNT()-based RPC call) rather than the prefetched
+  // list promises — those lists are capped (INBOX_LIST_CAP) for the
+  // TAB CONTENT's own sake, and counting over a capped list would
+  // silently undercount past the cap. The RPC is independent of any
+  // list fetch, so the badge number stays exact regardless. The tab
+  // chips themselves (once you're actually on that tab) still filter
+  // the fetched/capped list with the same _inboxViews/_sentViews
+  // predicate — only the badge number changed how it's computed.
   _loadTabCounts() {
     const setBadge = (tab, count) => {
       const el = document.querySelector(`[data-tab-count="${tab}"]`);
@@ -141,37 +148,32 @@ const RequestsView = {
       if (count > 0) { el.textContent = count; el.hidden = false; }
       else { el.textContent = ''; el.hidden = true; }
     };
-    const inboxNeeds = this._inboxViews().find(v => v.key === 'needs_action');
-    this._prefetch.inbox
-      .then(({ items }) => setBadge('inbox', items.filter(inboxNeeds.test).length))
-      .catch(() => {});
-    const sentNeeds = this._sentViews().find(v => v.key === 'needs_action');
-    this._prefetch.sent
-      .then(({ items }) => setBadge('sent', items.filter(sentNeeds.test).length))
+    RequestsAPI.actionNeededCounts()
+      .then(({ inboxCount, sentCount, infoCount }) => {
+        setBadge('inbox', inboxCount);
+        setBadge('sent', sentCount);
+        setBadge('info', infoCount);
+      })
       .catch(() => {});
     if (this._prefetch.approvals) {
       this._prefetch.approvals
         .then(({ requestApprovals, responseApprovals }) => setBadge('approvals', requestApprovals.length + responseApprovals.length))
         .catch(() => {});
     }
-    if (this._prefetch.info) {
-      // "Awaiting Your Reply" only — the queue where MY section owes a
-      // reply, matching the Info Requests tab's own default sub-tab.
-      // "Awaiting Their Reply" is something I'm waiting ON, not a task on me.
-      const mySet = new Set((this._mySections || []).map(s => s.id));
-      this._prefetch.info
-        .then(items => setBadge('info', items.filter(ir => mySet.has(ir.to_section_id)).length))
-        .catch(() => {});
-    }
   },
 
   // Total "needs my action" count across the Requests module, for the
   // badge AppShell paints on the Requests nav item (visible from every
-  // page). Self-contained — does NOT depend on render() having run, and
-  // deliberately mutates nothing on RequestsView: it builds a throwaway
-  // context object and evaluates the SAME needs_action predicates the
-  // Inbox/Sent chips use via .call(ctx), so this number and the tab
-  // badges can never drift.
+  // page). Self-contained — does NOT depend on render() having run.
+  //
+  // Backed by the same requests_action_needed_counts() RPC _loadTabCounts
+  // uses (see its comment) — a single lightweight COUNT()-based query
+  // instead of fetching the inbox/sent/info lists into the browser just
+  // to sum matches. The RPC's SQL is a verbatim port of the exact
+  // predicates _inboxViews/_sentViews' needs_action test still uses for
+  // the Inbox/Sent tab chips, so this number and those chips can't drift
+  // — see requests_action_needed_counts()'s own comment in rls.sql if
+  // either one ever needs to change.
   //
   // Sums Inbox + Sent + Info-awaiting-my-reply only. Approvals are NOT
   // added separately: a request/response awaiting a supervisor's approval
@@ -181,37 +183,8 @@ const RequestsView = {
   async actionNeededCount() {
     const user = Auth.getCachedProfile();
     if (!user) return 0;
-    const ctx = {
-      _user: user,
-      _isSupervisor: AppShell.isSupervisorOrAbove(user),
-      _mySections: [],
-      _mySupervisedSections: [],
-      _myLoopedInRequestIds: new Set(),
-    };
-    ctx._canReceive = ctx._isSupervisor || AppShell.hasRole(user, 'assigned_receiver');
-
-    const [mySections, mySupervised] = await Promise.all([
-      RequestsAPI.mySections().catch(() => []),
-      ctx._isSupervisor ? RequestsAPI.mySupervisedSections().catch(() => []) : Promise.resolve([]),
-    ]);
-    ctx._mySections = mySections;
-    ctx._mySupervisedSections = mySupervised;
-
-    const [inboxRes, sentRes, info] = await Promise.all([
-      RequestsAPI.listInbox(user.org_id).catch(() => ({ items: [] })),
-      RequestsAPI.listSent(user.org_id).catch(() => ({ items: [] })),
-      mySections.length
-        ? InternalRequestsAPI.listOutstandingForSections(mySections.map(s => s.id)).catch(() => [])
-        : Promise.resolve([]),
-    ]);
-
-    const inboxNeeds = this._inboxViews.call(ctx).find(v => v.key === 'needs_action');
-    const sentNeeds = this._sentViews.call(ctx).find(v => v.key === 'needs_action');
-    const mySet = new Set(mySections.map(s => s.id));
-
-    return (inboxRes.items || []).filter(inboxNeeds.test).length
-      + (sentRes.items || []).filter(sentNeeds.test).length
-      + (info || []).filter(ir => mySet.has(ir.to_section_id)).length;
+    const { inboxCount, sentCount, infoCount } = await RequestsAPI.actionNeededCounts();
+    return inboxCount + sentCount + infoCount;
   },
 
   bind() {
@@ -600,10 +573,14 @@ const RequestsView = {
     // rendered as two panels below, same split the request-detail page
     // itself draws between the external thread and its internal-collab
     // panel.
-    [this._teamItems, this._teamInternalItems] = await Promise.all([
+    const [workload, internalAssigned] = await Promise.all([
       RequestsAPI.listStaffWorkload(this._state.teamStaffId),
       InternalRequestsAPI.listAssignedToUser(this._state.teamStaffId),
     ]);
+    this._teamItems = workload.items;
+    this._teamTotalCount = workload.totalCount;
+    this._teamInternalItems = internalAssigned.items;
+    this._teamInternalTotalCount = internalAssigned.totalCount;
     this._renderTeamFiltered();
   },
 
@@ -611,7 +588,9 @@ const RequestsView = {
     const resultsEl = document.getElementById('team-results');
     if (!resultsEl) return;
     const items = this._teamItems || [];
+    const totalCount = this._teamTotalCount ?? items.length;
     const internalItems = this._teamInternalItems || [];
+    const internalTotalCount = this._teamInternalTotalCount ?? internalItems.length;
     const query = (this._state.teamSearch || '').trim().toLowerCase();
     const searched = items.filter(r => this._matchesQuery(r.subject, r.body, query, r.reference_number));
     const searchedInternal = internalItems.filter(ir => this._matchesQuery(ir.subject, ir.body, query));
@@ -629,6 +608,9 @@ const RequestsView = {
         })
       : this._noMatchesHtml(6);
     resultsEl.innerHTML = `
+      ${totalCount > items.length || internalTotalCount > internalItems.length
+        ? `<div class="field-hint">Showing the ${items.length} most recent external item${items.length === 1 ? '' : 's'} of ${totalCount}, and ${internalItems.length} most recent internal item${internalItems.length === 1 ? '' : 's'} of ${internalTotalCount} — use search to narrow further.</div>`
+        : ''}
       ${this._filterChipsHtml(filters, searched, active.key)}
       ${this._listPanel(null, filtered, { orgCol: 'From', orgKey: 'from_org', emptyHtml })}
       ${searchedInternal.length > 0 ? `<div style="margin-top: 20px;">${this._infoRequestPanel(searchedInternal, null, 'Internal Collaboration Assigned')}</div>` : ''}
@@ -733,12 +715,15 @@ const RequestsView = {
   async _renderInfoRequests(content) {
     const sectionIds = (this._mySections || []).map(s => s.id);
     // Reuse the tab-count prefetch (consume once, re-fetch on later visits).
+    let result;
     if (this._prefetch && this._prefetch.info) {
-      this._infoRequestItems = await this._prefetch.info;
+      result = await this._prefetch.info;
       delete this._prefetch.info;
     } else {
-      this._infoRequestItems = await InternalRequestsAPI.listOutstandingForSections(sectionIds);
+      result = await InternalRequestsAPI.listOutstandingForSections(sectionIds);
     }
+    this._infoRequestItems = result.items;
+    this._infoRequestTotalCount = result.totalCount;
     content.innerHTML = `
       ${this._searchBoxHtml('infoSearch', 'Search subject or message…', this._state.infoSearch)}
       <div id="info-results"></div>
@@ -754,6 +739,7 @@ const RequestsView = {
     const resultsEl = document.getElementById('info-results');
     if (!resultsEl) return;
     const items = this._infoRequestItems || [];
+    const totalCount = this._infoRequestTotalCount ?? items.length;
     const sectionIds = (this._mySections || []).map(s => s.id);
     const mySet = new Set(sectionIds);
     const query = (this._state.infoSearch || '').trim().toLowerCase();
@@ -778,6 +764,7 @@ const RequestsView = {
         })
       : this._noMatchesHtml(6);
     resultsEl.innerHTML = `
+      ${totalCount > items.length ? `<div class="field-hint">Showing the ${items.length} most recent of ${totalCount} — use search to narrow further.</div>` : ''}
       <div class="tabs tabs--sub">
         <button class="tab-btn${sub === 'mine' ? ' tab-btn--active' : ''}" data-info-sub="mine">
           <i class="ti ti-message-question"></i> Awaiting Your Section's Reply <span class="filter-chip-count">${awaitingMyReply.length}</span>

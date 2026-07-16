@@ -142,6 +142,26 @@ const RequestsAPI = (() => {
       return merged.slice(0, 8);
     },
 
+    // Server-side "needs my action" totals for the Requests nav badge
+    // (every page) and the Requests page's own Inbox/Sent/Info tab
+    // badges — see requests_action_needed_counts()'s own comment in
+    // rls.sql for the full rationale (replaces fetching the inbox/sent/
+    // info lists into the browser just to count matching rows in JS).
+    // The filter CHIPS on the Inbox/Sent tabs themselves still use the
+    // JS predicate (_inboxViews/_sentViews) against the already-fetched
+    // list — this only replaces the BADGE NUMBER, which needs the true
+    // total even beyond whatever the list's own cap shows.
+    async actionNeededCounts() {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('requests_action_needed_counts').single();
+      if (error) throw error;
+      return {
+        inboxCount: Number(data.inbox_count) || 0,
+        sentCount: Number(data.sent_count) || 0,
+        infoCount: Number(data.info_count) || 0,
+      };
+    },
+
     // Every approvals row with decision='returned' that RLS lets me see —
     // the dashboard matches these (record_type, record_id) pairs against
     // my own still-draft requests/responses to surface "Returned for

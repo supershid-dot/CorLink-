@@ -965,6 +965,91 @@ RETURNS SETOF UUID AS $$
   SELECT id FROM descendants;
 $$ LANGUAGE sql STABLE;
 
+-- Server-side count for the "needs my action" totals shown on the
+-- Requests nav badge (every page) and the Requests page's own Inbox/
+-- Sent/Info tab badges. Previously these fetched the (now-capped, see
+-- INBOX_LIST_CAP) inbox/sent/info-request lists into the browser just to
+-- run a JS predicate over every row and count matches — correct, but it
+-- paid the transfer/serialization cost of every visible row just to
+-- produce three integers, and would silently undercount once a list's
+-- true total exceeded its cap. This does the counting in Postgres
+-- instead, so the numbers stay exact regardless of list size.
+--
+-- Deliberately NOT SECURITY DEFINER, same reasoning as
+-- conversation_request_ids() above — it must run under the CALLER's own
+-- RLS, not bypass it, since "how many of MY visible rows match" is
+-- exactly what a normal .select() would also be scoped to. The
+-- individual helper functions it calls (my_section_ids(), is_admin(),
+-- etc.) are already SECURITY DEFINER themselves, same as every RLS
+-- policy that already relies on them — calling them from here doesn't
+-- change or escalate anything.
+--
+-- Every condition below is copied verbatim from the JS predicates it
+-- replaces (_inboxViews/_sentViews' needs_action test in
+-- js/views/requests.js, and actionNeededCount()'s info-request filter)
+-- — if those predicates ever change, this function must change with
+-- them or the nav badge and the Inbox/Sent "Needs My Action" chip can
+-- silently disagree. inbox_count/sent_count are scoped by to_org_id/
+-- from_org_id exactly like RequestsAPI.listInbox/listSent themselves
+-- (RLS alone doesn't distinguish "inbox" from "sent" — both sides of a
+-- request can see the same row).
+CREATE OR REPLACE FUNCTION requests_action_needed_counts()
+RETURNS TABLE(inbox_count BIGINT, sent_count BIGINT, info_count BIGINT) AS $$
+  SELECT
+    (
+      SELECT COUNT(*) FROM requests r
+      WHERE r.to_org_id = get_my_org_id()
+        AND (
+          -- Front desk: unrouted mail I can receive & route
+          (
+            (is_supervisor_or_above() OR has_role('assigned_receiver'))
+            AND r.to_section_id IS NULL AND r.status IN ('sent', 'received')
+          )
+          -- Section supervisor: routed to my section, nobody assigned yet
+          OR (
+            r.status = 'in_progress' AND r.to_section_id IS NOT NULL AND r.assigned_to IS NULL
+            AND (is_admin() OR r.to_section_id IN (SELECT my_supervised_section_ids()))
+          )
+          -- Assignee: it's mine and no response is open yet (no responses
+          -- at all, or every existing response is already sent)
+          OR (
+            r.status = 'in_progress' AND r.assigned_to = auth.uid()
+            AND NOT EXISTS (SELECT 1 FROM responses resp WHERE resp.request_id = r.id AND resp.status <> 'sent')
+          )
+          -- Drafter: my response draft (incl. returned for correction)
+          OR EXISTS (SELECT 1 FROM responses resp WHERE resp.request_id = r.id AND resp.status = 'draft' AND resp.created_by = auth.uid())
+          -- Supervisor: a response awaits approval
+          OR (is_supervisor_or_above() AND EXISTS (SELECT 1 FROM responses resp WHERE resp.request_id = r.id AND resp.status = 'pending_approval'))
+        )
+    ) AS inbox_count,
+    (
+      SELECT COUNT(*) FROM requests r
+      WHERE r.from_org_id = get_my_org_id()
+        AND (
+          -- My draft — includes returned-for-correction
+          (r.status = 'draft' AND r.created_by = auth.uid())
+          -- Supervisor: a request awaits my approval
+          OR (is_supervisor_or_above() AND r.status = 'pending_approval')
+          -- Receiver/supervisor: their reply arrived, not yet acknowledged
+          OR (
+            (is_supervisor_or_above() OR has_role('assigned_receiver'))
+            AND EXISTS (SELECT 1 FROM responses resp WHERE resp.request_id = r.id AND resp.status = 'sent' AND resp.received_at IS NULL)
+          )
+          -- Supervisor: acknowledged, ready to close
+          OR (is_supervisor_or_above() AND r.status = 'responded')
+        )
+    ) AS sent_count,
+    (
+      -- "Awaiting Your Reply" only — my section is the receiving side of
+      -- an internal request still open, matching InternalRequestsAPI.
+      -- listOutstandingForSections' own status filter plus the
+      -- to_section_id-only narrowing actionNeededCount applies on top.
+      SELECT COUNT(*) FROM internal_requests ir
+      WHERE ir.to_section_id IN (SELECT my_section_ids())
+        AND ir.status IN ('sent', 'received', 'in_progress')
+    ) AS info_count;
+$$ LANGUAGE sql STABLE;
+
 -- ─── responses ────────────────────────────────────────────────
 -- Previously had no section-membership restriction at all — any user
 -- whose org was party to the parent request could read every response
@@ -1262,7 +1347,14 @@ CREATE POLICY "internal_requests_insert" ON internal_requests
     AND EXISTS (
       SELECT 1 FROM requests r WHERE r.id = internal_requests.parent_request_id
         AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
-        AND r.status <> 'cancelled'
+        -- A brand-new "Loop in a Section" has no reason to start on a case
+        -- that's already done — cancelled, closed, or responded (awaiting
+        -- only acknowledge-and-close, not further section work). Narrower
+        -- than internal_requests_update below on purpose: an internal_
+        -- request already IN FLIGHT when the case reaches one of these
+        -- statuses stays updatable there so it can still be finished, but
+        -- nothing new should be startable once the case itself is done.
+        AND r.status NOT IN ('cancelled', 'closed', 'responded')
     )
     -- A section gathering supporting info can't give itself more time
     -- than the case itself has — no cap if either deadline is unset.
