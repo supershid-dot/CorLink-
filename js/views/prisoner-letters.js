@@ -142,13 +142,17 @@ const PrisonerLettersView = {
   },
 
   async _renderInbox(content) {
-    this._inboxItems = await PrisonerLettersAPI.listInbox(this._user.org_id);
+    const { items, totalCount } = await PrisonerLettersAPI.listInbox(this._user.org_id);
+    this._inboxItems = items;
+    this._inboxTotalCount = totalCount;
     content.innerHTML = `<div id="letters-results"></div>`;
     this._renderFiltered(content, 'inbox');
   },
 
   async _renderSent(content) {
-    this._sentItems = await PrisonerLettersAPI.listSent(this._user.org_id);
+    const { items, totalCount } = await PrisonerLettersAPI.listSent(this._user.org_id);
+    this._sentItems = items;
+    this._sentTotalCount = totalCount;
     content.innerHTML = `<div id="letters-results"></div>`;
     this._renderFiltered(content, 'sent');
   },
@@ -173,6 +177,7 @@ const PrisonerLettersView = {
     if (!resultsEl) return;
     const isInbox = which === 'inbox';
     const items = (isInbox ? this._inboxItems : this._sentItems) || [];
+    const totalCount = (isInbox ? this._inboxTotalCount : this._sentTotalCount) ?? items.length;
     const orgKey = isInbox ? 'from_org' : 'to_org';
     const orgIdField = isInbox ? 'from_prison_id' : 'to_org_id';
     const orgStateKey = isInbox ? 'inboxOrg' : 'sentOrg';
@@ -196,6 +201,7 @@ const PrisonerLettersView = {
           ${[...seen.entries()].map(([id, name]) => `<option value="${id}" ${this._state[orgStateKey] === id ? 'selected' : ''}>${name}</option>`).join('')}
         </select>
       </div>
+      ${totalCount > items.length ? `<div class="field-hint">Showing the ${items.length} most recent of ${totalCount} — use search to narrow further.</div>` : ''}
       <div class="filter-chips">
         ${filters.map(f => `
           <button class="filter-chip${f.key === active.key ? ' filter-chip--active' : ''}" data-filter="${f.key}">

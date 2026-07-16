@@ -49,40 +49,48 @@ const EntryAPI = (() => {
 
   return {
     // ── Lists ────────────────────────────────────────────────────
+    // Capped at INBOX_LIST_CAP (most recent first) rather than truly
+    // unbounded — same fix, same reasoning, as RequestsAPI.listInbox/
+    // listSent (see the comment there). { count: 'exact' } reports the
+    // true total regardless of the .limit() below, in the same round trip.
+    //
     // Entry's own front-desk queue: everything logged but not yet routed.
-    async listUnrouted(orgId) {
+    async listUnrouted(orgId, limit = INBOX_LIST_CAP) {
       const db = getSupabase();
-      const { data, error } = await db.from('external_correspondence')
-        .select(LIST_SELECT)
+      const { data, error, count } = await db.from('external_correspondence')
+        .select(LIST_SELECT, { count: 'exact' })
         .eq('org_id', orgId)
         .is('to_section_id', null)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(limit);
       if (error) throw wrapRowError(error);
-      return data;
+      return { items: data, totalCount: count ?? data.length };
     },
 
     // Everything Entry has ever logged for the org, routed or not — the
     // "All Entries" view.
-    async listAll(orgId) {
+    async listAll(orgId, limit = INBOX_LIST_CAP) {
       const db = getSupabase();
-      const { data, error } = await db.from('external_correspondence')
-        .select(LIST_SELECT)
+      const { data, error, count } = await db.from('external_correspondence')
+        .select(LIST_SELECT, { count: 'exact' })
         .eq('org_id', orgId)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(limit);
       if (error) throw wrapRowError(error);
-      return data;
+      return { items: data, totalCount: count ?? data.length };
     },
 
     // What's been routed to my section(s) — the responding section's queue.
-    async listForSections(sectionIds) {
-      if (!sectionIds || sectionIds.length === 0) return [];
+    async listForSections(sectionIds, limit = INBOX_LIST_CAP) {
+      if (!sectionIds || sectionIds.length === 0) return { items: [], totalCount: 0 };
       const db = getSupabase();
-      const { data, error } = await db.from('external_correspondence')
-        .select(LIST_SELECT)
+      const { data, error, count } = await db.from('external_correspondence')
+        .select(LIST_SELECT, { count: 'exact' })
         .in('to_section_id', sectionIds)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(limit);
       if (error) throw wrapRowError(error);
-      return data;
+      return { items: data, totalCount: count ?? data.length };
     },
 
     async globalSearch(query) {

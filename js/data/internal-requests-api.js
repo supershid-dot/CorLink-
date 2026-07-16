@@ -57,22 +57,30 @@ const InternalRequestsAPI = (() => {
     // "assigned but reply not started" apart from "reply pending
     // approval" instead of lumping every not-yet-responded internal
     // request into one undifferentiated bucket.
-    async listOutstandingForSections(sectionIds) {
-      if (!sectionIds || sectionIds.length === 0) return [];
+    // Capped at INBOX_LIST_CAP (oldest-first here since this is a work
+    // queue, not a most-recent-first inbox — but the cap matters just as
+    // much: an org that lets outstanding info-requests pile up over a
+    // long enough history would otherwise re-create the same unbounded-
+    // query shape RequestsAPI.listInbox/listSent were fixed for). {
+    // count: 'exact' } reports the true total regardless of the .limit()
+    // below, in the same round trip.
+    async listOutstandingForSections(sectionIds, limit = INBOX_LIST_CAP) {
+      if (!sectionIds || sectionIds.length === 0) return { items: [], totalCount: 0 };
       const db = getSupabase();
-      const { data, error } = await db.from('internal_requests')
+      const { data, error, count } = await db.from('internal_requests')
         .select(`
           *,
           from_section:sections!internal_requests_from_section_id_fkey(name, code),
           to_section:sections!internal_requests_to_section_id_fkey(name, code),
           parent_request:requests!internal_requests_parent_request_id_fkey(id, subject, reference_number),
           replies:internal_request_replies(status)
-        `)
+        `, { count: 'exact' })
         .or(`from_section_id.in.(${sectionIds.join(',')}),to_section_id.in.(${sectionIds.join(',')})`)
         .in('status', ['sent', 'received', 'in_progress'])
-        .order('created_at', { ascending: true });
+        .order('created_at', { ascending: true })
+        .limit(limit);
       if (error) throw error;
-      return data;
+      return { items: data, totalCount: count ?? data.length };
     },
 
     // Every internal request assigned to this staff member — the Team
@@ -83,19 +91,24 @@ const InternalRequestsAPI = (() => {
     // assigned yet." All statuses included (not just the still-open
     // ones listOutstandingForSections above returns) so the Team tab's
     // own filter chips (e.g. "Closed") have something to match against.
-    async listAssignedToUser(userId) {
+    // Capped at INBOX_LIST_CAP (most recent first) — same reasoning as
+    // listOutstandingForSections above; this one includes closed/
+    // responded history too (not just open work), so it grows unbounded
+    // over a staff member's whole tenure without a cap.
+    async listAssignedToUser(userId, limit = INBOX_LIST_CAP) {
       const db = getSupabase();
-      const { data, error } = await db.from('internal_requests')
+      const { data, error, count } = await db.from('internal_requests')
         .select(`
           *,
           from_section:sections!internal_requests_from_section_id_fkey(name, code),
           to_section:sections!internal_requests_to_section_id_fkey(name, code),
           parent_request:requests!internal_requests_parent_request_id_fkey(id, subject, reference_number)
-        `)
+        `, { count: 'exact' })
         .eq('assigned_to', userId)
-        .order('created_at', { ascending: false });
+        .order('created_at', { ascending: false })
+        .limit(limit);
       if (error) throw error;
-      return data;
+      return { items: data, totalCount: count ?? data.length };
     },
 
     async listReplies(internalRequestId) {

@@ -245,7 +245,7 @@ const DashboardView = {
       if (mySections.length > 0) {
         const sectionIds = mySections.map(s => s.id);
         const mySet = new Set(sectionIds);
-        outstanding = await InternalRequestsAPI.listOutstandingForSections(sectionIds);
+        outstanding = (await InternalRequestsAPI.listOutstandingForSections(sectionIds)).items;
         const awaitingTheirReply = outstanding.filter(ir => mySet.has(ir.from_section_id) && !mySet.has(ir.to_section_id)).length;
         rows.push({ icon: 'ti-clock', label: 'Information Requested — Awaiting Reply', count: awaitingTheirReply, href: '#requests?tab=info&sub=theirs' });
 

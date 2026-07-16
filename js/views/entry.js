@@ -95,7 +95,9 @@ const EntryView = {
     const resultsEl = document.getElementById('entry-results');
     resultsEl.innerHTML = `<div class="tab-loading"><span class="spinner spinner--dark"></span> Loading…</div>`;
     try {
-      this._items = await EntryAPI.listAll(this._user.org_id);
+      const { items, totalCount } = await EntryAPI.listAll(this._user.org_id);
+      this._items = items;
+      this._totalCount = totalCount;
     } catch (err) {
       console.error('CorLink: failed to load entries', err);
       resultsEl.innerHTML = `<div class="alert alert-error"><i class="ti ti-alert-triangle"></i> Couldn't load Entry: ${err.message || 'unknown error'}.</div>`;
@@ -107,11 +109,13 @@ const EntryView = {
   _renderFiltered() {
     const resultsEl = document.getElementById('entry-results');
     const items = this._items || [];
+    const totalCount = this._totalCount ?? items.length;
     const filters = this._filters();
     const active = filters.find(f => f.key === this._state.filter) || filters[0];
     const filtered = items.filter(active.test);
 
     resultsEl.innerHTML = `
+      ${totalCount > items.length ? `<div class="field-hint">Showing the ${items.length} most recent of ${totalCount} — use search to narrow further.</div>` : ''}
       <div class="filter-chips">
         ${filters.map(f => `
           <button class="filter-chip${f.key === active.key ? ' filter-chip--active' : ''}" data-filter="${f.key}">
