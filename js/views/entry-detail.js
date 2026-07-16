@@ -93,13 +93,17 @@ const EntryDetailView = {
         InternalRequestsAPI.listRepliesForRequests(irIds),
       ]);
       const replyIds = irReplies.map(r => r.id);
-      const irReplyAttachments = await AttachmentsAPI.listForRecords('internal_reply', replyIds);
+      const [irReplyAttachments, irReplyReviewComments] = await Promise.all([
+        AttachmentsAPI.listForRecords('internal_reply', replyIds),
+        ReviewCommentsAPI.listForRecords('internal_reply', replyIds),
+      ]);
       this._internalRequests = internalRequests.map(ir => ({
         internalRequest: ir,
         attachments: irAttachments.filter(a => a.record_id === ir.id),
         replies: irReplies.filter(r => r.internal_request_id === ir.id).map(reply => ({
           reply,
           attachments: irReplyAttachments.filter(a => a.record_id === reply.id),
+          reviewComments: irReplyReviewComments.filter(c => c.record_id === reply.id),
         })),
       }));
       this._openInternalReplyIds = this._openInternalReplyIds || new Set();
@@ -148,8 +152,6 @@ const EntryDetailView = {
         </div>
       </div>
 
-      ${this._renderInternalCollab(e, { inToSection, canManage, canSupervise })}
-
       <div class="thread">
         <div class="thread-message thread-message--request">
           <div class="thread-message-kind">Logged Entry</div>
@@ -158,12 +160,14 @@ const EntryDetailView = {
             <span class="structure-empty">${new Date(e.created_at).toLocaleString()}</span>
           </div>
           <div class="thread-message-body${RichEditor.dvClass(e.body, e.language)}">${RichEditor.sanitize(e.body)}</div>
-          ${this._renderAttachments('external_correspondence', e.id, this._attachments, canManage && e.status !== 'closed')}
+          ${this._renderAttachments('external_correspondence', e.id, this._attachments, canManage && e.status === 'logged')}
           ${this._renderActivityLog(this._renderProcessEvents(e.id))}
         </div>
 
         ${this._replies.filter(r => r.status === 'sent' || r.created_by === this._user.id || canSupervise || inToSection).map(r => this._renderReply(r, inToSection, canSupervise, canManage)).join('')}
       </div>
+
+      ${this._renderInternalCollab(e, { inToSection, canManage, canSupervise })}
 
       <div id="detail-actions" class="detail-actions-panel">
         ${this._renderActions(e, { inToSection, canManage, canSupervise })}
@@ -192,12 +196,13 @@ const EntryDetailView = {
         </div>
         <div class="thread-message-body${RichEditor.dvClass(r.body, r.language)}">${RichEditor.sanitize(r.body)}</div>
         ${r.approved_by ? `
-          <div class="thread-receipt"><i class="ti ti-circle-check"></i>
+          <div class="thread-approval thread-approval--approved">
+            <i class="ti ti-circle-check"></i>
             <span>Approved by <strong>${this._escapeHtml(r.approved_by_user?.full_name || 'Unknown')}</strong>${r.approved_by_user?.designations?.name ? ', ' + this._escapeHtml(r.approved_by_user.designations.name) : ''} — ${new Date(r.approved_at).toLocaleString()}</span>
           </div>` : ''}
         ${r.delivery_method ? `<div class="thread-receipt"><i class="ti ti-send"></i><span>Sent back to the sender via <strong>${this._sourceLabel(r.delivery_method)}</strong>${r.sent_at ? ' — ' + new Date(r.sent_at).toLocaleString() : ''}</span></div>` : ''}
         ${this._renderAttachments('external_correspondence_reply', r.id, this._replyAttachments[r.id] || [], canUpload)}
-        ${this._renderReviewComments(r, comments, sideOk, canSupervise)}
+        ${this._renderReviewComments('entry_reply', r, comments, sideOk, canSupervise)}
         <div class="detail-actions">
           ${isMine && r.status === 'draft' ? (
             openComments > 0
@@ -216,12 +221,13 @@ const EntryDetailView = {
     `;
   },
 
-  // Mirrors request-detail.js's _renderReviewComments exactly (same
-  // review_comments table, record_type 'entry_reply'); canComment here
-  // is the section-specific supervisor gate (ctx.canSupervise) rather
-  // than a global "is a supervisor somewhere" flag, since approving an
-  // Entry reply is scoped to the responding section.
-  _renderReviewComments(reply, comments, sideOk, canSupervise) {
+  // Mirrors request-detail.js's _renderReviewComments (same
+  // review_comments table). recordType is 'entry_reply' (Entry's own
+  // top-level reply, canSupervise = the section-specific ctx.canSupervise
+  // gate) or 'internal_reply' (an Internal Collaboration reply, canSupervise
+  // = this._isSupervisor — review_comments RLS allows ANY org supervisor
+  // there, matching request-detail.js's own internal_reply gating).
+  _renderReviewComments(recordType, reply, comments, sideOk, canSupervise) {
     const pending = reply.status === 'pending_approval';
     const canComment = pending && sideOk && canSupervise;
     if (comments.length === 0 && !canComment) return '';
@@ -231,7 +237,7 @@ const EntryDetailView = {
         <div class="review-comments-header">
           <i class="ti ti-message-2"></i> Review Comments
           ${unresolved > 0 ? `<span class="badge badge-warning">${unresolved} open</span>` : ''}
-          ${canComment ? `<button class="btn btn-secondary btn-xs" data-add-comment-id="${reply.id}">Add Comment</button>` : ''}
+          ${canComment ? `<button class="btn btn-secondary btn-xs" data-add-comment-type="${recordType}" data-add-comment-id="${reply.id}">Add Comment</button>` : ''}
         </div>
         ${canComment ? `
           <div class="field-hint review-comments-hint"><i class="ti ti-bulb"></i>
@@ -262,8 +268,19 @@ const EntryDetailView = {
   // comment target resolution is much simpler (one entry, no multi-round
   // conversation to search) and the two views' modal/action wiring
   // differ enough that a shared abstraction would need its own indirection.
-  _openAddCommentModal(recordId, quotedText) {
-    const reply = this._replies.find(r => r.id === recordId);
+  // recordType is 'entry_reply' (search this._replies) or 'internal_reply'
+  // (search this._internalRequests) — both notify back to #entry-detail,
+  // there being no separate detail page for either kind of reply.
+  _openAddCommentModal(recordType, recordId, quotedText) {
+    let reply = null;
+    if (recordType === 'entry_reply') {
+      reply = this._replies.find(r => r.id === recordId);
+    } else if (recordType === 'internal_reply') {
+      for (const ird of this._internalRequests || []) {
+        const hit = ird.replies.find(rd => rd.reply.id === recordId);
+        if (hit) { reply = hit.reply; break; }
+      }
+    }
     this._openModal(`
       <h3>Add Review Comment</h3>
       <form id="review-comment-form" class="modal-form">
@@ -301,7 +318,7 @@ const EntryDetailView = {
       }
       try {
         await ReviewCommentsAPI.add({
-          recordType: 'entry_reply', recordId, quotedText,
+          recordType, recordId, quotedText,
           comment,
           notifyUserId: reply?.created_by,
           navRecordId: this._entry.id,
@@ -407,6 +424,11 @@ const EntryDetailView = {
     }
 
     if (e.status === 'routed') {
+      if (!e.received_by) {
+        return ctx.inToSection
+          ? { tone: 'action', title: 'Mark this entry as received' }
+          : { tone: 'waiting', title: 'Waiting for the section to mark this as received' };
+      }
       if (!e.assigned_to) {
         return ctx.canSupervise
           ? { tone: 'action', title: 'Assign this entry to a staff member' }
@@ -485,6 +507,11 @@ const EntryDetailView = {
     const ir = ird.internalRequest;
     const inToSection = this._mySections.some(s => s.id === ir.to_section_id);
     const canReceive = inToSection;
+    // Any member of the wrongly-routed section, not supervisor-only —
+    // same as request-detail.js's own gating, available immediately
+    // (before Mark Received) since spotting an obvious misroute
+    // shouldn't require receiving it first.
+    const canReturnToSender = inToSection && ['sent', 'received', 'in_progress'].includes(ir.status);
     const canAssign = AppShell.isAdmin(this._user) || this._mySupervisedSections.some(s => s.id === ir.to_section_id);
     const canApproveReturn = canAssign;
     const canReply = inToSection;
@@ -503,13 +530,61 @@ const EntryDetailView = {
     const canAssignNow = ['received', 'in_progress'].includes(ir.status) && canAssign;
     const canReplyBtn = canReplyNow && !replyComposeOpen;
     const canCloseNow = isCreatorSide && ir.status === 'responded';
+    // One primary action per viewer — same convention as request-detail.js's
+    // own internal-request row (mirrors the external Next-Step-banner idea
+    // of promoting the actual next move; everything else stays secondary).
+    const primaryAction = canReceiveNow ? 'receive'
+      : (canAssignNow && !ir.assigned_to) ? 'assign'
+      : canReplyBtn ? 'reply'
+      : canCloseNow ? 'close'
+      : null;
+
+    // Per-row "what's needed next" banner — same tone semantics and
+    // logic as request-detail.js's own internal-request row (this
+    // block is parent-agnostic; it only reads ir.* fields).
+    const meId = this._user.id;
+    const toSecName = this._escapeHtml(ir.to_section?.name || 'the section');
+    let nextStep = null;
+    if (ir.status === 'closed') {
+      nextStep = null;
+    } else if (canReceiveNow) {
+      nextStep = { tone: 'action', title: 'New information request — mark it received', sub: 'Then assign it and draft a reply.' };
+    } else if (canAssignNow && !ir.assigned_to) {
+      nextStep = { tone: 'action', title: 'Assign this to a staff member' };
+    } else if (openReply && openReply.reply.status === 'pending_approval') {
+      if (canApproveReturn) nextStep = { tone: 'action', title: 'A reply is awaiting your approval', sub: 'Review it below — approve &amp; send, or return it.' };
+      else if (openReply.reply.created_by === meId) nextStep = { tone: 'waiting', title: 'Reply submitted — awaiting approval' };
+      else nextStep = { tone: 'waiting', title: 'A reply is awaiting approval' };
+    } else if (openReply && openReply.reply.status === 'draft') {
+      if (openReply.reply.created_by === meId) nextStep = { tone: 'action', title: 'Finish your reply draft', sub: 'Submit it for approval below when it\'s ready.' };
+      else nextStep = { tone: 'waiting', title: 'A reply is being drafted' };
+    } else if (canReplyBtn) {
+      nextStep = { tone: 'action', title: 'Draft your reply' };
+    } else if (ir.status === 'in_progress' && ir.assigned_to && ir.assigned_to !== meId) {
+      nextStep = { tone: 'waiting', title: 'Assigned — a reply is in progress' };
+    } else if (ir.status === 'responded') {
+      if (canCloseNow) nextStep = { tone: 'action', title: `Reply received from ${toSecName} — acknowledge &amp; close` };
+      else nextStep = { tone: 'waiting', title: 'Replied — awaiting the asking section to close it' };
+    } else if (isCreatorSide) {
+      nextStep = ir.status === 'sent'
+        ? { tone: 'waiting', title: `Waiting for ${toSecName} to receive this` }
+        : { tone: 'waiting', title: `Waiting on ${toSecName} to respond` };
+    }
+
     return `
       <div class="internal-request-row" data-internal-request="${ir.id}">
+        ${nextStep ? `
+        <div class="next-step-banner next-step-banner--${nextStep.tone} next-step-banner--compact">
+          <div class="next-step-text">
+            <div class="next-step-title">${nextStep.title}</div>
+            ${nextStep.sub ? `<div class="next-step-sub">${nextStep.sub}</div>` : ''}
+          </div>
+        </div>` : ''}
         <div class="thread-message-header thread-message-header--split">
           <div class="thread-message-header-meta">
             <span class="structure-empty">${ir.from_section?.name || ''} → ${ir.to_section?.name || ''}</span>
             <span class="badge ${statusBadge[1]}">${statusBadge[0]}</span>
-            ${ir.deadline ? `<span class="structure-empty">Due ${new Date(ir.deadline).toLocaleString()}</span>` : ''}
+            ${ir.deadline ? `<span class="structure-empty">Due ${RequestsView._deadlineCell(ir.deadline, ir.status)}</span>` : ''}
           </div>
           <strong class="internal-request-subject${RichEditor.dvClass(ir.subject, ir.subject_language)}">${this._escapeHtml(ir.subject)}</strong>
         </div>
@@ -521,13 +596,15 @@ const EntryDetailView = {
           ${this._renderAuditEvents('internal_request', ir.id, ['received', 'routed', 'assigned', 'returned_to_sender'])}
         `)}
         ${this._renderAttachments('internal_request', ir.id, ird.attachments, inToSection)}
-        ${ird.replies.map(rd => this._renderInternalReplyRow(ir, rd, canApproveReturn)).join('')}
+        ${ird.replies.map(rd => this._renderInternalReplyRow(ir, rd, inToSection, canApproveReturn)).join('')}
         ${replyComposeOpen && canReplyNow ? this._composeInternalReplyHtml(ir) : ''}
         <div class="detail-actions">
-          ${canReceiveNow ? `<button class="btn btn-primary btn-xs" data-mark-internal-received="${ir.id}">Mark Received</button>` : ''}
-          ${canAssignNow ? `<button class="btn btn-secondary btn-xs" data-assign-internal="${ir.id}">${ir.assigned_to ? 'Reassign' : 'Assign to Staff'}</button>` : ''}
-          ${canReplyBtn ? `<button class="btn btn-primary btn-xs" data-reply-internal="${ir.id}">Draft Reply</button>` : ''}
-          ${canCloseNow ? `<button class="btn btn-primary btn-xs" data-close-internal="${ir.id}">Close</button>` : ''}
+          ${canReceiveNow ? `<button class="btn ${primaryAction === 'receive' ? 'btn-primary' : 'btn-secondary'} btn-xs" data-mark-internal-received="${ir.id}">Mark Received</button>` : ''}
+          ${canAssignNow ? `<button class="btn ${primaryAction === 'assign' ? 'btn-primary' : 'btn-secondary'} btn-xs" data-assign-internal="${ir.id}">${ir.assigned_to ? 'Reassign' : 'Assign to Staff'}</button>` : ''}
+          ${canAssignNow ? `<button class="btn btn-secondary btn-xs" data-reroute-internal="${ir.id}">Route to Another Section</button>` : ''}
+          ${canReturnToSender ? `<button class="btn btn-secondary btn-xs" data-return-internal-to-sender="${ir.id}">Return to ${this._escapeHtml(ir.from_section?.name || 'sender')}</button>` : ''}
+          ${canReplyBtn ? `<button class="btn ${primaryAction === 'reply' ? 'btn-primary' : 'btn-secondary'} btn-xs" data-reply-internal="${ir.id}">Draft Reply</button>` : ''}
+          ${canCloseNow ? `<button class="btn ${primaryAction === 'close' ? 'btn-primary' : 'btn-secondary'} btn-xs" data-close-internal="${ir.id}">Close</button>` : ''}
         </div>
       </div>
     `;
@@ -552,15 +629,20 @@ const EntryDetailView = {
     `;
   },
 
-  _renderInternalReplyRow(ir, rd, canApproveReturn) {
+  _renderInternalReplyRow(ir, rd, inToSection, canApproveReturn) {
     const reply = rd.reply;
     const isMine = reply.created_by === this._user.id;
     const canUpload = isMine && ['draft', 'pending_approval'].includes(reply.status);
+    // review_comments_insert/_update RLS lets ANY org supervisor act on
+    // an internal_reply (same-org match, not section-scoped) — same as
+    // request-detail.js's own sideOk/canComment gating.
+    const sideOk = inToSection || this._isSupervisor;
     const badge = {
       draft:            ['Draft', 'badge-muted'],
       pending_approval: ['Pending Approval', 'badge-warning'],
       sent:             ['Sent', 'badge-success'],
     }[reply.status] || [reply.status, 'badge-outline'];
+    const openComments = (rd.reviewComments || []).filter(c => !c.resolved_at).length;
     return `
       <div class="thread-message thread-message--response thread-message--compact">
         <div class="thread-message-header">
@@ -569,16 +651,26 @@ const EntryDetailView = {
           <span class="structure-empty">${new Date(reply.created_at).toLocaleString()}</span>
         </div>
         <div class="thread-message-body${reply.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(reply.body)}</div>
+        ${this._renderReviewComments('internal_reply', reply, rd.reviewComments || [], sideOk, this._isSupervisor)}
         ${reply.status === 'sent' && reply.approved_by_user ? `
-          <div class="thread-receipt"><i class="ti ti-circle-check"></i>
-            Approved &amp; sent by <strong>${this._escapeHtml(reply.approved_by_user.full_name)}</strong>${reply.approved_at ? ' — ' + new Date(reply.approved_at).toLocaleString() : ''}
+          <div class="thread-approval thread-approval--approved">
+            <i class="ti ti-circle-check"></i>
+            <span>Approved &amp; sent by <strong>${this._escapeHtml(reply.approved_by_user.full_name)}</strong>${reply.approved_at ? ' — ' + new Date(reply.approved_at).toLocaleString() : ''}</span>
           </div>` : ''}
         ${this._renderAttachments('internal_reply', reply.id, rd.attachments || [], canUpload)}
         <div class="detail-actions">
-          ${reply.status === 'draft' && isMine ? `<button class="btn btn-primary btn-xs" data-submit-internal-reply="${reply.id}" data-ir="${ir.id}">Submit for Approval</button>` : ''}
-          ${reply.status === 'pending_approval' && canApproveReturn ? `
-            <button class="btn btn-primary btn-xs" data-approve-internal-reply="${reply.id}" data-ir="${ir.id}">Approve &amp; Send</button>
-            <button class="btn btn-secondary btn-xs" data-return-internal-reply="${reply.id}" data-ir="${ir.id}">Return</button>` : ''}
+          ${['draft', 'pending_approval'].includes(reply.status) && isMine ? `<button class="btn btn-secondary btn-xs" data-edit-internal-reply="${reply.id}">Edit Draft</button>` : ''}
+          ${reply.status === 'draft' && isMine ? (
+            openComments > 0
+              ? `<div class="field-hint"><i class="ti ti-message-2"></i> Resolve ${openComments} open review comment${openComments === 1 ? '' : 's'} above before resubmitting for approval.</div>`
+              : `<button class="btn btn-primary btn-xs" data-submit-internal-reply="${reply.id}" data-ir="${ir.id}">Submit for Approval</button>`
+          ) : ''}
+          ${reply.status === 'pending_approval' && canApproveReturn ? (
+            openComments > 0
+              ? `<div class="field-hint"><i class="ti ti-message-2"></i> ${openComments} open review comment${openComments === 1 ? '' : 's'} — the drafter must resolve ${openComments === 1 ? 'it' : 'them'} before this can be approved.</div>`
+              : `<button class="btn btn-primary btn-xs" data-approve-internal-reply="${reply.id}" data-ir="${ir.id}">Approve &amp; Send</button>`
+          ) : ''}
+          ${reply.status === 'pending_approval' && canApproveReturn ? `<button class="btn btn-secondary btn-xs" data-return-internal-reply="${reply.id}" data-ir="${ir.id}">Return</button>` : ''}
         </div>
       </div>
     `;
@@ -719,11 +811,211 @@ const EntryDetailView = {
     });
   },
 
+  _findInternalRequest(id) {
+    const ird = (this._internalRequests || []).find(x => x.internalRequest.id === id);
+    return ird ? ird.internalRequest : null;
+  },
+
+  // Ported from request-detail.js's own _openCommentModal, verbatim —
+  // a generic optional/required comment capture used by Return to
+  // Sender, Approve Reply, and Return Reply below.
+  _openCommentModal(title, verb, onSubmit, required = false) {
+    this._openModal(`
+      <h3>${title}</h3>
+      <form id="comment-form" class="modal-form">
+        <div class="field-group field-group-row">
+          <label class="field-label">Comment${required ? '' : ' (optional)'}</label>
+          ${RichEditor.langToggleHtml('language', 'dv')}
+        </div>
+        <div class="field-group">
+          <textarea class="field-input-plain field-divehi" name="comment" id="comment-textarea" rows="4" ${required ? 'required placeholder="Explain what needs to change"' : ''}></textarea>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">${verb}</button>
+        </div>
+      </form>
+    `);
+    const form = document.getElementById('comment-form');
+    const commentTextarea = document.getElementById('comment-textarea');
+    RichEditor.bindLangToggle(form, 'language', (lang) => commentTextarea.classList.toggle('field-divehi', lang === 'dv'));
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const errEl = form.querySelector('.modal-error');
+      try {
+        await onSubmit(fd.get('comment') || null);
+        this._closeModal();
+        await this._load();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
+  // Same as request-detail.js's _openRouteModal('internal', ...) branch —
+  // the current from/to section are excluded (it's already sitting with
+  // one of them); the new section receives it fresh (reroute() resets
+  // received_by/assigned_to).
+  async _openRouteInternalModal(irId) {
+    const ir = this._findInternalRequest(irId);
+    if (!ir) return;
+    let sections;
+    try {
+      sections = (await AdminAPI.listSectionsByOrg(this._user.org_id))
+        .filter(s => s.is_active && s.id !== ir.to_section_id && s.id !== ir.from_section_id);
+    } catch (err) {
+      console.error('CorLink: failed to load sections for routing', err);
+      return;
+    }
+    if (sections.length === 0) {
+      this._openModal(`
+        <h3>Route to Another Section</h3>
+        <div class="alert alert-info">No other active sections to route to.</div>
+        <div class="modal-actions"><button class="btn btn-secondary" data-close-modal>Close</button></div>
+      `);
+      return;
+    }
+    this._openModal(`
+      <h3>Route to Another Section</h3>
+      <form id="reroute-internal-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Section</label>
+          <select class="field-select" name="sectionId">
+            ${sections.map(s => `<option value="${s.id}">${this._escapeHtml(s.name)}</option>`).join('')}
+          </select>
+          <div class="field-hint">The new section will receive it fresh and assign its own staff.</div>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Route</button>
+        </div>
+      </form>
+    `);
+    const form = document.getElementById('reroute-internal-form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const errEl = form.querySelector('.modal-error');
+      try {
+        await InternalRequestsAPI.reroute(irId, fd.get('sectionId'));
+        this._closeModal();
+        await this._load();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
+  // Same approver-picker shape as _openSubmitReplyModal above (Entry's
+  // own top-level reply), for an Internal Collaboration reply instead.
+  async _openSubmitInternalReplyModal(replyId, ir) {
+    let supervisors;
+    try {
+      supervisors = await RequestsAPI.listEligibleApprovers(ir.to_section_id);
+    } catch (err) {
+      console.error('CorLink: failed to load supervisors', err);
+      supervisors = [];
+    }
+    this._openModal(`
+      <h3>Submit for Approval</h3>
+      <form id="submit-internal-reply-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Send to Supervisor (optional)</label>
+          <select class="field-select" name="approverId">
+            <option value="">— Any qualifying supervisor —</option>
+            ${supervisors.map(u => `<option value="${u.id}">${this._escapeHtml(u.full_name)}</option>`).join('')}
+          </select>
+          <div class="field-hint">Includes supervisors at the section, department, and command level.</div>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Submit</button>
+        </div>
+      </form>
+    `);
+    const form = document.getElementById('submit-internal-reply-form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const errEl = form.querySelector('.modal-error');
+      try {
+        await InternalRequestsAPI.submitReplyForApproval(replyId, fd.get('approverId') || null, ir);
+        this._closeModal();
+        await this._load();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
+  // Symmetric to request-detail.js's _openEditDraftBodyModal('internal-reply', ...) —
+  // available while an internal reply is still draft/pending_approval
+  // (internal_request_replies_update RLS cuts off access once approved).
+  _openEditInternalReplyModal(replyId) {
+    let existing = null;
+    for (const ird of this._internalRequests || []) {
+      const hit = ird.replies.find(rd => rd.reply.id === replyId);
+      if (hit) { existing = hit.reply; break; }
+    }
+    if (!existing) return;
+    const defaultLang = existing.language || 'dv';
+    this._openModal(`
+      <h3>Edit Draft Reply</h3>
+      <form id="edit-internal-reply-form" class="modal-form">
+        <div class="field-group">
+          <div class="field-group-row">
+            <label class="field-label">Reply</label>
+            ${RichEditor.langToggleHtml('language', defaultLang)}
+          </div>
+          <div id="edit-internal-reply-body"></div>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Changes</button>
+        </div>
+      </form>
+    `, { large: true });
+    const form = document.getElementById('edit-internal-reply-form');
+    const editor = RichEditor.create(document.getElementById('edit-internal-reply-body'), { language: defaultLang });
+    editor.setHTML(existing.body);
+    RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errEl = form.querySelector('.modal-error');
+      const body = editor.getHTML();
+      if (!body || body === '<p><br></p>') {
+        errEl.textContent = 'Reply cannot be empty.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      try {
+        await InternalRequestsAPI.updateReplyDraft(replyId, { body, language: new FormData(form).get('language') });
+        this._closeModal();
+        await this._load();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
   _renderActions(e, ctx) {
     const blocks = [];
 
     if (e.status === 'logged' && ctx.canManage) {
       blocks.push(`<button class="btn btn-primary btn-sm" id="route-entry-btn">Route to Section</button>`);
+    }
+
+    if (e.to_section_id && e.status === 'routed' && !e.received_by && ctx.inToSection) {
+      blocks.push(`<button class="btn btn-primary btn-sm" id="receive-entry-btn">Mark as Received</button>`);
     }
 
     if (e.to_section_id && ['routed'].includes(e.status) && ctx.canSupervise) {
@@ -815,6 +1107,7 @@ const EntryDetailView = {
     const main = document.getElementById('entry-detail-main');
 
     document.getElementById('route-entry-btn')?.addEventListener('click', () => this._openRouteModal());
+    document.getElementById('receive-entry-btn')?.addEventListener('click', () => this._runAction(() => EntryAPI.markReceived(this._entry.id)));
     document.getElementById('assign-entry-btn')?.addEventListener('click', () => this._openAssignModal());
     document.getElementById('close-entry-btn')?.addEventListener('click', () => this._runAction(() => EntryAPI.close(this._entry.id)));
 
@@ -852,7 +1145,7 @@ const EntryDetailView = {
         this._quoteCapture = (window.getSelection()?.toString() || '').trim().slice(0, 500);
       });
       btn.addEventListener('click', () => {
-        this._openAddCommentModal(btn.dataset.addCommentId, this._quoteCapture || '');
+        this._openAddCommentModal(btn.dataset.addCommentType, btn.dataset.addCommentId, this._quoteCapture || '');
         this._quoteCapture = '';
       });
     });
@@ -870,6 +1163,18 @@ const EntryDetailView = {
     main.querySelectorAll('[data-assign-internal]').forEach(btn => {
       btn.addEventListener('click', () => this._openAssignInternalModal(btn.dataset.assignInternal));
     });
+    main.querySelectorAll('[data-reroute-internal]').forEach(btn => {
+      btn.addEventListener('click', () => this._openRouteInternalModal(btn.dataset.rerouteInternal));
+    });
+    main.querySelectorAll('[data-return-internal-to-sender]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const ir = this._findInternalRequest(btn.dataset.returnInternalToSender);
+        if (!ir) return;
+        this._openCommentModal('Return to Sender Section', 'Return', async (comment) => {
+          await InternalRequestsAPI.returnToSender(ir.id, ir, comment);
+        }, true);
+      });
+    });
     main.querySelectorAll('[data-close-internal]').forEach(btn => {
       btn.addEventListener('click', () => this._runAction(() => InternalRequestsAPI.close(btn.dataset.closeInternal)));
     });
@@ -885,22 +1190,31 @@ const EntryDetailView = {
         this._load();
       });
     });
+    main.querySelectorAll('[data-edit-internal-reply]').forEach(btn => {
+      btn.addEventListener('click', () => this._openEditInternalReplyModal(btn.dataset.editInternalReply));
+    });
     main.querySelectorAll('[data-submit-internal-reply]').forEach(btn => {
       btn.addEventListener('click', () => {
-        const ird = (this._internalRequests || []).find(x => x.internalRequest.id === btn.dataset.ir);
-        this._runAction(() => InternalRequestsAPI.submitReplyForApproval(btn.dataset.submitInternalReply, null, ird?.internalRequest));
+        const ir = this._findInternalRequest(btn.dataset.ir);
+        if (ir) this._openSubmitInternalReplyModal(btn.dataset.submitInternalReply, ir);
       });
     });
     main.querySelectorAll('[data-approve-internal-reply]').forEach(btn => {
       btn.addEventListener('click', () => {
-        const ird = (this._internalRequests || []).find(x => x.internalRequest.id === btn.dataset.ir);
-        this._runAction(() => InternalRequestsAPI.approveReply(btn.dataset.approveInternalReply, ird?.internalRequest));
+        const ir = this._findInternalRequest(btn.dataset.ir);
+        if (!ir) return;
+        this._openCommentModal('Approve Reply', 'Approve', async (comment) => {
+          await InternalRequestsAPI.approveReply(btn.dataset.approveInternalReply, ir, comment);
+        });
       });
     });
     main.querySelectorAll('[data-return-internal-reply]').forEach(btn => {
       btn.addEventListener('click', () => {
-        const ird = (this._internalRequests || []).find(x => x.internalRequest.id === btn.dataset.ir);
-        this._runAction(() => InternalRequestsAPI.returnReply(btn.dataset.returnInternalReply, ird?.internalRequest, ''));
+        const ir = this._findInternalRequest(btn.dataset.ir);
+        if (!ir) return;
+        this._openCommentModal('Return Reply', 'Return', async (comment) => {
+          await InternalRequestsAPI.returnReply(btn.dataset.returnInternalReply, ir, comment);
+        }, true);
       });
     });
 
@@ -1057,10 +1371,7 @@ const EntryDetailView = {
         </div>
         <div class="field-group">
           <label class="field-label">Assign to Staff (optional)</label>
-          <select class="field-select" name="assignedTo">
-            <option value="">— Unassigned —</option>
-            ${users.map(u => `<option value="${u.id}">${u.full_name}</option>`).join('')}
-          </select>
+          <select class="field-select" name="assignedTo" id="route-assignee"></select>
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
@@ -1071,6 +1382,25 @@ const EntryDetailView = {
     `);
 
     const form = document.getElementById('route-form');
+    const sectionSelect = form.querySelector('[name="sectionId"]');
+    const assigneeSelect = document.getElementById('route-assignee');
+    // Staff list is scoped to whichever section is currently selected —
+    // same pattern as request-detail.js's _openReceiveRouteModal, since
+    // the section isn't known until the user picks one in this same form.
+    const repopulateAssignees = async () => {
+      assigneeSelect.innerHTML = `<option value="">— Unassigned —</option>`;
+      try {
+        const sectionUserIds = new Set(await NotificationsAPI.sectionUserIds(sectionSelect.value));
+        const inSection = users.filter(u => sectionUserIds.has(u.id));
+        assigneeSelect.innerHTML = `<option value="">— Unassigned —</option>`
+          + inSection.map(u => `<option value="${u.id}">${u.full_name}</option>`).join('');
+      } catch (err) {
+        console.warn('CorLink: failed to load section staff for assignment', err);
+      }
+    };
+    sectionSelect.addEventListener('change', repopulateAssignees);
+    await repopulateAssignees();
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
