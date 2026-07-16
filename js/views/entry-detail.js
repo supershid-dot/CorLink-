@@ -1057,10 +1057,7 @@ const EntryDetailView = {
         </div>
         <div class="field-group">
           <label class="field-label">Assign to Staff (optional)</label>
-          <select class="field-select" name="assignedTo">
-            <option value="">— Unassigned —</option>
-            ${users.map(u => `<option value="${u.id}">${u.full_name}</option>`).join('')}
-          </select>
+          <select class="field-select" name="assignedTo" id="route-assignee"></select>
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
@@ -1071,6 +1068,25 @@ const EntryDetailView = {
     `);
 
     const form = document.getElementById('route-form');
+    const sectionSelect = form.querySelector('[name="sectionId"]');
+    const assigneeSelect = document.getElementById('route-assignee');
+    // Staff list is scoped to whichever section is currently selected —
+    // same pattern as request-detail.js's _openReceiveRouteModal, since
+    // the section isn't known until the user picks one in this same form.
+    const repopulateAssignees = async () => {
+      assigneeSelect.innerHTML = `<option value="">— Unassigned —</option>`;
+      try {
+        const sectionUserIds = new Set(await NotificationsAPI.sectionUserIds(sectionSelect.value));
+        const inSection = users.filter(u => sectionUserIds.has(u.id));
+        assigneeSelect.innerHTML = `<option value="">— Unassigned —</option>`
+          + inSection.map(u => `<option value="${u.id}">${u.full_name}</option>`).join('');
+      } catch (err) {
+        console.warn('CorLink: failed to load section staff for assignment', err);
+      }
+    };
+    sectionSelect.addEventListener('change', repopulateAssignees);
+    await repopulateAssignees();
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
