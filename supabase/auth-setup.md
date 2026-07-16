@@ -421,6 +421,62 @@ match what changed since, instead of re-running the full files:
   a local Postgres instance: INSERT allowed on sent/received/in_progress/
   overdue, rejected on cancelled/closed/responded. Idempotent (`DROP
   POLICY IF EXISTS` + `CREATE POLICY`).
+- `supabase/patch-entry-multi-section.sql` — Entry can now be logged by
+  MORE THAN ONE section per org. Replaces `organizations.entry_section_id`
+  (a single nullable FK) with a new join table, `entry_sections`
+  (backfilled from the old column, which is then dropped), and rewrites
+  `is_entry_staff()`/`update_org_workflow_settings()` to match. Admin's
+  Entry Section picker is now a checkbox list instead of a single
+  dropdown. Verified against a local Postgres instance: a section not in
+  `entry_sections` cannot log an entry; a section in it can; the
+  org-wide fallback (zero rows configured) still works. Idempotent.
+- `supabase/patch-entry-review-comments.sql` — extends the existing
+  review-comment mechanism (already used for request/response drafts and
+  internal-collaboration replies) to Entry replies too: a supervisor can
+  now leave a comment before approving a reply to external
+  correspondence, same force-resolve-before-resubmit UX as elsewhere.
+  Just a new `'entry_reply'` `record_type` branch on the existing
+  `review_comments` table/policies — no new table. Verified: a
+  non-supervisor is blocked from commenting; the responding section's
+  supervisor can. Idempotent.
+- `supabase/patch-internal-collab-polymorphic-parent.sql` — Internal
+  Collaboration ("Loop in a Section") now works for Entry too: the
+  section holding an entry can ask another section for information
+  while keeping ownership of the entry itself, exactly like it already
+  works for external requests. `internal_requests`/`internal_request_
+  replies` are generalized to anchor to EITHER a request
+  (`parent_request_id`) OR an entry (`parent_entry_id`, new column) —
+  exactly one, enforced by a new CHECK constraint — rather than
+  duplicating a parallel table pair. Two real bugs were caught by
+  validation and fixed in the same patch, not shipped and found later:
+  (1) `internal_request_replies_insert`/`_update` used to INNER JOIN
+  `requests` to check the parent wasn't cancelled — once
+  `parent_request_id` can be NULL for an entry-anchored row, that join
+  silently matched zero rows, which would have blocked every reply to
+  an entry-anchored loop-in. Fixed by routing the check through a new
+  `internal_requests_parent_not_frozen()` helper instead of an inline
+  join. (2) A section looped in via an entry-anchored `internal_requests`
+  row had no RLS path to see the parent entry itself — the same gap
+  `patch-internal-collab-request-visibility.sql` already fixed on the
+  requests side; mirrored here as
+  `external_correspondence_select_via_internal_collab`. A third helper,
+  `internal_requests_parent_deadline_ok()`, casts the candidate deadline
+  to a bare date before comparing against `external_correspondence.
+  deadline` (a `DATE` column, unlike `requests.deadline`'s `TIMESTAMPTZ`)
+  — a direct comparison would have implicitly cast the DATE to midnight
+  and wrongly rejected a same-day deadline at any time later than 00:00.
+  Also adds the entry-detail.js UI for this (Internal Collaboration
+  panel, Loop In modal, reply thread) and an Entry-specific Info
+  Requests tab; `requests.js`'s own Info Requests tab and dashboard's
+  Internal Collaboration rows are now filtered to request-anchored rows
+  only, so each module's queue stays scoped to its own domain even
+  though the underlying table/API is shared. Verified against a local
+  Postgres instance, both against a fresh full schema AND against the
+  actual pre-patch schema (simulating a real upgrade): both bugs
+  confirmed fixed, the deadline-cast fix confirmed on a same-day/
+  later-time case, a day-after-deadline case still correctly rejected,
+  and an unrelated section confirmed still unable to see the entry.
+  Idempotent.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

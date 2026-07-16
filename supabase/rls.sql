@@ -187,19 +187,23 @@ $$ LANGUAGE sql STABLE SECURITY DEFINER;
 -- True if the caller may log/route p_org_id's external correspondence
 -- (Entry module — public/family/outside-office mail and prisoner
 -- complaints that arrive from outside the CorLink network entirely): a
--- supervisor/admin of that org, OR (if the org has designated a
--- section) any member of that section regardless of role, OR (if no
--- section is set yet) any member of the org at all — identical shape to
--- is_prisoner_registry_manager() above, deliberately: both are "a
--- specific section handles this, but org leadership keeps oversight"
--- designations, unlike is_prisoner_letters_staff()'s flat no-bypass flag.
+-- supervisor/admin of that org, OR (if the org has designated one or
+-- more entry_sections) any member of any of those sections regardless
+-- of role, OR (if none are configured yet) any member of the org at
+-- all — same never-breaks-on-upgrade shape as is_prisoner_registry_
+-- manager() above, except an org may designate MULTIPLE entry sections
+-- (entry_sections is a join table, not a single FK column), since more
+-- than one desk may need to log incoming correspondence.
 CREATE OR REPLACE FUNCTION is_entry_staff(p_org_id UUID)
 RETURNS BOOLEAN AS $$
   SELECT
     (get_my_org_id() = p_org_id AND is_supervisor_or_above())
     OR CASE
-      WHEN (SELECT entry_section_id FROM organizations WHERE id = p_org_id) IS NOT NULL
-        THEN (SELECT entry_section_id FROM organizations WHERE id = p_org_id) IN (SELECT my_section_ids())
+      WHEN EXISTS (SELECT 1 FROM entry_sections WHERE org_id = p_org_id)
+        THEN EXISTS (
+          SELECT 1 FROM entry_sections es
+          WHERE es.org_id = p_org_id AND es.section_id IN (SELECT my_section_ids())
+        )
       ELSE get_my_org_id() = p_org_id
     END;
 $$ LANGUAGE sql STABLE SECURITY DEFINER;
@@ -358,7 +362,7 @@ CREATE OR REPLACE FUNCTION update_org_workflow_settings(
   p_default_receiving_section_id UUID,
   p_reference_number_format TEXT,
   p_prisoner_registry_section_id UUID DEFAULT NULL,
-  p_entry_section_id UUID DEFAULT NULL
+  p_entry_section_ids UUID[] DEFAULT NULL
 )
 RETURNS VOID AS $$
 BEGIN
@@ -378,10 +382,11 @@ BEGIN
     RAISE EXCEPTION 'prisoner_registry_section_id must belong to the target organization';
   END IF;
 
-  IF p_entry_section_id IS NOT NULL AND NOT EXISTS (
-    SELECT 1 FROM sections WHERE id = p_entry_section_id AND org_id = p_org_id
+  IF p_entry_section_ids IS NOT NULL AND EXISTS (
+    SELECT 1 FROM unnest(p_entry_section_ids) sid
+    WHERE NOT EXISTS (SELECT 1 FROM sections WHERE id = sid AND org_id = p_org_id)
   ) THEN
-    RAISE EXCEPTION 'entry_section_id must belong to the target organization';
+    RAISE EXCEPTION 'entry_section_ids must all belong to the target organization';
   END IF;
 
   IF p_reference_number_format IS NULL OR trim(p_reference_number_format) = ''
@@ -392,11 +397,28 @@ BEGIN
   UPDATE organizations
   SET default_receiving_section_id = p_default_receiving_section_id,
       reference_number_format = p_reference_number_format,
-      prisoner_registry_section_id = p_prisoner_registry_section_id,
-      entry_section_id = p_entry_section_id
+      prisoner_registry_section_id = p_prisoner_registry_section_id
   WHERE id = p_org_id;
+
+  DELETE FROM entry_sections WHERE org_id = p_org_id;
+  IF p_entry_section_ids IS NOT NULL THEN
+    INSERT INTO entry_sections (org_id, section_id)
+    SELECT p_org_id, sid FROM unnest(p_entry_section_ids) sid;
+  END IF;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- ─── entry_sections ───────────────────────────────────────────
+-- Which section(s) may log new Entry correspondence for an org (see
+-- is_entry_staff() above). Readable by any member of that org (needed
+-- for the "New Entry" button's client-side gate) plus super_admin;
+-- writes go exclusively through update_org_workflow_settings() above
+-- (SECURITY DEFINER), same convention as default_receiving_section_id/
+-- prisoner_registry_section_id — no direct INSERT/UPDATE/DELETE policy.
+ALTER TABLE entry_sections ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "entry_sections_select" ON entry_sections
+  FOR SELECT USING (is_super_admin() OR org_id = get_my_org_id());
 
 -- ─── commands ─────────────────────────────────────────────────
 CREATE POLICY "commands_select" ON commands
@@ -1299,13 +1321,15 @@ CREATE POLICY "responses_select_cc" ON responses
   );
 
 -- ─── internal_requests / internal_request_replies ──────────────
--- Org-only collaboration between sections, anchored to one external
--- request. Deliberately has no from_org_id/to_org_id duality like
--- `requests` — from_section_id/to_section_id are both validated (at
--- INSERT) to resolve to the SAME org, which is what structurally
--- guarantees the other org in the conversation can never see these
--- rows: their get_my_org_id()/my_section_ids() can never match a
--- section belonging to a different org.
+-- Org-only collaboration between sections, anchored to exactly ONE
+-- parent case — either an external request (parent_request_id) or an
+-- Entry case (parent_entry_id, external_correspondence). Deliberately
+-- has no from_org_id/to_org_id duality like `requests` — from_section_id/
+-- to_section_id are both validated (at INSERT) to resolve to the SAME
+-- org, which is what structurally guarantees the other org in the
+-- conversation can never see these rows: their get_my_org_id()/
+-- my_section_ids() can never match a section belonging to a different
+-- org.
 -- previous_section_id: same load-bearing "post-UPDATE row must stay
 -- visible under SELECT policy" clause as requests_select (see the
 -- comment there) — here it's what lets a PLAIN member of the current
@@ -1316,6 +1340,66 @@ CREATE POLICY "responses_select_cc" ON responses
 -- section, so the returner matches neither — only the trigger-set
 -- previous_section_id still points at them. Supervisors were covered
 -- by the org-wide fallback term; plain members weren't.
+
+-- Three helpers centralize the parent-type branching (request vs.
+-- entry) so it lives in one place instead of being duplicated across
+-- every policy below. Each takes both parent columns and checks
+-- whichever one is actually set (exactly one, per the table's own
+-- internal_requests_one_parent CHECK constraint).
+
+-- INSERT-time: is the parent case still open enough to start NEW work
+-- on it? Requests: not cancelled/closed/responded. Entries have no
+-- cancelled-equivalent state, so only closed/responded block new work.
+CREATE OR REPLACE FUNCTION internal_requests_parent_startable(p_parent_request_id UUID, p_parent_entry_id UUID)
+RETURNS BOOLEAN AS $$
+  SELECT
+    (p_parent_request_id IS NOT NULL AND EXISTS (
+      SELECT 1 FROM requests r WHERE r.id = p_parent_request_id
+        AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
+        AND r.status NOT IN ('cancelled', 'closed', 'responded')
+    ))
+    OR (p_parent_entry_id IS NOT NULL AND EXISTS (
+      SELECT 1 FROM external_correspondence ec WHERE ec.id = p_parent_entry_id
+        AND ec.org_id = get_my_org_id()
+        AND ec.status NOT IN ('closed', 'responded')
+    ));
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+
+-- UPDATE-time: is this row still allowed to move at all (Mark Received/
+-- Assign/Reroute/Close/Return)? Requests freeze only on 'cancelled' (an
+-- in-flight loop-in still needs to be finishable after the case itself
+-- reaches closed/responded). Entries have no cancelled-equivalent
+-- state, so an entry-anchored row is never frozen by its parent.
+CREATE OR REPLACE FUNCTION internal_requests_parent_not_frozen(p_parent_request_id UUID, p_parent_entry_id UUID)
+RETURNS BOOLEAN AS $$
+  SELECT
+    (p_parent_request_id IS NOT NULL AND EXISTS (
+      SELECT 1 FROM requests r WHERE r.id = p_parent_request_id AND r.status <> 'cancelled'
+    ))
+    OR (p_parent_entry_id IS NOT NULL);
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+
+-- INSERT-time deadline cap: a section gathering supporting info can't
+-- give itself more time than the case itself has. external_correspondence.
+-- deadline is a DATE (requests.deadline is TIMESTAMPTZ) — cast the
+-- candidate deadline down to a date for that comparison, since comparing
+-- a TIMESTAMPTZ directly against a DATE implicitly casts the DATE to
+-- midnight and would wrongly reject a same-day deadline at any time
+-- later than 00:00.
+CREATE OR REPLACE FUNCTION internal_requests_parent_deadline_ok(p_parent_request_id UUID, p_parent_entry_id UUID, p_deadline TIMESTAMPTZ)
+RETURNS BOOLEAN AS $$
+  SELECT
+    p_deadline IS NULL
+    OR (p_parent_request_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM requests r WHERE r.id = p_parent_request_id
+        AND r.deadline IS NOT NULL AND p_deadline > r.deadline
+    ))
+    OR (p_parent_entry_id IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM external_correspondence ec WHERE ec.id = p_parent_entry_id
+        AND ec.deadline IS NOT NULL AND p_deadline::date > ec.deadline
+    ));
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+
 CREATE POLICY "internal_requests_select" ON internal_requests
   FOR SELECT USING (
     from_section_id IN (SELECT my_section_ids())
@@ -1325,17 +1409,12 @@ CREATE POLICY "internal_requests_select" ON internal_requests
     OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', to_section_id))
   );
 
--- The EXISTS subquery below explicitly qualifies parent_request_id as
--- internal_requests.parent_request_id — requests ALSO has a column
--- literally named parent_request_id (used for its own follow-up-
--- request chaining), so a bare `parent_request_id` reference inside
--- `FROM requests r WHERE r.id = parent_request_id` silently resolves
--- to the closer/inner r.parent_request_id instead of the intended
--- outer internal_requests row being inserted — collapsing the check
--- to "is this request its own parent" (always false/NULL for a root
--- request), which rejected every "Loop in a Section" attempt against
--- a root request. Confirmed empirically against a real Postgres
--- instance before fixing.
+-- The parent-case checks are qualified via internal_requests.parent_
+-- request_id/parent_entry_id passed explicitly into the helper
+-- functions above, avoiding the exact shadowing trap requests' own
+-- parent_request_id column could otherwise cause here (see git history
+-- for the empirically-confirmed bug this avoided in the original
+-- inlined-EXISTS version of this policy).
 CREATE POLICY "internal_requests_insert" ON internal_requests
   FOR INSERT WITH CHECK (
     created_by = auth.uid()
@@ -1344,42 +1423,18 @@ CREATE POLICY "internal_requests_insert" ON internal_requests
       OR (is_supervisor_or_above() AND scope_org_id('section', from_section_id) = get_my_org_id())
     )
     AND scope_org_id('section', to_section_id) = get_my_org_id()
-    AND EXISTS (
-      SELECT 1 FROM requests r WHERE r.id = internal_requests.parent_request_id
-        AND (r.from_org_id = get_my_org_id() OR r.to_org_id = get_my_org_id())
-        -- A brand-new "Loop in a Section" has no reason to start on a case
-        -- that's already done — cancelled, closed, or responded (awaiting
-        -- only acknowledge-and-close, not further section work). Narrower
-        -- than internal_requests_update below on purpose: an internal_
-        -- request already IN FLIGHT when the case reaches one of these
-        -- statuses stays updatable there so it can still be finished, but
-        -- nothing new should be startable once the case itself is done.
-        AND r.status NOT IN ('cancelled', 'closed', 'responded')
-    )
+    -- A brand-new "Loop in a Section" has no reason to start on a case
+    -- that's already done. Narrower than internal_requests_update below
+    -- on purpose: an internal_request already IN FLIGHT when the case
+    -- reaches a terminal-ish status stays updatable there so it can
+    -- still be finished, but nothing new should be startable once the
+    -- case itself is done.
+    AND internal_requests_parent_startable(internal_requests.parent_request_id, internal_requests.parent_entry_id)
     -- A section gathering supporting info can't give itself more time
-    -- than the case itself has — no cap if either deadline is unset.
-    -- internal_requests.deadline is qualified (not a bare `deadline`)
-    -- for the same reason parent_request_id is qualified above: this
-    -- table has no column that would shadow it today, but staying
-    -- explicit keeps that true if one is ever added.
-    AND (
-      internal_requests.deadline IS NULL
-      OR NOT EXISTS (
-        SELECT 1 FROM requests r WHERE r.id = internal_requests.parent_request_id
-          AND r.deadline IS NOT NULL AND internal_requests.deadline > r.deadline
-      )
-    )
+    -- than the case itself has.
+    AND internal_requests_parent_deadline_ok(internal_requests.parent_request_id, internal_requests.parent_entry_id, internal_requests.deadline)
   );
 
--- The EXISTS qualifies internal_requests.parent_request_id explicitly —
--- the SAME shadowing trap already documented on internal_requests_insert
--- above: requests also has a column literally named parent_request_id,
--- so a bare reference inside `FROM requests r WHERE r.id =
--- parent_request_id` resolves to r.parent_request_id ("is this request
--- its own parent", always false), silently making the policy match
--- ZERO rows — which broke every internal-collaboration update (Mark
--- Received/Assign/Reroute/Close/Return) until caught empirically.
---
 -- WITH CHECK is explicit, with one extra term: previous_section_id.
 -- Without it, Postgres reuses USING against the post-update row, and a
 -- return/re-route moves the row OUT of all three USING branches for a
@@ -1399,7 +1454,9 @@ CREATE POLICY "internal_requests_update" ON internal_requests
     -- Frozen once the parent request is cancelled — no further Mark
     -- Received/Assign/Reroute/Close/Return to Sender, matching how
     -- is_locked already freezes attachments on a sent request/response.
-    AND EXISTS (SELECT 1 FROM requests r WHERE r.id = internal_requests.parent_request_id AND r.status <> 'cancelled')
+    -- Entry-anchored rows are never frozen this way (no cancelled-
+    -- equivalent state on external_correspondence).
+    AND internal_requests_parent_not_frozen(internal_requests.parent_request_id, internal_requests.parent_entry_id)
   )
   WITH CHECK (
     (
@@ -1408,7 +1465,7 @@ CREATE POLICY "internal_requests_update" ON internal_requests
       OR previous_section_id IN (SELECT my_section_ids())
       OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', to_section_id))
     )
-    AND EXISTS (SELECT 1 FROM requests r WHERE r.id = internal_requests.parent_request_id AND r.status <> 'cancelled')
+    AND internal_requests_parent_not_frozen(internal_requests.parent_request_id, internal_requests.parent_entry_id)
   );
 
 -- The asking side (from_section / the internal request's creator) only
@@ -1432,15 +1489,19 @@ CREATE POLICY "internal_request_replies_select" ON internal_request_replies
     )
   );
 
+-- Uses internal_requests_parent_not_frozen() rather than an inline JOIN
+-- to requests — a JOIN here would match ZERO rows for an entry-anchored
+-- internal request (parent_request_id IS NULL), silently blocking
+-- every reply to a "Loop in a Section" started from Entry. Confirmed
+-- empirically before shipping.
 CREATE POLICY "internal_request_replies_insert" ON internal_request_replies
   FOR INSERT WITH CHECK (
     created_by = auth.uid()
     AND EXISTS (
       SELECT 1 FROM internal_requests ir
-      JOIN requests r ON r.id = ir.parent_request_id
       WHERE ir.id = internal_request_id
         AND ir.to_section_id IN (SELECT my_section_ids())
-        AND r.status <> 'cancelled'
+        AND internal_requests_parent_not_frozen(ir.parent_request_id, ir.parent_entry_id)
     )
   );
 
@@ -1450,6 +1511,9 @@ CREATE POLICY "internal_request_replies_insert" ON internal_request_replies
 -- supervisor over the replying section approves/returns anything
 -- pending. WITH CHECK repeats USING so a permitted editor can't move a
 -- row somewhere they couldn't touch (the requests_update lesson).
+-- Same internal_requests_parent_not_frozen() fix as the INSERT policy
+-- above — an inline JOIN to requests would silently match zero rows
+-- for entry-anchored replies.
 CREATE POLICY "internal_request_replies_update" ON internal_request_replies
   FOR UPDATE USING (
     (
@@ -1462,8 +1526,8 @@ CREATE POLICY "internal_request_replies_update" ON internal_request_replies
     )
     AND EXISTS (
       SELECT 1 FROM internal_requests ir
-      JOIN requests r ON r.id = ir.parent_request_id
-      WHERE ir.id = internal_request_id AND r.status <> 'cancelled'
+      WHERE ir.id = internal_request_id
+        AND internal_requests_parent_not_frozen(ir.parent_request_id, ir.parent_entry_id)
     )
   )
   WITH CHECK (
@@ -1477,8 +1541,8 @@ CREATE POLICY "internal_request_replies_update" ON internal_request_replies
     )
     AND EXISTS (
       SELECT 1 FROM internal_requests ir
-      JOIN requests r ON r.id = ir.parent_request_id
-      WHERE ir.id = internal_request_id AND r.status <> 'cancelled'
+      WHERE ir.id = internal_request_id
+        AND internal_requests_parent_not_frozen(ir.parent_request_id, ir.parent_entry_id)
     )
   );
 
@@ -1486,8 +1550,10 @@ CREATE POLICY "internal_request_replies_update" ON internal_request_replies
 -- Supervisor feedback on drafts is strictly a same-side, internal
 -- artifact: comments on a REQUEST draft belong to the drafting org
 -- (from_org), comments on a RESPONSE draft to the responding org
--- (to_org), and comments on an internal reply to the replying section's
--- side. The counterpart organization can never see review chatter.
+-- (to_org), and comments on an internal reply or an Entry reply belong
+-- to the replying section's side. The counterpart organization (or, for
+-- Entry, whoever originally logged the correspondence) can never see
+-- review chatter.
 CREATE POLICY "review_comments_select" ON review_comments
   FOR SELECT USING (
     created_by = auth.uid()
@@ -1503,6 +1569,12 @@ CREATE POLICY "review_comments_select" ON review_comments
       WHERE irr.id = record_id
         AND (ir.to_section_id IN (SELECT my_section_ids())
              OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', ir.to_section_id)))
+    ))
+    OR (record_type = 'entry_reply' AND EXISTS (
+      SELECT 1 FROM external_correspondence_replies ecr JOIN external_correspondence ec ON ec.id = ecr.entry_id
+      WHERE ecr.id = record_id
+        AND (ec.to_section_id IN (SELECT my_section_ids())
+             OR (is_supervisor_or_above() AND ec.to_section_id IS NOT NULL AND get_my_org_id() = scope_org_id('section', ec.to_section_id)))
     ))
   );
 
@@ -1525,6 +1597,10 @@ CREATE POLICY "review_comments_insert" ON review_comments
         SELECT 1 FROM internal_request_replies irr JOIN internal_requests ir ON ir.id = irr.internal_request_id
         WHERE irr.id = record_id AND get_my_org_id() = scope_org_id('section', ir.to_section_id)
       ))
+      OR (record_type = 'entry_reply' AND EXISTS (
+        SELECT 1 FROM external_correspondence_replies ecr JOIN external_correspondence ec ON ec.id = ecr.entry_id
+        WHERE ecr.id = record_id AND ec.to_section_id IS NOT NULL AND get_my_org_id() = scope_org_id('section', ec.to_section_id)
+      ))
     )
   );
 
@@ -1545,6 +1621,12 @@ CREATE POLICY "review_comments_update" ON review_comments
       WHERE irr.id = record_id
         AND (ir.to_section_id IN (SELECT my_section_ids())
              OR (is_supervisor_or_above() AND get_my_org_id() = scope_org_id('section', ir.to_section_id)))
+    ))
+    OR (record_type = 'entry_reply' AND EXISTS (
+      SELECT 1 FROM external_correspondence_replies ecr JOIN external_correspondence ec ON ec.id = ecr.entry_id
+      WHERE ecr.id = record_id
+        AND (ec.to_section_id IN (SELECT my_section_ids())
+             OR (is_supervisor_or_above() AND ec.to_section_id IS NOT NULL AND get_my_org_id() = scope_org_id('section', ec.to_section_id)))
     ))
   );
 
@@ -1946,6 +2028,24 @@ CREATE POLICY "external_correspondence_select" ON external_correspondence
       OR entered_by  = auth.uid()
     )
   );
+
+-- Same shape as looped_in_via_internal_collab()/requests_select_via_
+-- internal_collab above — a section looped in via an entry-anchored
+-- internal_requests row (parent_entry_id) needs to see the entry itself,
+-- not just its own internal_requests row, to open the case and reply.
+-- Additive, same reasoning as the requests-side policy: the four
+-- branches above weren't necessarily true for a looped-in section.
+CREATE OR REPLACE FUNCTION looped_in_via_internal_collab_entry(p_entry_id UUID)
+RETURNS BOOLEAN AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM internal_requests ir
+    WHERE ir.parent_entry_id = p_entry_id
+      AND ir.to_section_id IN (SELECT my_section_ids())
+  );
+$$ LANGUAGE sql STABLE SECURITY DEFINER;
+
+CREATE POLICY "external_correspondence_select_via_internal_collab" ON external_correspondence
+  FOR SELECT USING (looped_in_via_internal_collab_entry(external_correspondence.id));
 
 -- Only Entry staff can log new correspondence — this is the intake
 -- gate for anything arriving from outside the CorLink network.

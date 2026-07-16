@@ -456,7 +456,8 @@ const AppShell = {
         // value it's already at (e.g. clicking a notification for the
         // request you're already viewing) doesn't fire hashchange, so
         // nothing else would refresh the badge/list in that case.
-        const route = btn.dataset.recordType === 'prisoner_letter' ? 'prisoner-letter-detail' : 'request-detail';
+        const routes = { prisoner_letter: 'prisoner-letter-detail', external_correspondence: 'entry-detail' };
+        const route = routes[btn.dataset.recordType] || 'request-detail';
         Router.navigate(route, { id: btn.dataset.recordId });
         await this.loadNotifications();
       });

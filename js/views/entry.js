@@ -9,9 +9,23 @@
 // assignee, and whoever logged the entry, so everyone just sees what's
 // theirs to act on; the "New Entry"/"Route" actions are the only bits
 // gated to Entry staff specifically.
+//
+// Tabs: Inbox | Sent | Info Requests — mirrors Requests' own tab shape,
+// but Entry has no cross-org sender/receiver duality (everything
+// happens within one org), so Inbox/Sent don't mean "received"/"sent
+// to another org" here: Inbox = entries needing action (unrouted for
+// Entry staff, routed-to-me/assigned-to-me for responders, pending-my-
+// approval for supervisors); Sent = entries where a reply has already
+// gone out to the original sender (answered/closed history). Both tabs
+// source from the same single EntryAPI.listAll() fetch (already
+// RLS-scoped to exactly "entries I should see"), bucketed client-side —
+// unlike Requests, there's no need for two separate queries.
 
 const EntryView = {
-  _state: { filter: 'all' },
+  _state: {
+    tab: 'inbox', inboxView: 'needs_action', sentView: 'needs_action', infoSub: 'mine',
+    inboxSearch: '', sentSearch: '', infoSearch: '',
+  },
 
   async render(container, params = {}) {
     const user = Auth.getCachedProfile();
@@ -20,37 +34,86 @@ const EntryView = {
     this._user = user;
     this._isSupervisor = AppShell.isSupervisorOrAbove(user);
     await this._resolveOrg(user);
+    try {
+      this._mySections = await RequestsAPI.mySections();
+    } catch (err) {
+      console.error('CorLink: failed to load my sections', err);
+      this._mySections = [];
+    }
+    try {
+      this._mySupervisedSections = await RequestsAPI.mySupervisedSections();
+    } catch (err) {
+      console.error('CorLink: failed to load supervised sections', err);
+      this._mySupervisedSections = [];
+    }
+
+    const validTabs = ['inbox', 'sent', 'info'];
+    if (params.tab && validTabs.includes(params.tab)) {
+      this._state.tab = params.tab;
+    } else if (!this._state.tab) {
+      this._state.tab = 'inbox';
+    }
+    if (this._state.tab === 'info' && this._mySections.length === 0) this._state.tab = 'inbox';
+
+    // Deep-links from the dashboard's Action Needed rows, e.g.
+    // #entry?tab=inbox&view=unrouted — validated against the actual
+    // view keys for whichever tab we landed on.
+    if (params.view) {
+      if (this._state.tab === 'inbox' && this._inboxViews().some(v => v.key === params.view)) {
+        this._state.inboxView = params.view;
+      } else if (this._state.tab === 'sent' && this._sentViews().some(v => v.key === params.view)) {
+        this._state.sentView = params.view;
+      }
+    }
+    if (this._state.tab === 'info' && ['mine', 'theirs'].includes(params.sub)) {
+      this._state.infoSub = params.sub;
+    }
+
+    // Invalidate cached lists on every fresh navigation to #entry so
+    // changes made elsewhere (e.g. from entry-detail.js) show up.
+    this._allItems = null;
+    this._allTotalCount = null;
+    this._infoOutstanding = null;
+    this._infoOutstandingTotalCount = null;
 
     container.innerHTML = this._shell();
     this._bindShell();
-    await this._renderList();
+    await this._renderTab();
 
     if (params.action === 'new' && this._canLogEntries()) this._openComposeModal();
   },
 
   bind() {
-    // Binding happens inline during render() since the list re-renders dynamically.
+    // Binding happens inline during render() since tabs re-render dynamically.
   },
 
   async _resolveOrg(user) {
     try {
       const orgs = await AdminAPI.listOrganizations();
       this._org = orgs.find(o => o.id === user.org_id) || null;
+      this._entrySectionIds = this._org ? await AdminAPI.listEntrySections(this._org.id) : [];
     } catch (err) {
       console.error('CorLink: failed to resolve org', err);
       this._org = null;
+      this._entrySectionIds = [];
     }
   },
 
   // UX gate only — external_correspondence_insert RLS (is_entry_staff)
   // is the real boundary. Mirrors _canManagePrisonerRegistry's shape in
   // prisoner-letters.js exactly (same designated-section-with-
-  // supervisor-oversight pattern).
+  // supervisor-oversight pattern), except an org may designate MORE
+  // THAN ONE entry section (entry_sections is a join table).
   _canLogEntries() {
     if (this._isSupervisor) return true;
-    const sectionId = this._org?.entry_section_id;
-    if (!sectionId) return true;
-    return (this._user.assignments || []).some(a => a.scope_type === 'section' && a.scope_id === sectionId);
+    const sectionIds = this._entrySectionIds || [];
+    if (sectionIds.length === 0) return true;
+    const mine = new Set(sectionIds);
+    return (this._user.assignments || []).some(a => a.scope_type === 'section' && mine.has(a.scope_id));
+  },
+
+  _iSupervise(sectionId) {
+    return AppShell.isAdmin(this._user) || (this._mySupervisedSections || []).some(s => s.id === sectionId);
   },
 
   _shell() {
@@ -67,7 +130,13 @@ const EntryView = {
             ${this._canLogEntries() ? `<button class="btn btn-primary btn-sm" id="new-entry-btn"><i class="ti ti-plus"></i> New Entry</button>` : ''}
           </div>
 
-          <div id="entry-results"></div>
+          <div class="tabs" id="entry-tabs">
+            <button class="tab-btn" data-tab="inbox">Inbox</button>
+            <button class="tab-btn" data-tab="sent">Sent</button>
+            ${this._mySections.length > 0 ? `<button class="tab-btn" data-tab="info">Info Requests</button>` : ''}
+          </div>
+
+          <div id="entry-tab-content"></div>
         </main>
 
         ${AppShell.bottomNavHtml(this._user, 'entry')}
@@ -79,49 +148,123 @@ const EntryView = {
   _bindShell() {
     AppShell.bindTopbar();
     document.getElementById('new-entry-btn')?.addEventListener('click', () => this._openComposeModal());
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        this._state.tab = btn.dataset.tab;
+        this._highlightTabs();
+        await this._renderTab();
+      });
+    });
+    this._highlightTabs();
   },
 
-  _filters() {
+  _highlightTabs() {
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.classList.toggle('tab-btn--active', btn.dataset.tab === this._state.tab);
+    });
+  },
+
+  async _renderTab() {
+    const content = document.getElementById('entry-tab-content');
+    content.innerHTML = `<div class="tab-loading"><span class="spinner spinner--dark"></span> Loading…</div>`;
+    try {
+      if (!this._allItems) {
+        const result = await EntryAPI.listAll(this._user.org_id);
+        this._allItems = result.items;
+        this._allTotalCount = result.totalCount;
+      }
+      if (this._state.tab === 'inbox') this._renderInboxFiltered(content);
+      else if (this._state.tab === 'sent') this._renderSentFiltered(content);
+      else if (this._state.tab === 'info') await this._renderInfoTab(content);
+    } catch (err) {
+      console.error('CorLink: failed to load entry tab', err);
+      content.innerHTML = `<div class="alert alert-error"><i class="ti ti-alert-triangle"></i> Couldn't load this tab: ${err.message || 'unknown error'}.</div>`;
+    }
+  },
+
+  // ── Inbox: entries needing action ───────────────────────────────
+  _inboxViews() {
+    const me = this._user.id;
     return [
-      { key: 'all', label: 'All', test: () => true },
+      {
+        key: 'needs_action', label: 'Needs My Action', test: e =>
+          (this._canLogEntries() && e.status === 'logged')
+          || (e.status === 'routed' && !e.assigned_to && this._iSupervise(e.to_section_id))
+          || (e.status === 'routed' && e.assigned_to === me)
+          || (this._isSupervisor && (e.replies || []).some(r => r.status === 'pending_approval')),
+      },
       { key: 'unrouted', label: 'Unrouted', test: e => e.status === 'logged' },
-      { key: 'mine', label: 'Assigned to Me', test: e => e.assigned_to === this._user.id },
-      { key: 'responded', label: 'Responded', test: e => ['responded', 'closed'].includes(e.status) },
-      { key: 'closed', label: 'Closed', test: e => e.status === 'closed' },
+      { key: 'in_progress', label: 'In Progress', test: e => e.status === 'routed' },
+      { key: 'closed', label: 'Completed', test: e => ['responded', 'closed'].includes(e.status) },
+      { key: 'all', label: 'All', test: () => true },
     ];
   },
 
-  async _renderList() {
-    const resultsEl = document.getElementById('entry-results');
-    resultsEl.innerHTML = `<div class="tab-loading"><span class="spinner spinner--dark"></span> Loading…</div>`;
-    try {
-      const { items, totalCount } = await EntryAPI.listAll(this._user.org_id);
-      this._items = items;
-      this._totalCount = totalCount;
-    } catch (err) {
-      console.error('CorLink: failed to load entries', err);
-      resultsEl.innerHTML = `<div class="alert alert-error"><i class="ti ti-alert-triangle"></i> Couldn't load Entry: ${err.message || 'unknown error'}.</div>`;
-      return;
-    }
-    this._renderFiltered();
+  // ── Sent: entries already answered ──────────────────────────────
+  _sentViews() {
+    return [
+      {
+        key: 'needs_action', label: 'Needs My Action', test: e =>
+          e.status === 'responded' && this._canLogEntries() && (e.replies || []).some(r => r.status === 'sent' && r.delivery_method),
+      },
+      { key: 'answered', label: 'Answered', test: e => ['responded', 'closed'].includes(e.status) },
+      { key: 'closed', label: 'Closed', test: e => e.status === 'closed' },
+      { key: 'all', label: 'All', test: () => true },
+    ];
   },
 
-  _renderFiltered() {
-    const resultsEl = document.getElementById('entry-results');
-    const items = this._items || [];
-    const totalCount = this._totalCount ?? items.length;
-    const filters = this._filters();
-    const active = filters.find(f => f.key === this._state.filter) || filters[0];
-    const filtered = items.filter(active.test);
+  _renderInboxFiltered(content) {
+    const items = this._allItems || [];
+    const totalCount = this._allTotalCount ?? items.length;
+    const query = (this._state.inboxSearch || '').trim().toLowerCase();
+    const searched = items.filter(e => this._matchesQuery(e.subject, e.body, query, e.reference_number));
+    const views = this._inboxViews();
+    const active = views.find(v => v.key === this._state.inboxView) || views[0];
+    const filtered = searched.filter(active.test);
+    const emptyHtml = items.length === 0
+      ? this._emptyStateHtml(7, { icon: 'ti-inbox', title: 'No entries yet', subtitle: 'Correspondence logged from outside CorLink will show up here.' })
+      : this._noMatchesHtml(7);
 
-    resultsEl.innerHTML = `
+    content.innerHTML = `
       ${totalCount > items.length ? `<div class="field-hint">Showing the ${items.length} most recent of ${totalCount} — use search to narrow further.</div>` : ''}
-      <div class="filter-chips">
-        ${filters.map(f => `
-          <button class="filter-chip${f.key === active.key ? ' filter-chip--active' : ''}" data-filter="${f.key}">
-            ${f.label} <span class="filter-chip-count">${items.filter(f.test).length}</span>
-          </button>`).join('')}
-      </div>
+      ${this._searchBoxHtml('inboxSearch', 'Search subject or message…', this._state.inboxSearch)}
+      ${this._filterChipsHtml(views, searched, active.key, 'inbox-view')}
+      ${this._listPanel(filtered, emptyHtml)}
+    `;
+    this._bindSearchBox(content, 'inboxSearch', () => this._renderInboxFiltered(content));
+    content.querySelectorAll('[data-inbox-view]').forEach(btn => {
+      btn.addEventListener('click', () => { this._state.inboxView = btn.dataset.inboxView; this._renderInboxFiltered(content); });
+    });
+    this._bindListActions(content, filtered);
+  },
+
+  _renderSentFiltered(content) {
+    const items = this._allItems || [];
+    const totalCount = this._allTotalCount ?? items.length;
+    const query = (this._state.sentSearch || '').trim().toLowerCase();
+    const searched = items.filter(e => this._matchesQuery(e.subject, e.body, query, e.reference_number));
+    const views = this._sentViews();
+    const active = views.find(v => v.key === this._state.sentView) || views[0];
+    const filtered = searched.filter(active.test);
+    const emptyHtml = items.length === 0
+      ? this._emptyStateHtml(7, { icon: 'ti-send', title: 'Nothing answered yet', subtitle: 'Entries with a reply already sent back to the original sender will show up here.' })
+      : this._noMatchesHtml(7);
+
+    content.innerHTML = `
+      ${totalCount > items.length ? `<div class="field-hint">Showing the ${items.length} most recent of ${totalCount} — use search to narrow further.</div>` : ''}
+      ${this._searchBoxHtml('sentSearch', 'Search subject or message…', this._state.sentSearch)}
+      ${this._filterChipsHtml(views, searched, active.key, 'sent-view')}
+      ${this._listPanel(filtered, emptyHtml)}
+    `;
+    this._bindSearchBox(content, 'sentSearch', () => this._renderSentFiltered(content));
+    content.querySelectorAll('[data-sent-view]').forEach(btn => {
+      btn.addEventListener('click', () => { this._state.sentView = btn.dataset.sentView; this._renderSentFiltered(content); });
+    });
+    this._bindListActions(content, filtered);
+  },
+
+  _listPanel(items, emptyHtml) {
+    return `
       <div class="panel">
         <table class="data-table">
           <thead>
@@ -136,22 +279,163 @@ const EntryView = {
             </tr>
           </thead>
           <tbody>
-            ${filtered.map(e => this._listRow(e)).join('') || `<tr><td colspan="7" class="structure-empty">Nothing here yet.</td></tr>`}
+            ${items.map(e => this._listRow(e)).join('') || emptyHtml || `<tr><td colspan="7" class="structure-empty">Nothing here yet.</td></tr>`}
           </tbody>
         </table>
       </div>
     `;
-    resultsEl.querySelectorAll('[data-filter]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        this._state.filter = btn.dataset.filter;
-        this._renderFiltered();
-      });
-    });
-    resultsEl.querySelectorAll('[data-route]').forEach(btn => {
+  },
+
+  _bindListActions(content, filtered) {
+    content.querySelectorAll('[data-route]').forEach(btn => {
       btn.addEventListener('click', () => {
         const e = filtered.find(x => x.id === btn.dataset.route);
         this._openRouteModal(e);
       });
+    });
+  },
+
+  // ── Info Requests: entry-anchored Internal Collaboration ────────
+  // Same shared queue as requests.js's own Info Requests tab
+  // (InternalRequestsAPI.listOutstandingForSections), filtered here to
+  // the entry-anchored half — keeps each module's queue scoped to its
+  // own domain, per patch-internal-collab-polymorphic-parent.sql.
+  async _renderInfoTab(content) {
+    const sectionIds = (this._mySections || []).map(s => s.id);
+    if (!this._infoOutstanding) {
+      const result = await InternalRequestsAPI.listOutstandingForSections(sectionIds);
+      this._infoOutstanding = result.items.filter(ir => ir.parent_entry_id);
+      this._infoOutstandingTotalCount = result.totalCount;
+    }
+    const items = this._infoOutstanding || [];
+    const totalCount = this._infoOutstandingTotalCount ?? items.length;
+    const mySet = new Set(sectionIds);
+    const query = (this._state.infoSearch || '').trim().toLowerCase();
+    const searched = items.filter(ir => this._matchesQuery(ir.subject, ir.body, query));
+    const awaitingMyReply = searched.filter(ir => mySet.has(ir.to_section_id));
+    const awaitingTheirReply = searched.filter(ir => mySet.has(ir.from_section_id) && !mySet.has(ir.to_section_id));
+    const rawMine = items.filter(ir => mySet.has(ir.to_section_id));
+    const rawTheirs = items.filter(ir => mySet.has(ir.from_section_id) && !mySet.has(ir.to_section_id));
+    const sub = this._state.infoSub === 'theirs' ? 'theirs' : 'mine';
+    const activeList = sub === 'mine' ? awaitingMyReply : awaitingTheirReply;
+    const rawEmpty = (sub === 'mine' ? rawMine : rawTheirs).length === 0;
+    const emptyHtml = rawEmpty
+      ? this._emptyStateHtml(6, {
+          icon: 'ti-messages', title: 'No information requests yet',
+          subtitle: sub === 'mine'
+            ? "When another section loops your section in on an entry, it'll show up here."
+            : 'Open any entry and use "Loop in a Section" to gather info from another team — it will show up here.',
+        })
+      : this._noMatchesHtml(6);
+
+    content.innerHTML = `
+      ${totalCount > items.length ? `<div class="field-hint">Showing the ${items.length} most recent of ${totalCount} — use search to narrow further.</div>` : ''}
+      ${this._searchBoxHtml('infoSearch', 'Search subject or message…', this._state.infoSearch)}
+      <div class="tabs tabs--sub">
+        <button class="tab-btn${sub === 'mine' ? ' tab-btn--active' : ''}" data-info-sub="mine">
+          <i class="ti ti-message-question"></i> Awaiting Your Section's Reply <span class="filter-chip-count">${awaitingMyReply.length}</span>
+        </button>
+        <button class="tab-btn${sub === 'theirs' ? ' tab-btn--active' : ''}" data-info-sub="theirs">
+          <i class="ti ti-clock"></i> Information Requested — Awaiting Their Reply <span class="filter-chip-count">${awaitingTheirReply.length}</span>
+        </button>
+      </div>
+      ${this._infoRequestPanel(activeList, emptyHtml)}
+    `;
+    this._bindSearchBox(content, 'infoSearch', () => this._renderInfoTab(content));
+    content.querySelectorAll('[data-info-sub]').forEach(btn => {
+      btn.addEventListener('click', () => { this._state.infoSub = btn.dataset.infoSub; this._renderInfoTab(content); });
+    });
+  },
+
+  _infoRequestPanel(items, emptyHtml) {
+    return `
+      <div class="panel">
+        <table class="data-table">
+          <thead>
+            <tr><th>Entry</th><th>Subject</th><th>From → To</th><th>Status</th><th>Sent</th><th></th></tr>
+          </thead>
+          <tbody>
+            ${items.map(ir => `
+              <tr>
+                <td data-label="Entry">${ir.parent_entry?.reference_number || this._escapeHtml(ir.parent_entry?.subject || '') || '—'}</td>
+                <td data-label="Subject" class="${RichEditor.dvClass(ir.subject, ir.subject_language)}">${this._escapeHtml(ir.subject)}</td>
+                <td data-label="From → To">${ir.from_section?.name || ''} → ${ir.to_section?.name || ''}</td>
+                <td data-label="Status"><span class="badge badge-outline">${ir.status.replace(/_/g, ' ')}</span></td>
+                <td data-label="Sent">${new Date(ir.created_at).toLocaleDateString()}</td>
+                <td data-label="Actions">${ir.parent_entry?.id ? `<a class="btn btn-secondary btn-xs" href="#entry-detail?id=${ir.parent_entry.id}">View</a>` : ''}</td>
+              </tr>
+            `).join('') || emptyHtml || `<tr><td colspan="6" class="structure-empty">Nothing here yet.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    `;
+  },
+
+  // ── Search / filter-chip helpers (own copies, same shape as
+  // requests.js's — this codebase's established convention is
+  // per-view copies of these small UI helpers rather than cross-view
+  // reuse, matching prisoner-letters.js's own equivalents). ──────────
+  _filterChipsHtml(filters, items, activeKey, dataAttr) {
+    return `
+      <div class="filter-chips">
+        ${filters.map(f => `
+          <button type="button" class="filter-chip${f.key === activeKey ? ' filter-chip--active' : ''}" data-${dataAttr}="${f.key}">
+            ${f.label} <span class="filter-chip-count">${items.filter(f.test).length}</span>
+          </button>
+        `).join('')}
+      </div>
+    `;
+  },
+
+  _stripHtml(html) {
+    return (html || '').replace(/<[^>]+>/g, ' ');
+  },
+
+  _matchesQuery(subject, body, query, referenceNumber) {
+    if (!query) return true;
+    return `${subject || ''} ${this._stripHtml(body)} ${referenceNumber || ''}`.toLowerCase().includes(query);
+  },
+
+  _searchBoxHtml(name, placeholder, value = '') {
+    return `
+      <div class="search-box">
+        <i class="ti ti-search search-box-icon"></i>
+        <input type="search" class="search-box-input" data-search="${name}" placeholder="${placeholder}" value="${this._escapeHtml(value)}" dir="auto" />
+      </div>
+    `;
+  },
+
+  _bindSearchBox(container, stateKey, onChange) {
+    const input = container.querySelector(`[data-search="${stateKey}"]`);
+    if (!input) return;
+    let debounceTimer;
+    input.addEventListener('input', () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        this._state[stateKey] = input.value;
+        onChange();
+      }, 150);
+    });
+  },
+
+  _emptyStateHtml(colspan, { icon = 'ti-inbox', title, subtitle = '', cta = '' }) {
+    return `
+      <tr><td colspan="${colspan}">
+        <div class="empty-state">
+          <i class="ti ${icon}"></i>
+          <p class="empty-state-title">${title}</p>
+          ${subtitle ? `<p class="empty-state-subtitle">${subtitle}</p>` : ''}
+          ${cta}
+        </div>
+      </td></tr>
+    `;
+  },
+
+  _noMatchesHtml(colspan) {
+    return this._emptyStateHtml(colspan, {
+      icon: 'ti-search-off',
+      title: 'No matches',
+      subtitle: 'Try a different search term, or clear the active filters.',
     });
   },
 
@@ -475,7 +759,8 @@ const EntryView = {
           assignedTo: fd.get('assignedTo') || null,
         });
         this._closeModal();
-        await this._renderList();
+        this._allItems = null;
+        await this._renderTab();
       } catch (err) {
         errEl.textContent = err.message;
         errEl.classList.remove('hidden');

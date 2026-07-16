@@ -17,8 +17,8 @@ const DashboardView = {
     // Org-wide supervisors/admins always qualify as Entry staff
     // (is_entry_staff's org-wide fallback — see supabase/rls.sql), so
     // this sync check covers the realistic "leadership watching the
-    // front-desk queue" case without an extra async org fetch just to
-    // resolve entry_section_id membership before the first paint.
+    // front-desk queue" case without an extra async fetch of
+    // entry_sections membership before the first paint.
     this._canLogEntries = this._isSupervisor;
 
     container.innerHTML = `
@@ -190,6 +190,15 @@ const DashboardView = {
         rows.push({ icon: 'ti-inbox', label: 'Unrouted Requests', count: unrouted, href: '#requests?tab=inbox&view=needs_action' });
       }
 
+      // Same "org-wide by nature" reasoning as Unrouted Requests above —
+      // a newly-logged Entry has no section yet, so there's nothing
+      // narrower than "any Entry staff" to scope it to.
+      if (this._canLogEntries) {
+        const { items: entries } = await EntryAPI.listAll(user.org_id);
+        const unroutedEntries = entries.filter(e => e.status === 'logged').length;
+        rows.push({ icon: 'ti-inbox', label: 'Unrouted Entries', count: unroutedEntries, href: '#entry?tab=inbox&view=unrouted' });
+      }
+
       // Assigning is a supervisor's action (mirrors the Assign/Reassign
       // button's own gating in request-detail.js) — scoped to sections
       // this user actually supervises, not every unassigned item their
@@ -245,7 +254,12 @@ const DashboardView = {
       if (mySections.length > 0) {
         const sectionIds = mySections.map(s => s.id);
         const mySet = new Set(sectionIds);
-        outstanding = (await InternalRequestsAPI.listOutstandingForSections(sectionIds)).items;
+        // Scoped to request-anchored loop-ins only — this block's rows
+        // all link to #requests?tab=info, which (js/views/requests.js's
+        // _renderInfoRequests) only shows request-anchored rows too;
+        // entry-anchored Internal Collaboration gets its own dashboard
+        // rows further down, linking to #entry instead.
+        outstanding = (await InternalRequestsAPI.listOutstandingForSections(sectionIds)).items.filter(ir => ir.parent_request_id);
         const awaitingTheirReply = outstanding.filter(ir => mySet.has(ir.from_section_id) && !mySet.has(ir.to_section_id)).length;
         rows.push({ icon: 'ti-clock', label: 'Information Requested — Awaiting Reply', count: awaitingTheirReply, href: '#requests?tab=info&sub=theirs' });
 
@@ -276,6 +290,21 @@ const DashboardView = {
         // subtracted out.
         const needsMyReply = incoming.filter(ir => !notAssigned(ir) && !replyNotStarted(ir) && !pendingApproval(ir)).length;
         rows.push({ icon: 'ti-message-question', label: 'Information Requests — Needs Your Reply', count: needsMyReply, href: '#requests?tab=info&sub=mine' });
+
+        // Same client-side-bucketing-over-a-capped-list pattern as the
+        // internal-collab rows above, applied to Entry (EntryAPI.listForSections
+        // was previously unused dead code). replies:external_correspondence_
+        // replies(status) on LIST_SELECT is what makes "reply not started"/
+        // "pending approval" computable here without N+1 queries.
+        const { items: myEntries } = await EntryAPI.listForSections(sectionIds);
+        const entryNotAssigned = myEntries.filter(e => e.status === 'routed' && !e.assigned_to && iSupervise(e.to_section_id)).length;
+        rows.push({ icon: 'ti-user-question', label: 'Entry Not Assigned', count: entryNotAssigned, href: '#entry?tab=inbox' });
+
+        const entryReplyNotStarted = myEntries.filter(e => e.status === 'routed' && e.assigned_to === user.id && (e.replies || []).length === 0).length;
+        rows.push({ icon: 'ti-edit-off', label: 'Entry Reply Not Started', count: entryReplyNotStarted, href: '#entry?tab=inbox' });
+
+        const entryReplyPendingApproval = myEntries.filter(e => iSupervise(e.to_section_id) && (e.replies || []).some(r => r.status === 'pending_approval')).length;
+        rows.push({ icon: 'ti-clipboard-check', label: 'Entry Reply Pending Approval', count: entryReplyPendingApproval, href: '#entry?tab=inbox' });
       }
 
       // Zero-count rows are hidden entirely — a padded list of zeros

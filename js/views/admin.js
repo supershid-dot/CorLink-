@@ -342,7 +342,8 @@ const AdminView = {
     const sections = await AdminAPI.listSectionsByOrg(org.id);
     const designations = await AdminAPI.listDesignations(org.id);
     const designationsPanelHtml = this._designationsPanelHtml(designations);
-    const orgSettingsPanelHtml = this._orgSettingsPanelHtml(org, sections);
+    const entrySectionIds = await AdminAPI.listEntrySections(org.id);
+    const orgSettingsPanelHtml = this._orgSettingsPanelHtml(org, sections, entrySectionIds);
 
     if (org.type === 'mcs') {
       const commands = await AdminAPI.listCommands(org.id);
@@ -597,8 +598,9 @@ const AdminView = {
   // Goes through AdminAPI.updateOrgWorkflowSettings(), which calls the
   // update_org_workflow_settings() RPC — hard-scoped server-side to just
   // these two columns (see supabase/rls.sql), not a generic row update.
-  _orgSettingsPanelHtml(org, sections) {
+  _orgSettingsPanelHtml(org, sections, entrySectionIds = []) {
     const activeSections = sections.filter(s => s.is_active);
+    const entrySectionIdSet = new Set(entrySectionIds);
     return `
       <div class="panel">
         <div class="panel-header"><h3>Request Routing &amp; Reference Numbers</h3></div>
@@ -621,12 +623,15 @@ const AdminView = {
             <div class="field-hint">Only staff in this section (plus supervisors/admins) can add or edit prisoners in the registry used by Prisoner Letters. Leave unset to let any staff member in the org manage it.</div>
           </div>` : ''}
           <div class="field-group">
-            <label class="field-label">Entry Section</label>
-            <select class="field-select" name="entrySectionId">
-              <option value="">— None (any staff member in the org) —</option>
-              ${activeSections.map(s => `<option value="${s.id}" ${s.id === org.entry_section_id ? 'selected' : ''}>${this._escapeHtml(s.name)}</option>`).join('')}
-            </select>
-            <div class="field-hint">Only staff in this section (plus supervisors/admins) can log new Entry correspondence (public/family emails and letters, outside-office mail, and prisoner complaints) and route it to the responsible internal section. Leave unset to let any staff member in the org handle it.</div>
+            <label class="field-label">Entry Sections</label>
+            <div class="checkbox-list">
+              ${activeSections.map(s => `
+                <label class="checkbox-row">
+                  <input type="checkbox" name="entrySectionIds" value="${s.id}" ${entrySectionIdSet.has(s.id) ? 'checked' : ''} />
+                  ${this._escapeHtml(s.name)}
+                </label>`).join('')}
+            </div>
+            <div class="field-hint">Staff in any checked section (plus supervisors/admins) can log new Entry correspondence (public/family emails and letters, outside-office mail, and prisoner complaints) and route it to the responsible internal section. Leave all unchecked to let any staff member in the org handle it.</div>
           </div>
           <div class="field-group">
             <label class="field-label">Reference Number Format</label>
@@ -651,7 +656,7 @@ const AdminView = {
           defaultReceivingSectionId: fd.get('defaultReceivingSectionId') || null,
           referenceNumberFormat: fd.get('referenceNumberFormat'),
           prisonerRegistrySectionId: fd.get('prisonerRegistrySectionId') || null,
-          entrySectionId: fd.get('entrySectionId') || null,
+          entrySectionIds: fd.getAll('entrySectionIds'),
         });
         await this._renderTab();
       } catch (err) {

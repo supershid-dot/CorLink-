@@ -8,10 +8,10 @@
 // table/workflow, not a variant of RequestsAPI.
 //
 // Status flow: logged -> routed -> responded -> closed. A staff member
-// in the org's designated Entry section (organizations.entry_section_id
-// — see is_entry_staff() in supabase/rls.sql) logs what arrived, then
-// routes it to whichever internal section is responsible for
-// responding. Replies carry their own draft -> pending_approval -> sent
+// in one of the org's designated Entry sections (entry_sections — see
+// is_entry_staff() in supabase/rls.sql) logs what arrived, then routes
+// it to whichever internal section is responsible for responding.
+// Replies carry their own draft -> pending_approval -> sent
 // lifecycle, approved by a supervisor over the responding section, same
 // shape as InternalRequestsAPI's replies. CorLink only RECORDS the
 // reply as the official file copy — markReplySent's deliveryMethod
@@ -44,7 +44,8 @@ const EntryAPI = (() => {
     to_section:sections!external_correspondence_to_section_id_fkey(name, code),
     entered_by_user:users!external_correspondence_entered_by_fkey(full_name, service_number),
     assigned_to_user:users!external_correspondence_assigned_to_fkey(full_name, service_number),
-    prisoner:prisoners!external_correspondence_prisoner_ref_fkey(file_number, prison)
+    prisoner:prisoners!external_correspondence_prisoner_ref_fkey(file_number, prison),
+    replies:external_correspondence_replies(status)
   `;
 
   return {
@@ -323,6 +324,28 @@ const EntryAPI = (() => {
       if (error) throw wrapRowError(error);
       await logAudit('edited', id, 'Closed external correspondence entry');
       return data;
+    },
+
+    // Same shape as RequestsAPI.listCaseAuditTrail — batches the whole
+    // entry (plus any looped-in internal_requests) into two queries
+    // instead of one per record, and only fetches the action set
+    // entry-detail.js actually renders.
+    async listCaseAuditTrail(entryIds, internalRequestIds = []) {
+      const db = getSupabase();
+      const queries = [];
+      if (entryIds.length) {
+        queries.push(db.from('audit_logs').select('*, user:users(full_name, designations(name))')
+          .eq('record_type', 'external_correspondence').in('record_id', entryIds).in('action', ['routed', 'assigned']));
+      }
+      if (internalRequestIds.length) {
+        queries.push(db.from('audit_logs').select('*, user:users(full_name, designations(name))')
+          .eq('record_type', 'internal_request').in('record_id', internalRequestIds).in('action', ['received', 'routed', 'assigned', 'returned_to_sender']));
+      }
+      if (!queries.length) return [];
+      const results = await Promise.all(queries);
+      for (const { error } of results) if (error) throw wrapRowError(error);
+      return results.flatMap(r => r.data)
+        .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
     },
   };
 })();

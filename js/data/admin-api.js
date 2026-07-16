@@ -61,17 +61,27 @@ const AdminAPI = (() => {
     // plain table update — orgs_update RLS is super-admin-only so an org
     // admin can set these fields on their own org without also getting
     // row-level write access to is_active/code/name/logo_path.
-    async updateOrgWorkflowSettings(id, { defaultReceivingSectionId, referenceNumberFormat, prisonerRegistrySectionId, entrySectionId }) {
+    async updateOrgWorkflowSettings(id, { defaultReceivingSectionId, referenceNumberFormat, prisonerRegistrySectionId, entrySectionIds }) {
       const db = getSupabase();
       const { error } = await db.rpc('update_org_workflow_settings', {
         p_org_id: id,
         p_default_receiving_section_id: defaultReceivingSectionId,
         p_reference_number_format: referenceNumberFormat,
         p_prisoner_registry_section_id: prisonerRegistrySectionId ?? null,
-        p_entry_section_id: entrySectionId ?? null,
+        p_entry_section_ids: entrySectionIds ?? [],
       });
       if (error) throw error;
       await logAudit('edited', 'organization', id, `Updated request routing & reference number settings`);
+    },
+
+    // entry_sections is a join table (an org may designate more than
+    // one section to log Entry correspondence), so it's fetched
+    // separately from the organizations row itself.
+    async listEntrySections(orgId) {
+      const db = getSupabase();
+      const { data, error } = await db.from('entry_sections').select('section_id').eq('org_id', orgId);
+      if (error) throw error;
+      return (data || []).map(r => r.section_id);
     },
 
     // Uploads a logo file to the (public) org-logos bucket and points
