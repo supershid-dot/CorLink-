@@ -110,11 +110,11 @@ const AppShell = {
           ${canLetters ? item('prisoner-letters', 'Prisoner Letters', 'ti-mail') : ''}
           ${admin ? item('admin', 'Administration', 'ti-settings') : ''}
         </nav>
-        <div class="sidebar-user">
-          <div class="avatar">${this.initials(user.full_name)}</div>
-          <div class="sidebar-user-meta">
-            <div class="sidebar-user-name">${user.full_name}</div>
-            <div class="sidebar-user-role">${this.roleSummary(user)}</div>
+        <div class="sidebar-footer">
+          <i class="ti ti-help-circle"></i>
+          <div class="sidebar-footer-meta">
+            <div class="sidebar-footer-title">Need Help?</div>
+            <div class="sidebar-footer-sub">Contact Support</div>
           </div>
         </div>
       </aside>
