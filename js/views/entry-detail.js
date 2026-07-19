@@ -194,7 +194,7 @@ const EntryDetailView = {
           <span class="badge ${badge[1]}">${badge[0]}</span>
           <span class="structure-empty">${new Date(r.created_at).toLocaleString()}</span>
         </div>
-        <div class="thread-message-body${RichEditor.dvClass(r.body, r.language)}">${RichEditor.sanitize(r.body)}</div>
+        <div class="thread-message-body${RichEditor.dvClass(r.body, r.language)}" data-reply-body="${r.id}">${RichEditor.sanitize(r.body)}</div>
         ${r.approved_by ? `
           <div class="thread-approval thread-approval--approved">
             <i class="ti ti-circle-check"></i>
@@ -249,7 +249,7 @@ const EntryDetailView = {
             comment is resolved.</div>` : ''}
         ${comments.map(c => `
           <div class="review-comment${c.resolved_at ? ' review-comment--resolved' : ''}">
-            ${c.quoted_text ? `<div class="review-comment-quote${RichEditor.dvClass(c.quoted_text)}">“${this._escapeHtml(c.quoted_text)}”</div>` : ''}
+            ${c.quoted_text ? `<div class="review-comment-quote review-comment-quote--clickable${RichEditor.dvClass(c.quoted_text)}" data-jump-to-quote="${reply.id}" data-quote-text="${this._escapeHtml(c.quoted_text)}" title="Click to find this passage in the reply above">“${this._escapeHtml(c.quoted_text)}”</div>` : ''}
             <div class="review-comment-text${RichEditor.dvClass(c.comment)}">${RichEditor.sanitize(c.comment)}</div>
             <div class="review-comment-meta">
               <span><strong>${this._escapeHtml(c.created_by_user?.full_name || 'Unknown')}</strong>${c.created_by_user?.designations?.name ? ', ' + this._escapeHtml(c.created_by_user.designations.name) : ''} — ${new Date(c.created_at).toLocaleString()}</span>
@@ -261,6 +261,70 @@ const EntryDetailView = {
         `).join('')}
       </div>
     `;
+  },
+
+  // ── Jump-to-quote (click a review comment's quote, find + highlight
+  // the matching passage in the reply text above) ─────────────────
+  // Locates the DOM Range for quotedText within container's text,
+  // tolerating a mismatch on whitespace runs — Selection.toString()
+  // (how quotedText was originally captured) inserts newlines at block
+  // boundaries that container.textContent won't have, so an exact
+  // indexOf can miss a quote that crossed a paragraph break.
+  _findRangeForQuote(container, quotedText) {
+    const text = (quotedText || '').trim();
+    if (!text) return null;
+    const full = container.textContent;
+    let idx = full.indexOf(text);
+    let matchLen = text.length;
+    if (idx === -1) {
+      const pattern = text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+      const m = full.match(new RegExp(pattern));
+      if (!m) return null;
+      idx = m.index;
+      matchLen = m[0].length;
+    }
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+    let pos = 0, startNode = null, startOffset = 0, endNode = null, endOffset = 0, node;
+    while ((node = walker.nextNode())) {
+      const len = node.textContent.length;
+      if (startNode === null && idx < pos + len) {
+        startNode = node;
+        startOffset = idx - pos;
+      }
+      if (idx + matchLen <= pos + len) {
+        endNode = node;
+        endOffset = idx + matchLen - pos;
+        break;
+      }
+      pos += len;
+    }
+    if (!startNode || !endNode) return null;
+    const range = document.createRange();
+    range.setStart(startNode, startOffset);
+    range.setEnd(endNode, endOffset);
+    return range;
+  },
+
+  _highlightQuote(replyId, quotedText) {
+    const main = document.getElementById('entry-detail-main');
+    if (!main) return;
+    // Only one highlight active at a time — unwrap any previous <mark>
+    // before applying the new one.
+    main.querySelectorAll('mark.quote-highlight').forEach(mark => {
+      const parent = mark.parentNode;
+      while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+      parent.removeChild(mark);
+      parent.normalize();
+    });
+    const body = main.querySelector(`[data-reply-body="${replyId}"]`);
+    if (!body) return;
+    const range = this._findRangeForQuote(body, quotedText);
+    if (!range) return;
+    const mark = document.createElement('mark');
+    mark.className = 'quote-highlight';
+    mark.appendChild(range.extractContents());
+    range.insertNode(mark);
+    mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
   },
 
   // Comment body is a full RichEditor, same writing surface as Requests'
@@ -650,7 +714,7 @@ const EntryDetailView = {
           <span class="badge ${badge[1]}">${badge[0]}</span>
           <span class="structure-empty">${new Date(reply.created_at).toLocaleString()}</span>
         </div>
-        <div class="thread-message-body${reply.language === 'dv' ? ' field-divehi' : ''}">${RichEditor.sanitize(reply.body)}</div>
+        <div class="thread-message-body${reply.language === 'dv' ? ' field-divehi' : ''}" data-reply-body="${reply.id}">${RichEditor.sanitize(reply.body)}</div>
         ${this._renderReviewComments('internal_reply', reply, rd.reviewComments || [], sideOk, this._isSupervisor)}
         ${reply.status === 'sent' && reply.approved_by_user ? `
           <div class="thread-approval thread-approval--approved">
@@ -1206,6 +1270,9 @@ const EntryDetailView = {
     main.querySelectorAll('[data-resolve-comment]').forEach(btn => {
       btn.addEventListener('click', () => this._runAction(() => ReviewCommentsAPI.resolve(btn.dataset.resolveComment)));
     });
+    main.querySelectorAll('[data-jump-to-quote]').forEach(el => {
+      el.addEventListener('click', () => this._highlightQuote(el.dataset.jumpToQuote, el.dataset.quoteText));
+    });
 
     // Internal Collaboration
     main.querySelectorAll('[data-new-internal]').forEach(btn => {
@@ -1638,10 +1705,17 @@ const EntryDetailView = {
     });
   },
 
+  // textContent -> innerHTML round-trip escapes <, >, & but not " —
+  // harmless when the result only ever lands between tags, but this
+  // value is also used inside double-quoted HTML attributes elsewhere
+  // in this file (data-path, and now data-quote-text below), where an
+  // unescaped " could break out of the attribute. &quot; renders
+  // identically to a literal " in both contexts, so escaping it here
+  // is safe everywhere this function is already called.
   _escapeHtml(value) {
     const div = document.createElement('div');
     div.textContent = value == null ? '' : String(value);
-    return div.innerHTML;
+    return div.innerHTML.replace(/"/g, '&quot;');
   },
 
   _openModal(innerHtml, { large = false } = {}) {

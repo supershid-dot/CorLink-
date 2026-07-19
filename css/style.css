@@ -2350,6 +2350,30 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
   background: var(--color-warning-bg);
   border-radius: var(--radius-sm);
 }
+/* Clickable variant: jumps to and highlights the matching passage in
+   the reply text above (entry-detail.js's _highlightQuote). */
+.review-comment-quote--clickable {
+  cursor: pointer;
+}
+.review-comment-quote--clickable:hover {
+  background: var(--color-warning);
+  color: var(--color-warning-dark);
+}
+/* The highlighted passage itself, injected into the reply body as a
+   <mark> — brief flash animation draws the eye, then settles into a
+   persistent highlight until the next comment is clicked or the view
+   reloads. */
+mark.quote-highlight {
+  background: var(--color-warning);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+  animation: quote-highlight-flash 1s ease-out;
+}
+@keyframes quote-highlight-flash {
+  0%, 30%  { background: var(--color-warning-dark); }
+  100%     { background: var(--color-warning); }
+}
 /* Comment bodies are sanitized rich HTML now (RichEditor in the Add
    Comment modal) — restore block spacing the same way
    .thread-message-body does, and flip RTL via .field-divehi when the
