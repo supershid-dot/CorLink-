@@ -204,6 +204,7 @@ const EntryDetailView = {
         ${this._renderAttachments('external_correspondence_reply', r.id, this._replyAttachments[r.id] || [], canUpload)}
         ${this._renderReviewComments('entry_reply', r, comments, sideOk, canSupervise)}
         <div class="detail-actions">
+          ${isMine && r.status === 'draft' ? `<button class="btn btn-secondary btn-xs" data-edit-reply="${r.id}">Edit Draft</button>` : ''}
           ${isMine && r.status === 'draft' ? (
             openComments > 0
               ? `<div class="field-hint"><i class="ti ti-message-2"></i> Resolve ${openComments} open review comment${openComments === 1 ? '' : 's'} above before resubmitting for approval.</div>`
@@ -954,6 +955,55 @@ const EntryDetailView = {
     });
   },
 
+  // Edit the reply body while it's still a draft — the only way to
+  // actually act on a supervisor's review comment or a "Return for
+  // Changes" (both drop the reply back to 'draft' with no other way
+  // to change its text).
+  _openEditReplyModal(replyId) {
+    const existing = (this._replies || []).find(r => r.id === replyId);
+    if (!existing) return;
+    const defaultLang = existing.language || 'dv';
+    this._openModal(`
+      <h3>Edit Draft Reply</h3>
+      <form id="edit-reply-form" class="modal-form">
+        <div class="field-group">
+          <div class="field-group-row">
+            <label class="field-label">Reply</label>
+            ${RichEditor.langToggleHtml('language', defaultLang)}
+          </div>
+          <div id="edit-reply-body"></div>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Changes</button>
+        </div>
+      </form>
+    `, { large: true });
+    const form = document.getElementById('edit-reply-form');
+    const editor = RichEditor.create(document.getElementById('edit-reply-body'), { language: defaultLang });
+    editor.setHTML(existing.body);
+    RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errEl = form.querySelector('.modal-error');
+      const body = editor.getHTML();
+      if (!body || body === '<p><br></p>') {
+        errEl.textContent = 'Reply cannot be empty.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      try {
+        await EntryAPI.updateReplyDraft(replyId, { body, language: new FormData(form).get('language') });
+        this._closeModal();
+        await this._load();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
   // Symmetric to request-detail.js's _openEditDraftBodyModal('internal-reply', ...) —
   // available while an internal reply is still draft/pending_approval
   // (internal_request_replies_update RLS cuts off access once approved).
@@ -1121,6 +1171,9 @@ const EntryDetailView = {
       this._load();
     });
 
+    main.querySelectorAll('[data-edit-reply]').forEach(btn => {
+      btn.addEventListener('click', () => this._openEditReplyModal(btn.dataset.editReply));
+    });
     main.querySelectorAll('[data-submit-reply]').forEach(btn => {
       btn.addEventListener('click', () => this._openSubmitReplyModal(btn.dataset.submitReply));
     });

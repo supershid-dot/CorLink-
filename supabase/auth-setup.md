@@ -532,6 +532,34 @@ match what changed since, instead of re-running the full files:
   linking to `#entry?tab=info` instead of `#requests?tab=info`) — a
   section looped in on an entry previously saw nothing on their
   dashboard at all, not even once received.
+- Entry deadline is now set when assigning a staff member (Assign
+  Staff modal), not only at logging time — reuses the same
+  days/date/time picker and `external_correspondence.deadline` column,
+  just a second entry point for it (`EntryAPI.assign()` now takes a
+  `deadline` argument). The Entry list also gained a Deadline column
+  with the same overdue/due-soon badge Requests already has
+  (`RequestsView._deadlineCell`) — no schema/RLS change, `deadline`
+  already existed. A reply's attachment upload box now hides once it's
+  submitted for approval (was staying visible through
+  `pending_approval`, `canUpload` now requires `status === 'draft'`).
+- `supabase/patch-entry-reply-returned-approval.sql` — fixes a real
+  gap: `EntryAPI.returnReply()` never wrote an `approvals` row
+  (`decision='returned'`), unlike `requests-api.js`'s
+  `returnRequest`/`returnResponse`, so a reply a supervisor returned
+  for correction never showed up on the drafting staff member's
+  dashboard — reported as "not shown in action needed window for the
+  draft replying staff." Adds `'external_correspondence_reply'` to
+  `approvals`'s `record_type` CHECK and a matching `approvals_select`
+  branch (visibility: admin, the entry's `to_section_id` member, or the
+  reply's own drafter). New dashboard row "Entry Reply Returned for
+  Correction" matches `myEntries`' embedded replies (now also
+  selecting `id`/`created_by`, not just `status`) against these
+  `approvals` rows, same shape as the existing Requests row. Also added
+  a missing "Edit Draft" button + modal on the main Entry reply thread
+  (`EntryAPI.updateReplyDraft()` already existed in the data layer but
+  was never wired to a UI button here) — a reply returned for changes,
+  or blocked by an open review comment, had no way to actually edit its
+  text. Idempotent.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

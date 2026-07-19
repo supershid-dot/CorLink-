@@ -45,7 +45,7 @@ const EntryAPI = (() => {
     entered_by_user:users!external_correspondence_entered_by_fkey(full_name, service_number),
     assigned_to_user:users!external_correspondence_assigned_to_fkey(full_name, service_number),
     prisoner:prisoners!external_correspondence_prisoner_ref_fkey(file_number, prison),
-    replies:external_correspondence_replies(status)
+    replies:external_correspondence_replies(id, status, created_by)
   `;
 
   return {
@@ -326,10 +326,19 @@ const EntryAPI = (() => {
 
     async returnReply(id, entry) {
       const db = getSupabase();
+      const session = await Auth.getSession();
       const { data, error } = await db.from('external_correspondence_replies')
         .update({ status: 'draft', pending_approval_by: null })
         .eq('id', id).select().single();
       if (error) throw wrapRowError(error);
+      // Same approvals(decision='returned') record requests-api.js's
+      // returnRequest/returnResponse write — without it, the dashboard's
+      // "Returned for Correction" row can never find this reply, since
+      // it matches drafts against exactly this table.
+      await db.from('approvals').insert({
+        record_type: 'external_correspondence_reply', record_id: id,
+        reviewed_by: session.user.id, decision: 'returned',
+      });
       await logAudit('returned', entry.id, 'Returned reply for changes');
       await NotificationsAPI.notify([data.created_by], {
         type: 'draft_returned', recordType: 'external_correspondence', recordId: entry.id,

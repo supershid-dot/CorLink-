@@ -390,7 +390,8 @@ CREATE TABLE internal_request_replies (
 CREATE TABLE approvals (
   id           UUID    PRIMARY KEY DEFAULT gen_random_uuid(),
   record_type  TEXT    NOT NULL CHECK (record_type IN (
-                 'request', 'response', 'prisoner_letter', 'deadline_extension'
+                 'request', 'response', 'prisoner_letter', 'deadline_extension',
+                 'external_correspondence_reply'
                )),
   record_id    UUID    NOT NULL,
   reviewed_by  UUID    NOT NULL REFERENCES users(id),

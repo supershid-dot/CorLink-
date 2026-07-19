@@ -308,6 +308,15 @@ const DashboardView = {
         const entryReplyPendingApproval = myEntries.filter(e => iSupervise(e.to_section_id) && (e.replies || []).some(r => r.status === 'pending_approval')).length;
         rows.push({ icon: 'ti-clipboard-check', label: 'Entry Reply Pending Approval', count: entryReplyPendingApproval, href: '#entry?tab=inbox' });
 
+        // Same "my own draft that a supervisor bounced back" shape as
+        // Requests' Returned for Correction row above, just matched
+        // against replies embedded on myEntries instead of a separate
+        // sent/inbox fetch.
+        const returnedEntryReply = new Set(returnedApprovals.filter(a => a.record_type === 'external_correspondence_reply').map(a => a.record_id));
+        const entryReplyReturned = myEntries.filter(e => (e.replies || []).some(r =>
+          r.status === 'draft' && r.created_by === user.id && returnedEntryReply.has(r.id))).length;
+        rows.push({ icon: 'ti-corner-up-left', label: 'Entry Reply Returned for Correction', count: entryReplyReturned, href: '#entry?tab=inbox' });
+
         // Entry-anchored Internal Collaboration ("Loop in a Section") —
         // same buckets/logic as the request-anchored block above, just
         // filtered to ir.parent_entry_id and linking to #entry?tab=info.

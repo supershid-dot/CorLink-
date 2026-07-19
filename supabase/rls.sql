@@ -1681,6 +1681,17 @@ CREATE POLICY "approvals_select" ON approvals
           OR re.received_by    = auth.uid()
         )
     ))
+    OR (record_type = 'external_correspondence_reply' AND EXISTS (
+      SELECT 1 FROM external_correspondence_replies ecr
+      JOIN external_correspondence ec ON ec.id = ecr.entry_id
+      WHERE ecr.id = record_id
+        AND ec.org_id = get_my_org_id()
+        AND (
+          is_admin()
+          OR (ec.to_section_id IS NOT NULL AND ec.to_section_id IN (SELECT my_section_ids()))
+          OR ecr.created_by = auth.uid()
+        )
+    ))
   );
 
 CREATE POLICY "approvals_insert" ON approvals
