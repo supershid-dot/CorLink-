@@ -560,6 +560,57 @@ match what changed since, instead of re-running the full files:
   was never wired to a UI button here) — a reply returned for changes,
   or blocked by an open review comment, had no way to actually edit its
   text. Idempotent.
+- Full Entry module review, 4 fixes:
+  - Dead "Needs My Action" chip on the Entry Sent tab —
+    `EntryAPI`'s list query never selected `delivery_method` on the
+    embedded replies, so the chip's `r.delivery_method` test always
+    failed. Added to the embed.
+  - **`check_deadlines()` was silently broken for requests too, not
+    just missing for Entry.** `section_user_ids()` returns `SETOF
+    UUID` with an anonymous result column (named after the function
+    itself), but the query read it as `SELECT user_id AS uid FROM
+    section_user_ids(...)` — a column that doesn't exist. Every run
+    with at least one overdue request threw and rolled back the whole
+    function call, including every 'overdue' status flip already made
+    earlier in that same run — the entire nightly deadline job had
+    likely never actually worked. Fixed to `FROM
+    section_user_ids(...) AS uid`. Caught by actually running
+    `check_deadlines()` against seeded data rather than just reading
+    it. Extended the same function with an Entry loop: Entry has no
+    `overdue` status to flip to (state machine is logged -> routed ->
+    responded -> closed), so this only notifies once per case,
+    deduped via `NOT EXISTS` against `notifications` instead of a
+    status change; cutoff is `CURRENT_DATE` (deadline is a DATE, not
+    the requests table's TIMESTAMPTZ) so an entry counts as overdue
+    once its whole deadline day has passed; unrouted entries are
+    skipped (no single section to notify, already surfaced via
+    Unrouted Entries regardless of deadline). Verified end-to-end
+    against a local Postgres instance: an overdue routed entry gets
+    notified exactly once (unrouted / already-responded / not-yet-due
+    entries correctly skipped), a second run doesn't duplicate, and
+    the requests-side fix still flips status + notifies + doesn't
+    duplicate on rerun.
+  - New dashboard row "Entry Reply Delivered — Close" — Entry's
+    counterpart to the existing "Reply Received — Acknowledge &
+    Close" row, reusing the `entries` list (with its replies embed)
+    the adjacent Unrouted Entries row already fetches.
+  - `external_correspondence.deadline` is a `DATE` column, but the
+    Assign/Edit Draft deadline fields reused `RequestsView`'s
+    TIMESTAMPTZ-oriented helpers unmodified — displaying a spurious
+    "05:00" on every entry deadline (a bare date parses as UTC
+    midnight, shown at UTC+5 in Maldives) and, on write, capable of
+    silently shifting the stored date back a day for an early-morning
+    local time (UTC is behind a positive offset). Added bare-date
+    detection (`_isBareDate`) to `RequestsView`'s shared deadline
+    helpers (`_deadlineParts`/`_formatDeadline`/`_isDeadlineOverdue`
+    via a new `_deadlineInstant`/`_deadlineCell`) so a bare
+    'YYYY-MM-DD' is displayed without a fabricated time and treated as
+    due at end-of-day for overdue purposes, and a `dateOnly` parameter
+    on `_deadlineFieldHtml`/`_bindDeadlineField`/`_combineDeadline` so
+    Entry's two write sites (Edit Draft, Assign Staff) skip the
+    timestamp round-trip entirely and write/read a bare date directly.
+    Zero behavior change for Requests' own TIMESTAMPTZ deadlines
+    (never bare-date, so `_isBareDate` is always false for them).
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

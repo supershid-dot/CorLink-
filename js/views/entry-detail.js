@@ -1422,7 +1422,7 @@ const EntryDetailView = {
           </div>
           <div id="edit-entry-body"></div>
         </div>
-        ${RequestsView._deadlineFieldHtml(e.deadline || '')}
+        ${RequestsView._deadlineFieldHtml(e.deadline || '', null, true)}
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
@@ -1434,7 +1434,7 @@ const EntryDetailView = {
     const editor = RichEditor.create(document.getElementById('edit-entry-body'), { language: e.language || 'en' });
     editor.setHTML(e.body);
     const editSubject = document.getElementById('edit-entry-subject');
-    RequestsView._bindDeadlineField(form);
+    RequestsView._bindDeadlineField(form, null, true);
     const syncEditSubjectLang = (lang) => editSubject.classList.toggle('field-divehi', lang === 'dv');
     RichEditor.bindLangToggle(form, 'subjectLanguage', syncEditSubjectLang);
     RichEditor.bindAutoDetect(editSubject, form, 'subjectLanguage', syncEditSubjectLang);
@@ -1449,7 +1449,7 @@ const EntryDetailView = {
         errEl.classList.remove('hidden');
         return;
       }
-      const deadline = RequestsView._combineDeadline(fd.get('deadline'), fd.get('deadlineTime'));
+      const deadline = RequestsView._combineDeadline(fd.get('deadline'), null, true);
       try {
         await EntryAPI.updateDraft(e.id, {
           subject: fd.get('subject'), subject_language: fd.get('subjectLanguage'),
@@ -1563,7 +1563,7 @@ const EntryDetailView = {
           </select>
           <div class="field-hint">Includes staff at the section, department, and command level.</div>
         </div>
-        ${RequestsView._deadlineFieldHtml(this._entry.deadline || '')}
+        ${RequestsView._deadlineFieldHtml(this._entry.deadline || '', null, true)}
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
@@ -1573,12 +1573,12 @@ const EntryDetailView = {
     `);
 
     const form = document.getElementById('assign-form');
-    RequestsView._bindDeadlineField(form);
+    RequestsView._bindDeadlineField(form, null, true);
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
       const errEl = form.querySelector('.modal-error');
-      const deadline = RequestsView._combineDeadline(fd.get('deadline'), fd.get('deadlineTime'));
+      const deadline = RequestsView._combineDeadline(fd.get('deadline'), null, true);
       try {
         await EntryAPI.assign(this._entry.id, fd.get('assignedTo') || null, deadline);
         this._closeModal();

@@ -197,6 +197,15 @@ const DashboardView = {
         const { items: entries } = await EntryAPI.listAll(user.org_id);
         const unroutedEntries = entries.filter(e => e.status === 'logged').length;
         rows.push({ icon: 'ti-inbox', label: 'Unrouted Entries', count: unroutedEntries, href: '#entry?tab=inbox&view=unrouted' });
+
+        // Same "delivered, awaiting close" condition as entry.js's Sent-
+        // tab needs_action test — Entry's counterpart to the "Reply
+        // Received — Acknowledge & Close" row above, just no separate
+        // fetch needed since entries (with its replies embed) is
+        // already in hand.
+        const entryReadyToClose = entries.filter(e =>
+          e.status === 'responded' && (e.replies || []).some(r => r.status === 'sent' && r.delivery_method)).length;
+        rows.push({ icon: 'ti-mail-opened', label: 'Entry Reply Delivered — Close', count: entryReadyToClose, href: '#entry?tab=sent&view=needs_action' });
       }
 
       // Assigning is a supervisor's action (mirrors the Assign/Reassign

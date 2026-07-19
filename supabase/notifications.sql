@@ -79,12 +79,52 @@ BEGIN
     SELECT uid, 'deadline_warning', 'request', r.id,
            'Request "' || r.subject || '" is overdue (deadline was '
              || to_char(r.deadline, 'YYYY-MM-DD HH24:MI') || ')'
-    FROM (
-      SELECT user_id AS uid FROM section_user_ids(
-        COALESCE(r.to_section_id, r.from_section_id),
-        ARRAY['mcs_admin', 'authority_admin', 'supervisor']
+    -- section_user_ids() is a SETOF UUID function — its result column
+    -- is anonymous (named after the function itself), not "user_id".
+    -- "AS uid" here aliases that column so SELECT uid below can see it;
+    -- the previous "SELECT user_id AS uid FROM section_user_ids(...)"
+    -- form referenced a column that doesn't exist, which raised a hard
+    -- error on every run with at least one overdue request — rolling
+    -- back the whole function call, including every status flip to
+    -- 'overdue' already made earlier in this same loop. Caught here by
+    -- actually exercising this function against real data rather than
+    -- just reading it, since it had never been.
+    FROM section_user_ids(
+      COALESCE(r.to_section_id, r.from_section_id),
+      ARRAY['mcs_admin', 'authority_admin', 'supervisor']
+    ) AS uid;
+  END LOOP;
+
+  -- Entry (external_correspondence) has no 'overdue' status to flip to
+  -- (its state machine is logged -> routed -> responded -> closed, no
+  -- overlay status the way requests has) — this only notifies, once
+  -- per case, deduped via NOT EXISTS against notifications instead of
+  -- a status change. deadline is a DATE (not TIMESTAMPTZ, unlike
+  -- requests.deadline), so the cutoff is CURRENT_DATE, not NOW() — an
+  -- entry only counts as overdue once its whole deadline day has
+  -- passed, matching the UI's own end-of-day overdue semantics.
+  -- Unrouted entries (to_section_id IS NULL) are skipped: there's no
+  -- single section to notify yet, and they're already surfaced via the
+  -- dashboard's "Unrouted Entries" row regardless of deadline.
+  FOR r IN
+    SELECT id, to_section_id, subject, deadline
+    FROM external_correspondence
+    WHERE deadline IS NOT NULL
+      AND deadline < CURRENT_DATE
+      AND to_section_id IS NOT NULL
+      AND status NOT IN ('responded', 'closed')
+      AND NOT EXISTS (
+        SELECT 1 FROM notifications n
+        WHERE n.record_type = 'external_correspondence' AND n.record_id = external_correspondence.id
+          AND n.type = 'deadline_warning'
       )
-    ) recipients;
+  LOOP
+    INSERT INTO notifications (user_id, type, record_type, record_id, message)
+    SELECT uid, 'deadline_warning', 'external_correspondence', r.id,
+           'Entry "' || r.subject || '" is overdue (deadline was ' || to_char(r.deadline, 'YYYY-MM-DD') || ')'
+    FROM section_user_ids(
+      r.to_section_id, ARRAY['mcs_admin', 'authority_admin', 'supervisor']
+    ) AS uid;
   END LOOP;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;

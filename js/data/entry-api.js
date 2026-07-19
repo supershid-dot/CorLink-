@@ -314,7 +314,9 @@ const EntryAPI = (() => {
         .update({ status: 'sent', approved_by: session.user.id, approved_at: new Date().toISOString() })
         .eq('id', id).select().single();
       if (error) throw wrapRowError(error);
-      await db.from('external_correspondence').update({ status: 'responded' }).eq('id', entry.id);
+      const { error: entryErr } = await db.from('external_correspondence')
+        .update({ status: 'responded' }).eq('id', entry.id);
+      if (entryErr) throw wrapRowError(entryErr);
       await logAudit('approved', entry.id, 'Approved reply to external correspondence');
       const notifyIds = new Set([entry.entered_by]);
       await NotificationsAPI.notify([...notifyIds], {
