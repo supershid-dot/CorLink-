@@ -243,11 +243,14 @@ const EntryAPI = (() => {
 
     // Assign to a staff member of the receiving section, same shape as
     // InternalRequestsAPI.assign — the responding section itself can do
-    // this without going back through Entry.
-    async assign(id, userId) {
+    // this without going back through Entry. The reply deadline is set
+    // here too, since the responding section (not Entry front-desk, who
+    // logged the case before knowing who'd handle it) is the one who
+    // actually knows the right turnaround time.
+    async assign(id, userId, deadline) {
       const db = getSupabase();
       const { data, error } = await db.from('external_correspondence')
-        .update({ assigned_to: userId }).eq('id', id).select().single();
+        .update({ assigned_to: userId, deadline: deadline || null }).eq('id', id).select().single();
       if (error) throw wrapRowError(error);
       let note = 'Unassigned';
       if (userId) {

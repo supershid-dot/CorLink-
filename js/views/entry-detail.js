@@ -1510,6 +1510,7 @@ const EntryDetailView = {
           </select>
           <div class="field-hint">Includes staff at the section, department, and command level.</div>
         </div>
+        ${RequestsView._deadlineFieldHtml(this._entry.deadline || '')}
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
@@ -1519,12 +1520,14 @@ const EntryDetailView = {
     `);
 
     const form = document.getElementById('assign-form');
+    RequestsView._bindDeadlineField(form);
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(form);
       const errEl = form.querySelector('.modal-error');
+      const deadline = RequestsView._combineDeadline(fd.get('deadline'), fd.get('deadlineTime'));
       try {
-        await EntryAPI.assign(this._entry.id, fd.get('assignedTo') || null);
+        await EntryAPI.assign(this._entry.id, fd.get('assignedTo') || null, deadline);
         this._closeModal();
         await this._load();
       } catch (err) {
