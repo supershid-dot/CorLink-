@@ -182,7 +182,7 @@ const EntryDetailView = {
       sent:             ['Sent', 'badge-success'],
     }[r.status] || [r.status, 'badge-outline'];
     const isMine = r.created_by === this._user.id;
-    const canUpload = isMine && ['draft', 'pending_approval'].includes(r.status);
+    const canUpload = isMine && r.status === 'draft';
     const comments = (this._replyReviewComments || {})[r.id] || [];
     const openComments = comments.filter(c => !c.resolved_at).length;
     const sideOk = inToSection || canSupervise;
