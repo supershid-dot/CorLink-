@@ -45,7 +45,7 @@ const EntryAPI = (() => {
     entered_by_user:users!external_correspondence_entered_by_fkey(full_name, service_number),
     assigned_to_user:users!external_correspondence_assigned_to_fkey(full_name, service_number),
     prisoner:prisoners!external_correspondence_prisoner_ref_fkey(file_number, prison),
-    replies:external_correspondence_replies(id, status, created_by)
+    replies:external_correspondence_replies(id, status, created_by, delivery_method)
   `;
 
   return {
