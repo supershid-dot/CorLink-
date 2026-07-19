@@ -274,12 +274,13 @@ const EntryView = {
               <th>Sender</th>
               <th>Category</th>
               <th>Status</th>
+              <th>Deadline</th>
               <th>Logged</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            ${items.map(e => this._listRow(e)).join('') || emptyHtml || `<tr><td colspan="7" class="structure-empty">Nothing here yet.</td></tr>`}
+            ${items.map(e => this._listRow(e)).join('') || emptyHtml || `<tr><td colspan="8" class="structure-empty">Nothing here yet.</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -448,6 +449,7 @@ const EntryView = {
         <td data-label="Sender">${this._escapeHtml(e.sender_name)}</td>
         <td data-label="Category">${this._categoryLabel(e.sender_category)}</td>
         <td data-label="Status">${this._statusBadge(e.status)}</td>
+        <td data-label="Deadline">${RequestsView._deadlineCell(e.deadline, e.status)}</td>
         <td data-label="Logged">${new Date(e.created_at).toLocaleDateString()}</td>
         <td data-label="Actions">
           <a class="btn btn-secondary btn-xs" href="#entry-detail?id=${e.id}">View</a>

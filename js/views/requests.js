@@ -936,13 +936,26 @@ const RequestsView = {
   // override it in the time input; a bare date lands at noon.
   _defaultDeadlineTime: '12:00',
 
-  // Split a stored deadline (a TIMESTAMPTZ / ISO string, or a legacy bare
-  // 'YYYY-MM-DD') into the local date + time parts the two inputs use.
+  // True for a plain 'YYYY-MM-DD' calendar date with no time component —
+  // Entry's external_correspondence.deadline is a DATE column, unlike
+  // every other deadline this file handles (all TIMESTAMPTZ). Detected
+  // up front rather than via isNaN(new Date(value)): a bare ISO date
+  // string like '2026-07-25' parses successfully as UTC midnight, which
+  // would otherwise silently apply a timezone shift — in Maldives
+  // (UTC+5) that showed up as a spurious "05:00" on every entry deadline
+  // and made the overdue cutoff flip at 5am local instead of end of day.
+  _isBareDate(value) {
+    return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
+  },
+
+  // Split a stored deadline (a TIMESTAMPTZ / ISO string, or a bare
+  // 'YYYY-MM-DD' date) into the local date + time parts the two inputs use.
   _deadlineParts(value) {
     if (!value) return { date: '', time: this._defaultDeadlineTime };
+    if (this._isBareDate(value)) return { date: value, time: this._defaultDeadlineTime };
     const d = new Date(value);
     if (isNaN(d.getTime())) {
-      // Not a full timestamp — treat as a plain calendar date.
+      // Not a parseable timestamp either — treat as a plain calendar date.
       return { date: String(value).slice(0, 10), time: this._defaultDeadlineTime };
     }
     const pad = (n) => String(n).padStart(2, '0');
@@ -956,36 +969,52 @@ const RequestsView = {
   // timestamp for storage. No date → null (no deadline); no time → noon.
   // The date+time are read as local wall-clock, so a Maldives browser
   // stores Maldives time — consistent with how everything else in the
-  // app formats timestamps (local, via new Date()).
-  _combineDeadline(dateStr, timeStr) {
+  // app formats timestamps (local, via new Date()). dateOnly (Entry's
+  // DATE column) skips the timestamp round-trip entirely — for a
+  // positive UTC offset, converting an early-morning local time to UTC
+  // can land on the previous calendar day, which would silently shift
+  // the stored date back by one.
+  _combineDeadline(dateStr, timeStr, dateOnly = false) {
     if (!dateStr) return null;
+    if (dateOnly) return dateStr;
     const d = new Date(`${dateStr}T${timeStr || this._defaultDeadlineTime}`);
     return isNaN(d.getTime()) ? null : d.toISOString();
   },
 
-  // "YYYY-MM-DD HH:MM" (24-hour, local) for display.
+  // "YYYY-MM-DD HH:MM" (24-hour, local) for display, or just "YYYY-MM-DD"
+  // for a bare date.
   _formatDeadline(value) {
+    if (this._isBareDate(value)) return value;
     const d = new Date(value);
     if (isNaN(d.getTime())) return String(value);
     const pad = (n) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   },
 
-  // Single source of truth for "past its deadline" — now keyed off the
-  // exact instant (deadline carries a time of day), not end-of-day.
+  // A bare date's "instant" for overdue comparisons is end-of-day, not
+  // the UTC-midnight moment new Date(value) would give — a deadline of
+  // '2026-07-25' means "due by the end of the 25th", not "due at
+  // 05:00 on the 25th in Maldives time."
+  _deadlineInstant(value) {
+    return this._isBareDate(value) ? new Date(value + 'T23:59:59') : new Date(value);
+  },
+
+  // Single source of truth for "past its deadline" — keyed off the
+  // exact instant for TIMESTAMPTZ deadlines, end-of-day for bare dates.
   // Shared by _statusBadge, _deadlineCell and every Overdue filter chip.
   _isDeadlineOverdue(deadline, status) {
     return !!deadline
       && !['closed', 'responded', 'cancelled'].includes(status)
-      && new Date(deadline).getTime() < Date.now();
+      && this._deadlineInstant(deadline).getTime() < Date.now();
   },
 
-  _deadlineFieldHtml(value = '', maxDate = null) {
+  _deadlineFieldHtml(value = '', maxDate = null, dateOnly = false) {
     const { date, time } = this._deadlineParts(value);
     // Native date `max` only understands a calendar date, so cap on the
     // parent deadline's date part; the exact-time cap is enforced on submit.
     const maxD = maxDate ? this._deadlineParts(maxDate).date : null;
     const capHint = maxD ? `, no later than ${maxD}` : '';
+    const timeHint = dateOnly ? '' : ` Time is 24-hour, defaults to ${this._defaultDeadlineTime}.`;
     return `
       <div class="field-group">
         <label class="field-label">Deadline (optional)</label>
@@ -993,14 +1022,14 @@ const RequestsView = {
           <input class="field-input-plain deadline-days-input" type="number" min="1" max="365" placeholder="Days" data-deadline-days />
           <span class="deadline-input-or">or</span>
           <input class="field-input-plain deadline-date-input" type="date" name="deadline" value="${date}" data-deadline-date ${maxD ? `max="${maxD}"` : ''} />
-          <input class="field-input-plain deadline-time-input" type="time" name="deadlineTime" value="${time}" data-deadline-time aria-label="Deadline time (24-hour)" />
+          ${dateOnly ? '' : `<input class="field-input-plain deadline-time-input" type="time" name="deadlineTime" value="${time}" data-deadline-time aria-label="Deadline time (24-hour)" />`}
         </div>
-        <div class="field-hint" data-deadline-hint>Enter a number of days or pick an end date${capHint}. Time is 24-hour, defaults to ${this._defaultDeadlineTime}.</div>
+        <div class="field-hint" data-deadline-hint>Enter a number of days or pick an end date${capHint}.${timeHint}</div>
       </div>
     `;
   },
 
-  _bindDeadlineField(form, maxDate = null) {
+  _bindDeadlineField(form, maxDate = null, dateOnly = false) {
     const daysEl = form.querySelector('[data-deadline-days]');
     const dateEl = form.querySelector('[data-deadline-date]');
     const hintEl = form.querySelector('[data-deadline-hint]');
@@ -1015,7 +1044,8 @@ const RequestsView = {
     const todayStart = () => new Date(new Date().toISOString().slice(0, 10) + 'T00:00:00');
     const diffDays = (dateStr) => Math.round((new Date(dateStr + 'T00:00:00') - todayStart()) / MS_DAY);
     const capHint = maxD ? `, no later than ${maxD}` : '';
-    const defaultHint = `Enter a number of days or pick an end date${capHint}. Time is 24-hour, defaults to ${this._defaultDeadlineTime}.`;
+    const timeHint = dateOnly ? '' : ` Time is 24-hour, defaults to ${this._defaultDeadlineTime}.`;
+    const defaultHint = `Enter a number of days or pick an end date${capHint}.${timeHint}`;
     const updateHint = () => {
       if (!dateEl.value) { hintEl.textContent = defaultHint; return; }
       if (maxD && dateEl.value > maxD) {
@@ -1054,7 +1084,7 @@ const RequestsView = {
     if (!deadline) return '—';
     const formatted = this._formatDeadline(deadline);
     if (['closed', 'responded', 'cancelled'].includes(status)) return formatted;
-    const dl = new Date(deadline);
+    const dl = this._deadlineInstant(deadline);
     const now = new Date();
     // Overdue is exact-instant (the deadline carries a time); the chip's
     // "Xd left / overdue Xd" wording stays whole-day, measured between

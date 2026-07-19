@@ -197,6 +197,15 @@ const DashboardView = {
         const { items: entries } = await EntryAPI.listAll(user.org_id);
         const unroutedEntries = entries.filter(e => e.status === 'logged').length;
         rows.push({ icon: 'ti-inbox', label: 'Unrouted Entries', count: unroutedEntries, href: '#entry?tab=inbox&view=unrouted' });
+
+        // Same "delivered, awaiting close" condition as entry.js's Sent-
+        // tab needs_action test — Entry's counterpart to the "Reply
+        // Received — Acknowledge & Close" row above, just no separate
+        // fetch needed since entries (with its replies embed) is
+        // already in hand.
+        const entryReadyToClose = entries.filter(e =>
+          e.status === 'responded' && (e.replies || []).some(r => r.status === 'sent' && r.delivery_method)).length;
+        rows.push({ icon: 'ti-mail-opened', label: 'Entry Reply Delivered — Close', count: entryReadyToClose, href: '#entry?tab=sent&view=needs_action' });
       }
 
       // Assigning is a supervisor's action (mirrors the Assign/Reassign
@@ -307,6 +316,15 @@ const DashboardView = {
 
         const entryReplyPendingApproval = myEntries.filter(e => iSupervise(e.to_section_id) && (e.replies || []).some(r => r.status === 'pending_approval')).length;
         rows.push({ icon: 'ti-clipboard-check', label: 'Entry Reply Pending Approval', count: entryReplyPendingApproval, href: '#entry?tab=inbox' });
+
+        // Same "my own draft that a supervisor bounced back" shape as
+        // Requests' Returned for Correction row above, just matched
+        // against replies embedded on myEntries instead of a separate
+        // sent/inbox fetch.
+        const returnedEntryReply = new Set(returnedApprovals.filter(a => a.record_type === 'external_correspondence_reply').map(a => a.record_id));
+        const entryReplyReturned = myEntries.filter(e => (e.replies || []).some(r =>
+          r.status === 'draft' && r.created_by === user.id && returnedEntryReply.has(r.id))).length;
+        rows.push({ icon: 'ti-corner-up-left', label: 'Entry Reply Returned for Correction', count: entryReplyReturned, href: '#entry?tab=inbox' });
 
         // Entry-anchored Internal Collaboration ("Loop in a Section") —
         // same buckets/logic as the request-anchored block above, just

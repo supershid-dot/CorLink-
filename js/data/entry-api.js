@@ -45,7 +45,7 @@ const EntryAPI = (() => {
     entered_by_user:users!external_correspondence_entered_by_fkey(full_name, service_number),
     assigned_to_user:users!external_correspondence_assigned_to_fkey(full_name, service_number),
     prisoner:prisoners!external_correspondence_prisoner_ref_fkey(file_number, prison),
-    replies:external_correspondence_replies(status)
+    replies:external_correspondence_replies(id, status, created_by, delivery_method)
   `;
 
   return {
@@ -243,11 +243,14 @@ const EntryAPI = (() => {
 
     // Assign to a staff member of the receiving section, same shape as
     // InternalRequestsAPI.assign — the responding section itself can do
-    // this without going back through Entry.
-    async assign(id, userId) {
+    // this without going back through Entry. The reply deadline is set
+    // here too, since the responding section (not Entry front-desk, who
+    // logged the case before knowing who'd handle it) is the one who
+    // actually knows the right turnaround time.
+    async assign(id, userId, deadline) {
       const db = getSupabase();
       const { data, error } = await db.from('external_correspondence')
-        .update({ assigned_to: userId }).eq('id', id).select().single();
+        .update({ assigned_to: userId, deadline: deadline || null }).eq('id', id).select().single();
       if (error) throw wrapRowError(error);
       let note = 'Unassigned';
       if (userId) {
@@ -311,7 +314,9 @@ const EntryAPI = (() => {
         .update({ status: 'sent', approved_by: session.user.id, approved_at: new Date().toISOString() })
         .eq('id', id).select().single();
       if (error) throw wrapRowError(error);
-      await db.from('external_correspondence').update({ status: 'responded' }).eq('id', entry.id);
+      const { error: entryErr } = await db.from('external_correspondence')
+        .update({ status: 'responded' }).eq('id', entry.id);
+      if (entryErr) throw wrapRowError(entryErr);
       await logAudit('approved', entry.id, 'Approved reply to external correspondence');
       const notifyIds = new Set([entry.entered_by]);
       await NotificationsAPI.notify([...notifyIds], {
@@ -323,10 +328,19 @@ const EntryAPI = (() => {
 
     async returnReply(id, entry) {
       const db = getSupabase();
+      const session = await Auth.getSession();
       const { data, error } = await db.from('external_correspondence_replies')
         .update({ status: 'draft', pending_approval_by: null })
         .eq('id', id).select().single();
       if (error) throw wrapRowError(error);
+      // Same approvals(decision='returned') record requests-api.js's
+      // returnRequest/returnResponse write — without it, the dashboard's
+      // "Returned for Correction" row can never find this reply, since
+      // it matches drafts against exactly this table.
+      await db.from('approvals').insert({
+        record_type: 'external_correspondence_reply', record_id: id,
+        reviewed_by: session.user.id, decision: 'returned',
+      });
       await logAudit('returned', entry.id, 'Returned reply for changes');
       await NotificationsAPI.notify([data.created_by], {
         type: 'draft_returned', recordType: 'external_correspondence', recordId: entry.id,
