@@ -305,26 +305,51 @@ const EntryDetailView = {
     return range;
   },
 
+  // Wraps the first match of quotedText inside container in a
+  // <mark class="quote-highlight">, unwrapping any previous mark in
+  // that same container first (so re-applying doesn't nest marks).
+  // Returns the <mark> element, or null if no match was found. Purely
+  // a live-DOM visual aid — never goes through RichEditor.setHTML, so
+  // it's untouched by its tag allowlist; if left in place inside an
+  // editor and saved, RichEditor.sanitize() (run on every write path)
+  // unwraps the unrecognized <mark> tag on save, leaving the text but
+  // dropping the highlight, exactly as intended.
+  _applyQuoteHighlight(container, quotedText) {
+    container.querySelectorAll('mark.quote-highlight').forEach(mark => {
+      const parent = mark.parentNode;
+      while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+      parent.removeChild(mark);
+      parent.normalize();
+    });
+    const range = this._findRangeForQuote(container, quotedText);
+    if (!range) return null;
+    const mark = document.createElement('mark');
+    mark.className = 'quote-highlight';
+    mark.appendChild(range.extractContents());
+    range.insertNode(mark);
+    return mark;
+  },
+
   _highlightQuote(replyId, quotedText) {
     const main = document.getElementById('entry-detail-main');
     if (!main) return;
-    // Only one highlight active at a time — unwrap any previous <mark>
-    // before applying the new one.
+    // Only one highlight active at a time across the whole page — clear
+    // any other reply's mark too, not just this one's.
     main.querySelectorAll('mark.quote-highlight').forEach(mark => {
       const parent = mark.parentNode;
       while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
       parent.removeChild(mark);
       parent.normalize();
     });
+    // Remembered so the same passage can also be highlighted inside the
+    // Edit Draft modal when it's opened next (that modal builds its
+    // content fresh from the stored reply body, which never had the
+    // <mark> — see _openEditReplyModal).
+    this._lastHighlightedQuote = { replyId, quotedText };
     const body = main.querySelector(`[data-reply-body="${replyId}"]`);
     if (!body) return;
-    const range = this._findRangeForQuote(body, quotedText);
-    if (!range) return;
-    const mark = document.createElement('mark');
-    mark.className = 'quote-highlight';
-    mark.appendChild(range.extractContents());
-    range.insertNode(mark);
-    mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const mark = this._applyQuoteHighlight(body, quotedText);
+    if (mark) mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
   },
 
   // Comment body is a full RichEditor, same writing surface as Requests'
@@ -1045,8 +1070,16 @@ const EntryDetailView = {
       </form>
     `, { large: true });
     const form = document.getElementById('edit-reply-form');
-    const editor = RichEditor.create(document.getElementById('edit-reply-body'), { language: defaultLang });
+    const editBody = document.getElementById('edit-reply-body');
+    const editor = RichEditor.create(editBody, { language: defaultLang });
     editor.setHTML(existing.body);
+    // Carry the passage the drafter just clicked (in the read-only
+    // thread above) into the editable text too, so they don't have to
+    // re-find it — see _highlightQuote/_applyQuoteHighlight.
+    if (this._lastHighlightedQuote?.replyId === replyId) {
+      const editable = editBody.querySelector('.rich-editor-body');
+      if (editable) this._applyQuoteHighlight(editable, this._lastHighlightedQuote.quotedText);
+    }
     RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -1097,8 +1130,13 @@ const EntryDetailView = {
       </form>
     `, { large: true });
     const form = document.getElementById('edit-internal-reply-form');
-    const editor = RichEditor.create(document.getElementById('edit-internal-reply-body'), { language: defaultLang });
+    const editBody = document.getElementById('edit-internal-reply-body');
+    const editor = RichEditor.create(editBody, { language: defaultLang });
     editor.setHTML(existing.body);
+    if (this._lastHighlightedQuote?.replyId === replyId) {
+      const editable = editBody.querySelector('.rich-editor-body');
+      if (editable) this._applyQuoteHighlight(editable, this._lastHighlightedQuote.quotedText);
+    }
     RichEditor.bindLangToggle(form, 'language', (lang) => editor.setLanguage(lang));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
