@@ -43,6 +43,25 @@ const Auth = (() => {
     if (error) console.warn('CorLink: failed to log auth event:', error.message);
   }
 
+  // Fail-closed wrapper around ModulesAPI.listEnabledModuleKeys — a
+  // failed fetch (network blip, RLS surprise) must never be treated as
+  // "everything enabled". Nav/route access built on an empty array
+  // just shows less than it should, never more.
+  // Returns null (not []) on failure — shell.js treats null as "Layer 1
+  // data unavailable, fall back to pre-module-system nav behavior" for
+  // the handful of modules that were already shipped and unconditionally
+  // visible before this feature existed, rather than hiding them. An
+  // empty array is a real, successfully-loaded "nothing enabled" answer
+  // and is treated differently (see AppShell.moduleEnabled).
+  async function fetchEnabledModules(db, orgId) {
+    try {
+      return await ModulesAPI.listEnabledModuleKeys(orgId);
+    } catch (err) {
+      console.warn('CorLink: failed to load enabled modules:', err.message || err);
+      return null;
+    }
+  }
+
   // user_assignments stores scope_type/scope_id (not a direct FK to any
   // one table — see schema.sql), so the display name for each assignment
   // has to be resolved with a follow-up lookup per scope level rather
@@ -199,7 +218,16 @@ const Auth = (() => {
       const { data: org } = await db.from('organizations')
         .select('name, code, logo_path').eq('id', profileRow.org_id).single();
 
-      const profile = { ...profileRow, organization: org || null, assignments: await resolveScopeNames(db, assignments || []) };
+      // Enabled module keys ride in the cached profile for the same
+      // reason organization name/logo do — shell.js builds nav
+      // synchronously from the cached profile on every render, so
+      // fetching this per-render would mean either an async gap
+      // (visible nav flicker) or a stale-until-refresh nav. A failed
+      // fetch here fails closed (empty array — no extra nav shown),
+      // never open.
+      const enabledModules = await fetchEnabledModules(db, profileRow.org_id);
+
+      const profile = { ...profileRow, organization: org || null, enabledModules, assignments: await resolveScopeNames(db, assignments || []) };
 
       await recordAttempt(db, sn, true);
       await logAuthEvent(db, 'login');
@@ -272,7 +300,9 @@ const Auth = (() => {
       const { data: org } = await db.from('organizations')
         .select('name, code, logo_path').eq('id', data.org_id).single();
 
-      const profile = { ...data, organization: org || null, assignments: await resolveScopeNames(db, assignments || []) };
+      const enabledModules = await fetchEnabledModules(db, data.org_id);
+
+      const profile = { ...data, organization: org || null, enabledModules, assignments: await resolveScopeNames(db, assignments || []) };
       localStorage.setItem(USER_KEY, JSON.stringify(profile));
       return profile;
     },
@@ -292,7 +322,7 @@ const Auth = (() => {
       // fires once per stale cache; a failed/offline refresh just
       // leaves the stale (branding-less) cache in place rather than
       // blocking resume.
-      if (!('organization' in profile)) {
+      if (!('organization' in profile) || !('enabledModules' in profile)) {
         try { await this.refreshProfile(); } catch (err) { console.warn('CorLink: profile backfill failed:', err.message || err); }
       }
       return true;

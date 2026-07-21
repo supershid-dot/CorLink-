@@ -39,6 +39,28 @@ const AppShell = {
     return !!user.is_prisoner_letters_staff;
   },
 
+  // Layer 1 of the two-layer module access model (see
+  // docs/04-platform-module-foundation.md): is p_moduleKey enabled for
+  // the user's organization? user.enabledModules is populated at
+  // sign-in/refresh (js/auth.js, via ModulesAPI.listEnabledModuleKeys)
+  // and is one of three shapes:
+  //   - a real array              → the authoritative Layer 1 answer.
+  //   - null/undefined            → Layer 1 data couldn't be loaded
+  //     (network failure, or the organization_modules/platform_modules
+  //     tables don't exist yet on this project because this migration
+  //     hasn't been applied there yet). Treated as "no Layer 1 opinion
+  //     available" — pass through unchanged, so a module that already
+  //     shipped before this feature existed keeps working exactly as
+  //     it did before. This deliberately does NOT apply to any
+  //     not-yet-shipped module, because those never get a nav item in
+  //     the templates below regardless of this check's answer.
+  isModuleEnabled(user, moduleKey) {
+    if (user.is_super_admin) return true;
+    const modules = user.enabledModules;
+    if (!Array.isArray(modules)) return true; // no Layer 1 opinion yet — don't break existing nav
+    return modules.includes(moduleKey);
+  },
+
   initials(name) {
     return name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
   },
@@ -87,8 +109,10 @@ const AppShell = {
   // topbarHtml() as a sibling of the <header>, so every view gets it
   // without changing its own markup.
   sidebarHtml(user, activeRoute) {
-    const admin = this.isAdmin(user);
-    const canLetters = this.canAccessPrisonerLetters(user);
+    const admin = this.isAdmin(user) && this.isModuleEnabled(user, 'administration');
+    const canLetters = this.canAccessPrisonerLetters(user) && this.isModuleEnabled(user, 'prisoner_correspondence');
+    const showRequests = this.isModuleEnabled(user, 'requests');
+    const showEntry = this.isModuleEnabled(user, 'entry');
     const item = (route, label, icon, withBadge) =>
       `<a href="#${route}" class="sidebar-link${activeRoute === route ? ' sidebar-link--active' : ''}">
         <i class="ti ${icon}"></i><span>${label}</span>${withBadge ? '<span class="nav-action-badge" data-action-badge hidden></span>' : ''}
@@ -105,8 +129,8 @@ const AppShell = {
         </div>
         <nav class="sidebar-nav">
           ${item('dashboard', 'Dashboard', 'ti-layout-dashboard')}
-          ${item('requests', 'Requests', 'ti-inbox', true)}
-          ${item('entry', 'Entry', 'ti-mailbox')}
+          ${showRequests ? item('requests', 'Requests', 'ti-inbox', true) : ''}
+          ${showEntry ? item('entry', 'Entry', 'ti-mailbox') : ''}
           ${canLetters ? item('prisoner-letters', 'Prisoner Letters', 'ti-mail') : ''}
           ${admin ? item('admin', 'Administration', 'ti-settings') : ''}
         </nav>
@@ -123,8 +147,10 @@ const AppShell = {
 
   topbarHtml(user, activeRoute) {
     const name = user.full_name;
-    const admin = this.isAdmin(user);
-    const canLetters = this.canAccessPrisonerLetters(user);
+    const admin = this.isAdmin(user) && this.isModuleEnabled(user, 'administration');
+    const canLetters = this.canAccessPrisonerLetters(user) && this.isModuleEnabled(user, 'prisoner_correspondence');
+    const showRequests = this.isModuleEnabled(user, 'requests');
+    const showEntry = this.isModuleEnabled(user, 'entry');
     const link = (route, label, withBadge) =>
       `<a href="#${route}" class="topbar-link${activeRoute === route ? ' topbar-link--active' : ''}">${label}${withBadge ? '<span class="nav-action-badge" data-action-badge hidden></span>' : ''}</a>`;
 
@@ -137,8 +163,8 @@ const AppShell = {
         </div>
         <nav class="topbar-nav" id="topbar-nav">
           ${link('dashboard', 'Dashboard')}
-          ${link('requests', 'Requests', true)}
-          ${link('entry', 'Entry')}
+          ${showRequests ? link('requests', 'Requests', true) : ''}
+          ${showEntry ? link('entry', 'Entry') : ''}
           ${canLetters ? link('prisoner-letters', 'Letters') : ''}
           ${admin ? link('admin', 'Admin') : ''}
         </nav>
@@ -204,8 +230,10 @@ const AppShell = {
   // the topbar links; see the .bottom-nav / .topbar-nav CSS toggle at
   // the mobile breakpoint.
   bottomNavHtml(user, activeRoute) {
-    const admin = this.isAdmin(user);
-    const canLetters = this.canAccessPrisonerLetters(user);
+    const admin = this.isAdmin(user) && this.isModuleEnabled(user, 'administration');
+    const canLetters = this.canAccessPrisonerLetters(user) && this.isModuleEnabled(user, 'prisoner_correspondence');
+    const showRequests = this.isModuleEnabled(user, 'requests');
+    const showEntry = this.isModuleEnabled(user, 'entry');
     const item = (route, label, icon, withBadge) =>
       `<a href="#${route}" class="bottom-nav-item${activeRoute === route ? ' bottom-nav-item--active' : ''}">
         <span class="bottom-nav-icon-wrap"><i class="ti ${icon}"></i>${withBadge ? '<span class="nav-action-badge nav-action-badge--corner" data-action-badge hidden></span>' : ''}</span>
@@ -215,8 +243,8 @@ const AppShell = {
     return `
       <nav class="bottom-nav">
         ${item('dashboard', 'Home', 'ti-home')}
-        ${item('requests', 'Requests', 'ti-inbox', true)}
-        ${item('entry', 'Entry', 'ti-mailbox')}
+        ${showRequests ? item('requests', 'Requests', 'ti-inbox', true) : ''}
+        ${showEntry ? item('entry', 'Entry', 'ti-mailbox') : ''}
         ${canLetters ? item('prisoner-letters', 'Letters', 'ti-mail') : ''}
         ${admin ? item('admin', 'Admin', 'ti-settings') : ''}
       </nav>

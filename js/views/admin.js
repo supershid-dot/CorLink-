@@ -37,6 +37,7 @@ const AdminView = {
     }
 
     this._isSuperAdmin = isSuperAdmin;
+    this._isOrgAdmin = isOrgAdmin;
     this._user = user;
 
     try {
@@ -79,6 +80,7 @@ const AdminView = {
             <button class="tab-btn" data-tab="structure">Structure</button>
             <button class="tab-btn" data-tab="users">Users</button>
             <button class="tab-btn" data-tab="audit">Audit Log</button>
+            <button class="tab-btn" data-tab="modules">Modules</button>
           </div>
 
           ${this._isSuperAdmin ? `
@@ -141,6 +143,8 @@ const AdminView = {
         await this._renderUsers(content);
       } else if (this._state.tab === 'audit') {
         await this._renderAuditLog(content);
+      } else if (this._state.tab === 'modules') {
+        await this._renderModules(content);
       }
     } catch (err) {
       console.error('CorLink: failed to load admin tab', err);
@@ -186,6 +190,106 @@ const AdminView = {
         </table>
       </div>
     `;
+  },
+
+  // ── Modules Tab (platform module foundation, Phase 1) ──────────
+  // Layer 1 (organization_modules) only — this tab never touches
+  // Layer 2 (user_assignments/roles), which is managed entirely on
+  // the Users tab as it already was. Toggling is restricted to super
+  // admins to match organization_modules_write RLS exactly (org
+  // admins see the same table read-only) — see
+  // docs/04-platform-module-foundation.md.
+  async _renderModules(content) {
+    const org = this._state.orgs.find(o => o.id === this._state.selectedOrgId);
+    if (!org) { content.innerHTML = `<div class="alert alert-info">No organization selected.</div>`; return; }
+
+    const statuses = await ModulesAPI.listOrgModuleStatus(org.id);
+    const canToggle = this._isSuperAdmin;
+
+    content.innerHTML = `
+      <div class="panel">
+        <div class="panel-header">
+          <h3>Modules — ${org.name}</h3>
+        </div>
+        ${!canToggle ? `<div class="alert alert-info"><i class="ti ti-info-circle"></i> Only a super administrator can change module access. This view is read-only.</div>` : ''}
+        <table class="data-table">
+          <thead><tr><th>Module</th><th>Category</th><th>Availability</th><th>Status</th>${canToggle ? '<th></th>' : ''}</tr></thead>
+          <tbody>
+            ${statuses.map(m => {
+              const hasRoute = !!m.route;
+              const availabilityBadge = hasRoute
+                ? '<span class="badge badge-outline">Available</span>'
+                : '<span class="badge badge-muted">Not available yet</span>';
+              const statusBadge = m.isEnabled
+                ? '<span class="badge badge-success">Enabled</span>'
+                : '<span class="badge badge-muted">Disabled</span>';
+              const toggleCell = !canToggle ? '' : `
+                <td data-label="Actions">
+                  ${hasRoute
+                    ? this._toggleIconBtn('toggle-module', m.moduleId, m.isEnabled)
+                    : '<span class="structure-empty" title="No route shipped yet — cannot be enabled">—</span>'}
+                </td>`;
+              return `
+                <tr>
+                  <td data-label="Module">${m.name}</td>
+                  <td data-label="Category">${m.category ? `<span class="badge badge-outline">${m.category}</span>` : '<span class="structure-empty">—</span>'}</td>
+                  <td data-label="Availability">${availabilityBadge}</td>
+                  <td data-label="Status">${statusBadge}</td>
+                  ${toggleCell}
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    if (!canToggle) return;
+
+    content.querySelectorAll('[data-toggle-module]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mod = statuses.find(m => m.moduleId === btn.dataset.toggleModule);
+        if (!mod) return;
+        if (mod.isEnabled) {
+          this._openDisableModuleConfirm(mod, org);
+        } else {
+          this._setModuleEnabled(mod, org, true);
+        }
+      });
+    });
+  },
+
+  async _setModuleEnabled(mod, org, enabled) {
+    try {
+      await ModulesAPI.setModuleEnabled(org.id, mod.moduleId, enabled);
+      await this._renderTab();
+    } catch (err) {
+      console.error('CorLink: failed to update module status', err);
+      alert(err.message || 'Failed to update module status.');
+    }
+  },
+
+  // Disabling is the one direction that can immediately break access
+  // someone is relying on right now — require an explicit, named
+  // confirmation rather than a single click, same principle as every
+  // other destructive-leaning action in this view.
+  _openDisableModuleConfirm(mod, org) {
+    this._openModal(`
+      <h3>Disable ${mod.name}?</h3>
+      <div class="alert alert-error">
+        <i class="ti ti-alert-triangle"></i>
+        Users at <strong>${org.name}</strong> who currently use ${mod.name} will immediately lose access to it — including its route, if they have it open right now.
+      </div>
+      <p>This does not delete any existing data for this module. It can be re-enabled at any time.</p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+        <button type="button" class="btn btn-primary" id="confirm-disable-module-btn">Disable Module</button>
+      </div>
+    `);
+    document.getElementById('confirm-disable-module-btn').addEventListener('click', async () => {
+      this._closeModal();
+      await this._setModuleEnabled(mod, org, false);
+    });
   },
 
   // ── Organizations Tab ─────────────────────────────────────────
