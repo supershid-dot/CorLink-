@@ -1,7 +1,7 @@
 # CorLink ↔ MeetFlow Migration Architecture & Implementation Decision Document
 
 **Type:** Architecture and decision document (Step 5 of the MeetFlow → CorLink migration process). No code, migration SQL, or deployment is produced in this step.
-**Companion documents:** `docs/01-corlink-meetflow-audit.md` (static repository audit), `docs/02-live-supabase-inventory.md` (live database inventory)
+**Companion documents:** `docs/01-corlink-meetflow-audit.md` (static repository audit), `docs/02-live-supabase-inventory.md` (live database inventory), `docs/08-meetflow-booking-schema-analysis.md` (live-DDL-inspection findings for the former `bookings`/`pre_bookings` open item), `docs/09-rooms-booking-v1-decisions.md` (finalized Rooms/Booking V1 product decisions — supersedes this document's Rooms/Booking sections wherever the two differ; this document has been updated to match, not left in conflict)
 **Date:** 2026-07-21
 **Scope of this step:** Define the target architecture, scope decisions, canonical data ownership, identity reconciliation design, target data model, module access model, RLS strategy, migration sequence, exception handling, frontend architecture, and cutover strategy. No application code was modified. No migration was run. No Supabase project was altered. Nothing was deployed.
 
@@ -29,8 +29,8 @@ Legend: **V1** = migrate in Version 1 · **Later** = migrate in a future version
 | Meetings (core: create/edit/cancel) | **V1** | Core value of the migration; nothing works without it | Meetings | Medium — integer→UUID remap, `start_slot`/`duration`→`start_at`/`end_at` conversion (§5) | Identity mapping (§4), org/module enablement (§6) |
 | Participants (internal + external) | **V1** | Required for any usable meeting | Meetings | Medium — FK remap; external attendee fields need `rich-editor.js`-style sanitization discipline, currently absent | Meetings schema |
 | Rooms | **V1** | Smallest, no recurrence/notification coupling — good first module (matches audit §F phase 3) | Rooms | Low — no structural conflict, genuinely new domain | None |
-| Room bookings | **V1** | Meaningless without rooms; core scheduling value | Rooms + Meetings | Medium — must resolve against the two live-only tables `bookings`/`pre_bookings` (confirmed drift, §02 report) before schema can be finalized | Rooms, Meetings |
-| Pre-bookings | **V1** | Same live table pair as bookings; live-only, must be reverse-engineered from the database, not the repo | Rooms + Meetings | Medium — schema unknown from repo, must inspect live DDL in Phase 1 (§8) before target shape is finalized | Bookings schema decision |
+| Room bookings | **V1 — decisions finalized** | Meaningless without rooms; core scheduling value. `docs/08-meetflow-booking-schema-analysis.md` confirmed MeetFlow's live-only `bookings`/`pre_bookings` tables are legacy, unreferenced by the application, and contain no live data — excluded from migration scope entirely. `docs/09-rooms-booking-v1-decisions.md` finalizes the target design as a single `meeting_room_bookings` table with a `status` field (no separate hold/pending/confirmed tables) | Rooms + Meetings | Low — no live data to reconcile; target schema and RLS strategy are fully specified in `docs/09`, pending only implementation | Rooms, Meetings |
+| Pre-bookings | **Superseded — not migrated as a separate concept** | `docs/08` confirmed the live `pre_bookings` table is unused (MeetFlow's actual pre-booking feature lives in `meetings.is_prebooked`, not this table) and empty. `docs/09` folds the "temporary hold" concept into `meeting_room_bookings.status = 'hold'` (10-minute default expiry) rather than a separate table — see `docs/09` §1/§6 | Rooms + Meetings | Low — no data to migrate; behavior is fully specified in `docs/09` | Bookings schema decision (`docs/09`) |
 | Room blocks | **V1** | Small, self-contained, real operational need (rooms taken out of service) | Rooms | Low | Rooms |
 | Meeting groups | **Later** | Genuinely useful but not required for V1 meeting scheduling; can be approximated by ad hoc participant lists initially | Meetings (Later) | Low | Meetings, Participants |
 | Group access | **Replace** | `meeting_group_access` is a bespoke per-group ACL that duplicates what CorLink's role/section scoping (`user_assignments`, module enablement §6) already generalizes — reinventing it is a regression, not a migration | N/A — covered by Layer 2 module permissions (§6) | Low | Module enablement model |
@@ -119,8 +119,8 @@ All tables below are conceptual (no SQL is written in this step). UUID primary k
 - **`meeting_groups`** — `id`, `org_id`, `name`, `created_by` (Later, §2).
 - **`meeting_group_members`** — `id`, `group_id`, `user_id` (Later).
 - **`meeting_group_access`** — **not created** — replaced by module/role scoping per §2 and §6.
-- **`meeting_room_blocks`** — `id`, `room_id`, `date_from`, `date_to`, `reason`, `created_by`.
-- **`meeting_room_bookings`** — `id`, `room_id`, `meeting_id` (nullable — a booking can exist ahead of a fully-formed meeting), `start_at`, `end_at`, `timezone`, `status`, `created_by`. Exact shape depends on inspecting the live-only `bookings`/`pre_bookings` tables in Phase 1 (§8) before being finalized — flagged as an open item, not assumed here.
+- **`meeting_room_blocks`** — `id`, `room_id`, `start_at`, `end_at` (timestamptz, not MeetFlow's `date_from`/`date_to` date-only shape — **finalized**, `docs/09` §9), `reason` (required), `created_by`, `is_active`/deactivation field (soft-deactivate, never hard-delete).
+- **`meeting_room_bookings`** — `id`, `org_id`, `room_id`, `meeting_id` (nullable — a booking can exist ahead of, or entirely without, a fully-formed meeting), `section_id`, `status` (`hold`/`pending`/`confirmed`/`rejected`/`cancelled`/`expired`/`completed` — **finalized status set and transition table**, `docs/09` §3), `start_at`, `end_at`, `timezone`, `expires_at` (meaningful only while `status = 'hold'`), `created_by`, override fields (`overridden_by`/`overridden_at`/`override_reason`, open storage-location question — `docs/09` §16 item 7), cancellation fields (`cancelled_by`/`cancelled_at`/`cancellation_reason`). **Design is finalized** — see `docs/09-rooms-booking-v1-decisions.md` for the full lifecycle, approval model, hold-expiration behavior, and the hybrid exclusion-constraint-plus-trigger conflict-prevention strategy (§7 of that document); no dependency on inspecting MeetFlow's live `bookings`/`pre_bookings` DDL remains, since `docs/08` confirmed both are legacy/empty and excluded from migration scope. A small number of implementation-time-only questions remain open (`docs/09` §16) — none block starting Phase 4.
 - **Recurrence** (Later, §2) — a `meeting_recurrence_rules` table (RRULE-like fields) plus a `SECURITY DEFINER` RPC that expands occurrences server-side, replacing MeetFlow's client-generated `recurrence_id` loop entirely. Not part of V1.
 - **Agenda items** — `meeting_agenda_items` — `id`, `meeting_id`, `order`, `title`, `notes` — a genuinely new concept (no MeetFlow equivalent); V1 scope decision deferred to product review since it wasn't in MeetFlow at all, but modeled here so the schema has a slot for it rather than bolting it onto `minutes` later.
 - **Minutes** — reuses `js/lib/rich-editor.js` (already supports EN/Divehi toggle and output sanitization) as the editing surface, stored as `meetings.minutes` (rich-text) + `minutes_finalized`/`minutes_updated_at`/`minutes_updated_by`, mirroring MeetFlow's fields but through CorLink's existing sanitized rich-text mechanism instead of a bespoke `isDV` implementation.
@@ -222,11 +222,11 @@ Each phase includes purpose, prerequisites, changes, validation, rollback condit
 - **Approval required before continuing:** **Yes.**
 
 ### Phase 4 — Room schema
-- **Purpose:** Create `meeting_rooms`, `meeting_room_blocks`, `meeting_room_bookings` per §5 — including first resolving the live-only `bookings`/`pre_bookings` drift by inspecting their actual live DDL (read-only) before finalizing `meeting_room_bookings`'s shape.
-- **Prerequisites:** Phase 1 complete.
+- **Purpose:** Create `meeting_rooms`, `meeting_room_blocks`, `meeting_room_bookings` per §5 and `docs/09-rooms-booking-v1-decisions.md` (target shape, statuses, RLS, and conflict-prevention design are now fully specified — no live-DDL inspection of MeetFlow's `bookings`/`pre_bookings` remains a prerequisite; `docs/08` already confirmed both are legacy, unreferenced, and empty). Includes enabling the `btree_gist` extension (required for `docs/09` §7's exclusion-constraint design — not currently enabled on CorLink, per `docs/09`'s conformance check) and resolving `docs/09` §16's remaining implementation-time questions (room-manager grant shape/granularity, the `completed`-transition mechanism, reverse room-block conflict handling, and the exact new `audit_logs`/`notifications` CHECK-constraint values) before or during this phase.
+- **Prerequisites:** Phase 1 complete; `docs/09` approved (this document's own approval, distinct from Phase 4's execution approval below).
 - **Changes:** New tables + RLS; zero existing tables altered.
-- **Validation:** Same local-Postgres RLS verification convention as Phase 3.
-- **Rollback condition:** Same as Phase 3.
+- **Validation:** Same local-Postgres RLS verification convention as Phase 3, plus concurrency testing of the exclusion-constraint/trigger conflict-prevention design (`docs/09` §7) under simulated concurrent booking attempts.
+- **Rollback condition:** Same as Phase 3, plus any conflict-prevention gap found under concurrent-request testing (e.g. a race allowing two overlapping `confirmed` bookings).
 - **Approval required before continuing:** **Yes.**
 
 ### Phase 5 — Identity mapping review
@@ -270,12 +270,12 @@ Each phase includes purpose, prerequisites, changes, validation, rollback condit
 - **Approval required before continuing:** **Yes.**
 
 ### Phase 10 — Bookings and pre-bookings migration
-- **Purpose:** Migrate the two live-only tables into `meeting_room_bookings`.
-- **Prerequisites:** Phase 4's live-DDL inspection complete; Phase 9 complete.
-- **Changes:** Production write to `meeting_room_bookings`.
-- **Validation:** Reconciliation.
-- **Rollback condition:** Same pattern as above.
-- **Approval required before continuing:** **Yes.**
+- **Purpose:** Originally scoped to migrate MeetFlow's live `bookings`/`pre_bookings` tables into `meeting_room_bookings`. **Superseded:** `docs/08` confirmed both source tables are empty (0/near-0 rows) and unreferenced by the application — there is no live data to migrate. This phase is now a no-op for data purposes; retained only as a placeholder in case a future live re-check finds this has changed before Phase 10 is actually reached.
+- **Prerequisites:** Phase 9 complete.
+- **Changes:** None expected (empty source tables). If a live re-check at execution time finds non-zero rows, treat as a new exception requiring fresh review before proceeding — do not assume `docs/08`'s empty-table finding still holds without re-confirming.
+- **Validation:** Re-confirm `bookings`/`pre_bookings` row counts are still zero immediately before considering this phase complete.
+- **Rollback condition:** N/A (no writes expected).
+- **Approval required before continuing:** **Yes** (retained as a gate in case the empty-table assumption no longer holds).
 
 ### Phase 11 — Notifications migration or replacement
 - **Purpose:** Decide and implement how historical MeetFlow notification/Telegram-log rows are handled — per §2/§3, they are not merged into CorLink's `notifications` table; likely disposition is "not migrated, informational reference only" pending product decision.
@@ -441,8 +441,9 @@ Per this step's explicit rule, **none of the following is executed in this step 
 **Ready to begin Phase 1 implementation** (§8, Phase 1 — platform module foundation), **subject to the following being explicitly acknowledged before that phase starts:**
 
 - Phase 1 itself requires separate approval before its own changes are made (per its own gate in §8) — this document defines the plan, it does not itself authorize Phase 1's execution.
-- The live-only `bookings`/`pre_bookings` schema (§5, §8 Phase 4) still needs a read-only DDL inspection before the room-booking target shape is fully final — flagged as an open item, not a blocker to starting Phase 1 (which doesn't touch bookings).
-- A product decision is still owed on: agenda items/decisions (V1 or Later — currently modeled as schema-ready but undecided), org-default timezone handling (§5), and whether Telegram/self-service-request/leave features are ever adopted (§2, all currently Later/optional).
+- ~~The live-only `bookings`/`pre_bookings` schema still needs a read-only DDL inspection before the room-booking target shape is fully final~~ — **resolved.** `docs/08-meetflow-booking-schema-analysis.md` performed the live-database review and confirmed both tables are legacy, unreferenced, and empty; `docs/09-rooms-booking-v1-decisions.md` finalizes the Rooms/Booking target design (data model, statuses, approval model, hold expiration, conflict prevention, room blocks, meeting linkage, timezone, notifications, audit, security invariants). Phase 4 (§8) may proceed once separately approved — a small set of implementation-time-only questions remain (`docs/09` §16), none of which block starting Phase 4.
+- ~~Org-default timezone handling~~ — **resolved for V1** by `docs/09` §11: `start_at`/`end_at` as `timestamptz` plus an explicit IANA `timezone` column, V1 application default `Indian/Maldives`. Organization-level default timezone *configuration* remains explicitly deferred to a later version.
+- A product decision is still owed on: agenda items/decisions (V1 or Later — currently modeled as schema-ready but undecided), and whether Telegram/self-service-request/leave features are ever adopted (§2, all currently Later/optional).
 
 No blockers exist that would prevent starting Phase 1 specifically.
 
