@@ -12,13 +12,17 @@
        Restricts script/style/connect sources to only what CorLink needs:
        self, Google Fonts, jsDelivr (Supabase JS + Tabler Icons), and the
        Supabase project itself (REST + Realtime WebSocket).
-       connect-src/img-src are pinned to THIS project's own subdomain
-       (infjjroktzzhaxjvfknr.supabase.co, matching SUPABASE_URL in
-       js/config.js) rather than the broader https://*.supabase.co
-       wildcard — if a stored-XSS payload ever ran despite the rest of
-       this app's sanitization, the wildcard would let it exfiltrate
-       data to ANY Supabase project, not just this one. If you deploy
-       to a different Supabase project, update the ref here to match. -->
+       connect-src/img-src are pinned to a SINGLE project subdomain
+       (matching SUPABASE_URL in js/config.js) rather than the broader
+       https://*.supabase.co wildcard — if a stored-XSS payload ever ran
+       despite the rest of this app's sanitization, the wildcard would let
+       it exfiltrate data to ANY Supabase project, not just this one.
+       To deploy against a different Supabase project (staging, local),
+       do not hand-edit this file — run
+       scripts/set-frontend-environment.sh <production|staging|local>,
+       which swaps this origin (and js/config.js's) together, still as a
+       single pinned origin, never both at once. See
+       docs/23-staging-frontend-configuration.md. -->
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
     script-src 'self' https://cdn.jsdelivr.net;

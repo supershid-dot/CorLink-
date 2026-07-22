@@ -1,5 +1,10 @@
 // ─── Supabase Credentials ────────────────────────────────────
-// Replace these with your actual Supabase project values.
+// These are production's values by default (preserving today's behavior
+// with zero setup). To target staging or local instead, do not hand-edit
+// this file — run scripts/set-frontend-environment.sh <env>, which reads
+// config/environments/<env>.env (or .env.local for "local") and swaps
+// these two lines plus index.html's matching CSP origin together. See
+// docs/23-staging-frontend-configuration.md.
 // Found in: Supabase Dashboard → Project Settings → API
 const SUPABASE_URL     = 'https://infjjroktzzhaxjvfknr.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImluZmpqcm9rdHp6aGF4anZma25yIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI4MDMwNTQsImV4cCI6MjA5ODM3OTA1NH0.O2lMd3Ge5YJDHGfEswVoa_MNfGPi-P4ftnfzRlH0VUg';
