@@ -152,8 +152,76 @@ If either function needs to be rolled back after deployment: delete the function
 
 ---
 
+## Edge Function deployment results
+
+**Date:** 2026-07-22
+**Executed against:** staging (`vjobntuyzymhcuanyeak`, "CorLink Staging") only.
+
+### Target verification
+
+- Before the first deployment: `list_projects` called and confirmed `vjobntuyzymhcuanyeak` = "CorLink Staging", distinct from `infjjroktzzhaxjvfknr` ("corlink-production") and `xvwileiyquqxxtzqxghm` ("meeting-room-booking").
+- Before the second deployment: `list_projects` re-run and re-confirmed the same three references, unchanged.
+- Supabase MCP tools remained connected and responsive throughout; no disconnection occurred, so no abort condition was triggered.
+
+### Secret availability verification (no values exposed)
+
+- `SUPABASE_URL`: confirmed present via `get_project_url` (`https://vjobntuyzymhcuanyeak.supabase.co`).
+- `SUPABASE_ANON_KEY`: confirmed an active, non-disabled anon key exists via `get_publishable_keys` (value not recorded in this document).
+- `SUPABASE_SERVICE_ROLE_KEY`: no read tool exists for this value by design (it is a genuine secret). Per Supabase's platform architecture, this variable is auto-injected identically into every Edge Function's runtime for every project, requiring no manual configuration — consistent with this document's earlier §5 finding.
+- No secret values were printed at any point in this step.
+
+### JWT verification setting
+
+- Repository has no `supabase/config.toml` and no other `verify_jwt` override anywhere in the tracked source.
+- Both functions are coded to require a valid `Authorization` bearer JWT (reject with 401 if missing) and independently re-verify caller identity/role — consistent with, not conflicting with, gateway-level JWT enforcement.
+- Deployed both functions with `verify_jwt: true` (the tool's own default), preserving rather than changing the repository's intended authentication behavior. No Auth configuration was touched.
+
+### Deployment order and results
+
+1. **`create-user`** — deployed first (no ordering dependency between the two functions; this order matches this document's §6 recommendation).
+   - Function ID: `ac007374-b08b-42bb-8106-71efe3f9185d`
+   - Version: 1
+   - Status: `ACTIVE`
+   - JWT verification: `true`
+   - Deployment timestamp (epoch ms): `1784722359018`
+2. **`reset-password`** — deployed second, after re-verifying the target.
+   - Function ID: `67a663fe-0708-487c-b3f3-9b32ffcfacbe`
+   - Version: 1
+   - Status: `ACTIVE`
+   - JWT verification: `true`
+   - Deployment timestamp (epoch ms): `1784722380225`
+
+### Final staging function inventory
+
+`list_edge_functions` against `vjobntuyzymhcuanyeak` after both deployments returned exactly:
+
+| Slug | Status | Version | `verify_jwt` |
+|---|---|---|---|
+| `create-user` | ACTIVE | 1 | true |
+| `reset-password` | ACTIVE | 1 | true |
+
+No unexpected function appeared. No MeetFlow function (`meetflow-login`, `smooth-service`, `clever-service`, `swift-worker`) exists on staging.
+
+### Warnings
+
+- Permissive CORS (`Access-Control-Allow-Origin` reflects request `Origin` header) remains present in both functions, as already noted in §3/§7 above — pre-existing, not introduced by this deployment, not a blocker.
+- No other new findings during deployment.
+
+### Deferred invocation testing
+
+- Neither function was invoked during this step. Meaningful invocation requires an authenticated admin session, which requires the super-admin bootstrap step (`docs/20` §9 / this document's §4) — a separate, not-yet-authorized step. This deployment only removes the Edge Functions themselves from that critical path.
+
+### Constraints honored
+
+- Staging (`vjobntuyzymhcuanyeak`) received exactly two function deployments; no other write of any kind was made to it.
+- Production (`infjjroktzzhaxjvfknr`) was not contacted, read, or modified at any point.
+- MeetFlow's project (`xvwileiyquqxxtzqxghm`) was not contacted, read, or modified at any point.
+- No Auth setting was changed. No user was created. No frontend was deployed. No secret value was printed.
+
+---
+
 ## 11. Files changed
 
-- `docs/21-staging-edge-functions-plan.md` (new, this file)
+- `docs/21-staging-edge-functions-plan.md` (this file — added "Edge Function deployment results" section)
 
 No other file was created or modified in this step.
