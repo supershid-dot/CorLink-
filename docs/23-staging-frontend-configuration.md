@@ -1,8 +1,8 @@
 # 23 — Staging Frontend Configuration: Preparation and Local Validation
 
-**Status:** Repository changes and local validation only. **No frontend was deployed anywhere. No Auth setting was changed. No user was created. No Edge Function was invoked. Staging (`vjobntuyzymhcuanyeak`), production (`infjjroktzzhaxjvfknr`), and MeetFlow (`xvwileiyquqxxtzqxghm`) were not contacted by any tool call in this step.**
+**Status:** Repository changes and local validation only. **No frontend was deployed anywhere. No Cloudflare Pages project was created. No Auth setting was changed. No user was created. No Edge Function was invoked. Staging (`vjobntuyzymhcuanyeak`), production (`infjjroktzzhaxjvfknr`), and MeetFlow (`xvwileiyquqxxtzqxghm`) were not contacted by any tool call in this step.**
 **Date:** 2026-07-22
-**Scope:** Introduces the smallest maintainable mechanism for this static, no-build-step frontend to target production, staging, or local Supabase projects without ever hand-editing `js/config.js` or `index.html`, and without committing any staging-specific value to this branch.
+**Scope:** Introduces the smallest maintainable mechanism for this static, no-build-step frontend to target production, staging, or local Supabase projects without ever hand-editing `js/config.js` or `index.html`, and without committing any staging-specific value to this branch. Extended to support Cloudflare Pages CI, whose build checkout never contains gitignored files like `config/environments/staging.env` — see §10.
 
 ---
 
@@ -157,7 +157,64 @@ scripts/set-frontend-environment.sh local
 
 ---
 
-## 9. Files changed
+## 10. Cloudflare Pages deployment preparation
+
+Cloudflare Pages checks out this repository fresh for every build — it never has access to `config/environments/staging.env` (gitignored, never committed). `scripts/set-frontend-environment.sh` was extended to resolve its values through an explicit precedence order, so staging can be configured entirely through Cloudflare Pages project environment variables instead:
+
+### Value resolution precedence (highest first)
+
+1. **Explicit CI environment variables** — `CORLINK_SUPABASE_URL` / `CORLINK_SUPABASE_ANON_KEY`, both required together. This is what Cloudflare Pages project environment variables supply.
+2. **Local environment file** — `config/environments/<env>.env` (production/staging) or `.env.local` (local). Unchanged from before — the existing local workflow still works exactly as documented in §6.
+3. **Committed production defaults** — `config/environments/production.env` — used **only** when `production` is the environment explicitly requested. Staging and local **never** silently fall back to production's values under any circumstance, even if their own source (CI vars or local file) is entirely missing; that case is a loud failure, not a silent wrong-backend deploy.
+
+### Additional safety behavior added to `scripts/set-frontend-environment.sh`
+
+- **Service-role guard:** refuses to run at all if `SUPABASE_SERVICE_ROLE_KEY` or `CORLINK_SUPABASE_SERVICE_ROLE_KEY` is set in the environment — a service-role key must never be accepted, printed, stored, or referenced anywhere in frontend deployment configuration, so its mere presence is treated as a hard error rather than being silently ignored.
+- **HTTPS validation:** `SUPABASE_URL` must start with `https://`; any other scheme (or a bare host) fails clearly before anything is written.
+- **Safe WSS derivation:** the secure WebSocket origin is derived by a plain scheme swap on the already-HTTPS-validated URL (`wss://${SUPABASE_URL#https://}`), never by independent string surgery on the hostname — this is also why the original hostname-only CSP replacement (already in place from the prior step) correctly updates both the `https://` and `wss://` occurrences in one pass, and the script now explicitly verifies both landed before exiting.
+- **Anon key masking:** logs only a short, non-reconstructable fragment (`first 6 chars...last 4 chars (redacted, N chars)`), never the full value.
+- **Clearer failure messages:** distinguish "nothing supplied either value" from "only one of the two CI vars is set" from "placeholder value still present," each with environment-specific remediation text.
+
+### New file: `scripts/build-cloudflare-staging.sh`
+
+The Cloudflare Pages **build command**. It:
+1. Checks `CF_PAGES_BRANCH` (injected automatically by Cloudflare Pages) and refuses to proceed if it's `main`, `master`, or `production` — this wrapper only ever applies staging's configuration and must never run against a production build. The check is skipped (not failed) when `CF_PAGES_BRANCH` is unset, so a local dry run outside Cloudflare Pages still works.
+2. Calls `scripts/set-frontend-environment.sh staging`, which resolves `CORLINK_SUPABASE_URL`/`CORLINK_SUPABASE_ANON_KEY` per the precedence above.
+3. Assembles `dist/` (removing any previous `dist/` first) using an **allow-list**, not a deny-list: only `index.html`, `css/`, `js/`, `assets/`, `fonts/` are copied. Everything else — `.git`, `docs/`, `supabase/`, `config/`, `scripts/`, `references/`, `tests/` — is excluded by construction, since it was never in the allow-list in the first place. This is a stronger guarantee than an exclude-list, which would silently start leaking a new repo-only directory the moment someone forgot to add it to the exclusions.
+
+### Exact future Cloudflare Pages project settings
+
+| Setting | Value |
+|---|---|
+| Production branch for this staging project | `feature/corlink-platform-migration` |
+| Root directory | `/` |
+| Build command | `scripts/build-cloudflare-staging.sh` |
+| Build output directory | `dist` |
+| Required environment variables | `CORLINK_SUPABASE_URL`, `CORLINK_SUPABASE_ANON_KEY` |
+| SPA rewrite | None — hash-based routing means every request is simply "serve `index.html`" |
+| HTTPS | Automatically provided by Cloudflare Pages |
+
+### Local test coverage added (`tests/test-frontend-config.sh`)
+
+All 11 tests run against disposable `mktemp -d` scratch copies — the tracked working tree is never touched by any test:
+
+1. CI environment-variable configuration succeeds with fabricated values.
+2. Local file-based staging configuration still succeeds (existing workflow preserved).
+3. Missing `SUPABASE_URL` fails clearly.
+4. Missing `SUPABASE_ANON_KEY` fails clearly.
+5. A non-HTTPS `SUPABASE_URL` fails clearly.
+6. The full anon key value never appears in script output (masked form does).
+7. Running `production` leaves `js/config.js`/`index.html` byte-identical to the committed defaults.
+8. Both the `https://` and `wss://` CSP origins are updated together.
+9. `dist/` contains every required frontend file (`index.html`, `css/`, `assets/`, `fonts/`, and `js/` including its `data/`/`views/`/`lib/` subdirectories).
+10. `dist/` excludes `docs/`, `supabase/`, `references/`, `config/`, `scripts/`, `tests/`, and `.git` — proven against scratch copies that actually contain fixture files in each of those directories, not merely their absence.
+11. The build wrapper rejects `CF_PAGES_BRANCH=main` even when valid-looking staging values are supplied, and creates no `dist/` at all.
+
+**Result: 11/11 passed.** Also run: `node --check` on `js/config.js`/`js/supabase-client.js`, `bash -n` on all three shell scripts, and a secret scan (`grep -rni "service_role\|service-role"`) across every new/changed file — the only matches are the guard code and its own comments/tests, no real key value.
+
+---
+
+## 11. Files changed
 
 - `js/config.js` — comment update only; `SUPABASE_URL`/`SUPABASE_ANON_KEY` values unchanged.
 - `js/supabase-client.js` — extended the "not configured" guard to also check `SUPABASE_ANON_KEY` and recognize `REPLACE_WITH_…` placeholders.
@@ -166,7 +223,9 @@ scripts/set-frontend-environment.sh local
 - `config/environments/production.env` (new) — tracked, real values (copy of what's already public in `js/config.js`).
 - `config/environments/staging.env.example` (new) — tracked template, placeholders only.
 - `.env.local.example` (new) — tracked template, placeholders only.
-- `scripts/set-frontend-environment.sh` (new) — the deploy-time swap script.
-- `docs/23-staging-frontend-configuration.md` (new, this file).
+- `scripts/set-frontend-environment.sh` — extended with CI environment-variable precedence, service-role guard, HTTPS validation, safe WSS derivation, anon-key masking, and post-substitution verification.
+- `scripts/build-cloudflare-staging.sh` (new) — Cloudflare Pages build wrapper (branch guard + staging config + allow-listed `dist/` assembly).
+- `tests/test-frontend-config.sh` (new) — 11-case local test suite covering both scripts.
+- `docs/23-staging-frontend-configuration.md` (this file) — added §10.
 
 No other file was created or modified in this step.
