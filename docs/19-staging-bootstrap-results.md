@@ -182,7 +182,79 @@ Post-creation state independently re-confirmed via a fresh `SELECT ... FROM stor
 
 All of the above remain correctly sequenced *after* this step, per `docs/18` §2's bootstrap order (buckets and these two extensions were steps 3, 5, and 10 — all now complete; step 1, `schema.sql`, is next).
 
-## 11. Confirmation
+## 11. Canonical baseline application
+
+**Status:** All four canonical baseline files applied to staging, in exact order, one at a time, with target re-verification before each write. No unexpected errors — every file applied cleanly on the first attempt; no silent patching was needed at any step. Migration patch stack (Rooms/Meetings/route-activation), Auth configuration, Edge Function deployment, and frontend deployment remain out of scope for this step and were not touched.
+
+### 0. Target verification (this step)
+
+Four separate write actions were taken (one per baseline file); the target was independently re-verified via `mcp__Supabase__list_projects` immediately before each:
+
+| | Reference | Name |
+|---|---|---|
+| Staging (target, all four writes) | `vjobntuyzymhcuanyeak` | CorLink Staging |
+| Production (excluded, all four checks) | `infjjroktzzhaxjvfknr` | corlink-production |
+
+All four checks confirmed target ≠ production. No abort condition was triggered at any point.
+
+### 1. Execution order and per-file results
+
+| # | File | Result | Applied via |
+|---|---|---|---|
+| 1 | `supabase/schema.sql` | ✅ Success, no errors | `mcp__Supabase__apply_migration` (migration `01_schema`) |
+| 2 | `supabase/rls.sql` | ✅ Success, no errors | `mcp__Supabase__apply_migration` (migration `02_rls`) |
+| 3 | `supabase/storage-policies.sql` | ✅ Success, no errors | `mcp__Supabase__apply_migration` (migration `03_storage_policies`) |
+| 4 | `supabase/notifications.sql` | ✅ Success, no errors | `mcp__Supabase__apply_migration` (migration `04_notifications`) |
+
+Each file's exact content was read in full from the repository immediately before being applied (not reconstructed from memory or an earlier partial read) and applied verbatim — no lines skipped, no statements reordered.
+
+### 2. Object counts after each file
+
+| Checkpoint | Public tables | Public functions | RLS policies | Triggers | Views | Tables w/ RLS enabled |
+|---|---|---|---|---|---|---|
+| Before this step (post-inventory) | 0 | 0 | 0 | 0 | 0 | 0 |
+| After `schema.sql` | 30 | 202 | 0 | 17 | 0 | 0 |
+| After `rls.sql` | 30 | 231 | 95 | 18 | 0 | 30 |
+| After `storage-policies.sql` | 30 | 231 | 95 (public schema; +7 on `storage.objects`, a different schema not counted here) | 18 | 0 | 30 |
+| After `notifications.sql` | 30 | 234 | 95 | 18 | 0 | 30 |
+
+The table count (30) matches an exact manual count of every `CREATE TABLE` in `schema.sql`, confirming no table was missed or duplicated. The trigger count (17 → 18) matches `schema.sql`'s 17 defined triggers plus `rls.sql`'s one added trigger (`protect_privileged_user_columns`). The policy count (95) matches `rls.sql`'s `CREATE POLICY` statements on `public`-schema tables. `storage-policies.sql` added 7 policies on `storage.objects` (a separate schema, not reflected in the `public`-schema policy count above) — confirmed directly (see §4).
+
+### 3. Dependency verification
+
+- **`rls.sql` depended on `schema.sql`:** every table/column `rls.sql`'s policies and helper functions reference (e.g. `organizations.default_receiving_section_id`, `internal_requests.parent_entry_id`) existed before `rls.sql` ran. Applied cleanly, confirming the dependency was satisfied.
+- **`storage-policies.sql` depended on the `attachments` table (for its `attachments_storage_select` policy's `EXISTS` subquery) and on the `attachments`/`org-logos` buckets already existing** (created in the prior infrastructure-prerequisites step). Both were present; applied cleanly.
+- **`notifications.sql` depended on `rls.sql`'s `scope_section_ids()` helper** (used by its own `section_user_ids()`) **and on the `pg_cron` extension** (installed in the prior infrastructure-prerequisites step, confirmed still present). Applied cleanly.
+
+### 4. Post-`storage-policies.sql` verification
+
+7 policies confirmed on `storage.objects`, matching all 7 `CREATE POLICY` statements in the file exactly: `org_logos_public_read`, `org_logos_admin_insert`, `org_logos_admin_update`, `org_logos_admin_delete`, `attachments_storage_select`, `attachments_storage_insert`, `attachments_storage_delete`. Bucket settings (`file_size_limit`/`allowed_mime_types` on `attachments` and `org-logos`) re-confirmed unchanged from the infrastructure-prerequisites step — the file's `UPDATE storage.buckets` statements were idempotent no-ops against already-correct values.
+
+### 5. Post-`notifications.sql` verification
+
+- **pg_cron job:** exactly one job exists — `check-deadlines-daily`, schedule `0 3 * * *`, command `SELECT check_deadlines();`, `active: true`. Matches the file's `cron.schedule(...)` call exactly.
+- **Notification-related objects:** all three functions the file defines are present — `check_deadlines`, `org_supervisor_user_ids`, `section_user_ids`.
+- **No MeetFlow objects:** directly queried `information_schema.tables` for MeetFlow's actual table names (`bookings`, `pre_bookings`, `meeting_group_access`) plus the Rooms/Meetings module's own table names (`meeting_rooms`, `meeting_room_bookings`, `meeting_room_blocks`, `meetings`, `meeting_participants`) — zero rows returned. Correct and expected: none of these come from the 4 canonical baseline files; the Rooms/Meetings tables are created by the separate migration-patch stack, which is explicitly out of scope for this step and was not applied.
+
+### 6. Warnings
+
+- **`btree_gist` remains installed in the `public` schema** rather than `extensions` (a pre-existing condition from the infrastructure-prerequisites step, re-confirmed still present after `schema.sql`; not caused by or corrected during this step — noted, not silently patched).
+- **Security advisor findings after `schema.sql` and `rls.sql`** (`mcp__Supabase__get_advisors`, type `security`): zero ERROR-level findings at any point. All WARN-level findings (`function_search_path_mutable` on every custom function; `anon_security_definer_function_executable`/`authenticated_security_definer_function_executable` on the three reference-number-generator RPCs) are pre-existing characteristics of the source files exactly as written — not introduced by, or unique to, this staging application. Two INFO/WARN items are explicitly by-design per the source file's own comments: `letter_reference_sequences` has RLS enabled with zero policies (write-only via its SECURITY DEFINER generator function, same convention as `reference_sequences`/`entry_reference_sequences`), and `login_attempts_insert`'s `WITH CHECK (true)` is documented in `rls.sql` itself as intentional (Edge-Function-managed logging).
+- No blanket `USING (true)` policies exist anywhere in the public schema except the one documented case above.
+
+### 7. Deferred (not performed this step, by instruction)
+
+- The 5-file migration-patch stack (`patch-platform-module-foundation.sql`, `patch-rooms-booking-foundation.sql`, `patch-meetings-foundation.sql`, `patch-rooms-route-activation.sql`, `patch-meetings-route-activation.sql`)
+- SQL validation scripts (`validate-*.sql`)
+- Exhaustive schema/security verification beyond the advisor scan and object-count checks above (a fuller RLS/route/anonymous-access audit is called for once the migration stack lands)
+- Auth configuration
+- Edge Function deployment
+- Staging test account creation
+- Frontend deployment / `js/config.js` and CSP staging swap
+
+All of the above remain correctly sequenced *after* this step, per `docs/18` §2's bootstrap order (steps 1–6 — schema, RLS, buckets, storage policies, pg_cron, notifications — are now complete; step 7, `security-functions.sql`, and step 8, `patch-platform-module-foundation.sql`, are next).
+
+## 12. Confirmation
 
 - No SQL was applied (all queries executed were read-only `SELECT`s against `information_schema`, `pg_catalog`, and `storage.buckets`).
 - No storage buckets were created.
