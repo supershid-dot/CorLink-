@@ -114,6 +114,7 @@ const AppShell = {
     const showRequests = this.isModuleEnabled(user, 'requests');
     const showEntry = this.isModuleEnabled(user, 'entry');
     const showRooms = this.isModuleEnabled(user, 'rooms');
+    const showMeetings = this.isModuleEnabled(user, 'meetings');
     const item = (route, label, icon, withBadge) =>
       `<a href="#${route}" class="sidebar-link${activeRoute === route ? ' sidebar-link--active' : ''}">
         <i class="ti ${icon}"></i><span>${label}</span>${withBadge ? '<span class="nav-action-badge" data-action-badge hidden></span>' : ''}
@@ -133,6 +134,7 @@ const AppShell = {
           ${showRequests ? item('requests', 'Requests', 'ti-inbox', true) : ''}
           ${showEntry ? item('entry', 'Entry', 'ti-mailbox') : ''}
           ${showRooms ? item('rooms', 'Rooms', 'ti-door') : ''}
+          ${showMeetings ? item('meetings', 'Meetings', 'ti-calendar-event') : ''}
           ${canLetters ? item('prisoner-letters', 'Prisoner Letters', 'ti-mail') : ''}
           ${admin ? item('admin', 'Administration', 'ti-settings') : ''}
         </nav>
@@ -154,6 +156,7 @@ const AppShell = {
     const showRequests = this.isModuleEnabled(user, 'requests');
     const showEntry = this.isModuleEnabled(user, 'entry');
     const showRooms = this.isModuleEnabled(user, 'rooms');
+    const showMeetings = this.isModuleEnabled(user, 'meetings');
     const link = (route, label, withBadge) =>
       `<a href="#${route}" class="topbar-link${activeRoute === route ? ' topbar-link--active' : ''}">${label}${withBadge ? '<span class="nav-action-badge" data-action-badge hidden></span>' : ''}</a>`;
 
@@ -169,6 +172,7 @@ const AppShell = {
           ${showRequests ? link('requests', 'Requests', true) : ''}
           ${showEntry ? link('entry', 'Entry') : ''}
           ${showRooms ? link('rooms', 'Rooms') : ''}
+          ${showMeetings ? link('meetings', 'Meetings') : ''}
           ${canLetters ? link('prisoner-letters', 'Letters') : ''}
           ${admin ? link('admin', 'Admin') : ''}
         </nav>
@@ -239,6 +243,7 @@ const AppShell = {
     const showRequests = this.isModuleEnabled(user, 'requests');
     const showEntry = this.isModuleEnabled(user, 'entry');
     const showRooms = this.isModuleEnabled(user, 'rooms');
+    const showMeetings = this.isModuleEnabled(user, 'meetings');
     const item = (route, label, icon, withBadge) =>
       `<a href="#${route}" class="bottom-nav-item${activeRoute === route ? ' bottom-nav-item--active' : ''}">
         <span class="bottom-nav-icon-wrap"><i class="ti ${icon}"></i>${withBadge ? '<span class="nav-action-badge nav-action-badge--corner" data-action-badge hidden></span>' : ''}</span>
@@ -251,6 +256,7 @@ const AppShell = {
         ${showRequests ? item('requests', 'Requests', 'ti-inbox', true) : ''}
         ${showEntry ? item('entry', 'Entry', 'ti-mailbox') : ''}
         ${showRooms ? item('rooms', 'Rooms', 'ti-door') : ''}
+        ${showMeetings ? item('meetings', 'Meetings', 'ti-calendar-event') : ''}
         ${canLetters ? item('prisoner-letters', 'Letters', 'ti-mail') : ''}
         ${admin ? item('admin', 'Admin', 'ti-settings') : ''}
       </nav>
@@ -491,14 +497,16 @@ const AppShell = {
         // request you're already viewing) doesn't fire hashchange, so
         // nothing else would refresh the badge/list in that case.
         //
-        // meeting_room_booking is a special case: there's no dedicated
-        // "-detail" route (rooms.js is a single-route, multi-tab view),
-        // so it navigates to #rooms with a bookingId param instead —
-        // rooms.js opens that booking's detail modal directly on load
-        // regardless of which tab a manager vs. a requester would
-        // otherwise land on.
+        // meeting_room_booking and meeting are both special cases:
+        // neither has a dedicated "-detail" route (rooms.js and
+        // meetings.js are both single-route, multi-tab views), so each
+        // navigates to its own single route with an id param instead —
+        // the view itself opens that record's detail modal directly on
+        // load, same pattern for both.
         if (btn.dataset.recordType === 'meeting_room_booking') {
           Router.navigate('rooms', { bookingId: btn.dataset.recordId });
+        } else if (btn.dataset.recordType === 'meeting') {
+          Router.navigate('meetings', { meetingId: btn.dataset.recordId });
         } else {
           const routes = { prisoner_letter: 'prisoner-letter-detail', external_correspondence: 'entry-detail' };
           const route = routes[btn.dataset.recordType] || 'request-detail';

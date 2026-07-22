@@ -13,6 +13,7 @@ async function init() {
   Router.register('entry',           EntryView);
   Router.register('entry-detail',    EntryDetailView);
   Router.register('rooms',           RoomsView);
+  Router.register('meetings',        MeetingsView);
 
   // Try to resume an existing session — always fall through to Router.start()
   try {

@@ -9,10 +9,11 @@
 // Every RLS/RPC-level rule this view mirrors client-side is UX only —
 // meeting_room_bookings/meeting_room_blocks carry SELECT-only RLS with
 // zero write policies (docs/09 §15), so the real gate is always the
-// RPC itself, never this file. Meetings integration is limited to a
-// neutral "Linked to a meeting" label with no route — the Meetings
-// frontend does not exist yet (a separate, later, explicitly-scoped
-// step) and must not be implied as reachable from here.
+// RPC itself, never this file. Meetings integration is a single,
+// minimal link: the booking-detail modal's "Linked to a meeting" badge
+// navigates to #meetings (only when the Meetings module is enabled for
+// the viewer) now that docs/16-meetings-frontend.md's frontend exists —
+// no other Rooms/Booking behavior was changed for this.
 
 const RoomsView = {
   _state: {
@@ -887,7 +888,9 @@ const RoomsView = {
         ${booking.rejected_by_user ? `<div><strong>Rejected By</strong><div>${this._escapeHtml(booking.rejected_by_user.full_name)}</div></div>` : ''}
         ${booking.cancelled_by_user ? `<div><strong>Cancelled By</strong><div>${this._escapeHtml(booking.cancelled_by_user.full_name)}${booking.cancellation_reason ? ` — ${this._escapeHtml(booking.cancellation_reason)}` : ''}</div></div>` : ''}
         ${booking.conflict_override ? `<div><strong>Conflict Override</strong><div>${this._escapeHtml(booking.conflict_overridden_by_user?.full_name || '')} — ${this._escapeHtml(booking.conflict_override_reason || '')}</div></div>` : ''}
-        ${booking.meeting_id ? `<div><span class="badge badge-outline"><i class="ti ti-link"></i> Linked to a meeting</span></div>` : ''}
+        ${booking.meeting_id ? `<div>${AppShell.isModuleEnabled(this._user, 'meetings')
+          ? `<button type="button" class="badge badge-outline" style="cursor:pointer; border:none;" id="detail-view-meeting-btn"><i class="ti ti-link"></i> Linked to a meeting — View</button>`
+          : `<span class="badge badge-outline"><i class="ti ti-link"></i> Linked to a meeting</span>`}</div>` : ''}
       </div>
       <div class="modal-actions" style="margin-top:16px;">
         <button type="button" class="btn btn-secondary" data-close-modal>Close</button>
@@ -903,6 +906,11 @@ const RoomsView = {
     document.getElementById('detail-cancel-btn')?.addEventListener('click', () => {
       this._closeModal();
       this._openCancelBookingModal(booking, isOwn);
+    });
+    // Minimal integration link now that the Meetings frontend exists —
+    // display-only otherwise (see the module-enabled check above).
+    document.getElementById('detail-view-meeting-btn')?.addEventListener('click', () => {
+      Router.navigate('meetings', { meetingId: booking.meeting_id });
     });
   },
 
