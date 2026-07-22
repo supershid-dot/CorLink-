@@ -254,7 +254,84 @@ The table count (30) matches an exact manual count of every `CREATE TABLE` in `s
 
 All of the above remain correctly sequenced *after* this step, per `docs/18` §2's bootstrap order (steps 1–6 — schema, RLS, buckets, storage policies, pg_cron, notifications — are now complete; step 7, `security-functions.sql`, and step 8, `patch-platform-module-foundation.sql`, are next).
 
-## 12. Confirmation
+## 12. Migration patch application
+
+**Status:** All 5 migration-patch-stack files applied to staging, in exact order, one at a time, with target re-verification before each write. One transient interruption occurred (Supabase MCP disconnected mid-sequence, after patch 3 returned success but before its verification queries ran) — handled per instruction: work stopped immediately, nothing was assumed or fabricated, and verification resumed from exactly where it left off once the connection returned. No patch failed; no patch was silently patched around.
+
+### 0. Target verification (this step)
+
+Five separate write actions were taken (one per patch file); the target was independently re-verified via `mcp__Supabase__list_projects` immediately before each:
+
+| | Reference | Name |
+|---|---|---|
+| Staging (target, all five writes) | `vjobntuyzymhcuanyeak` | CorLink Staging |
+| Production (excluded, all five checks) | `infjjroktzzhaxjvfknr` | corlink-production |
+
+All five checks confirmed target ≠ production. No abort condition was triggered at any point. A sixth `list_projects` check was also run immediately upon Supabase's reconnection, before resuming verification of patch 3 — confirming the target had not silently changed during the interruption.
+
+### 1. Execution order and per-patch results
+
+| # | File | Result | Applied via |
+|---|---|---|---|
+| 1 | `supabase/patch-platform-module-foundation.sql` | ✅ Success, no errors | `apply_migration` (`05_patch_platform_module_foundation`) |
+| 2 | `supabase/patch-rooms-booking-foundation.sql` | ✅ Success, no errors | `apply_migration` (`06_patch_rooms_booking_foundation`) |
+| 3 | `supabase/patch-meetings-foundation.sql` | ✅ Success, no errors (verification delayed by the MCP disconnect above; confirmed clean once reconnected) | `apply_migration` (`07_patch_meetings_foundation`) |
+| 4 | `supabase/patch-rooms-route-activation.sql` | ✅ Success, no errors | `apply_migration` (`08_patch_rooms_route_activation`) |
+| 5 | `supabase/patch-meetings-route-activation.sql` | ✅ Success, no errors | `apply_migration` (`09_patch_meetings_route_activation`) |
+
+Each file's exact content was read in full from the repository immediately before being applied and applied verbatim.
+
+### 2. Object counts after each patch
+
+| Checkpoint | Tables | Functions | RLS policies | Triggers | Views | Tables w/ RLS |
+|---|---|---|---|---|---|---|
+| Before this step (post-baseline) | 30 | 234 | 95 | 18 | 0 | 30 |
+| After patch 1 (platform modules) | 32 (+2) | 237 (+3) | 99 (+4) | 20 (+2) | 0 | 32 |
+| After patch 2 (rooms/booking) | 36 (+4) | 256 (+19) | 107 (+8) | 26 (+6) | 0 | 36 |
+| After patch 3 (meetings) | 38 (+2) | 273 (+17) | 109 (+2) | 31 (+5) | 0 | 38 |
+| After patch 4 (rooms route) | 38 | 273 | 109 | 31 | 0 | 38 |
+| After patch 5 (meetings route) | 38 | 273 | 109 | 31 | 0 | 38 |
+
+Route-activation patches (4, 5) are pure `UPDATE` statements against an existing row — correctly produced zero object-count change.
+
+### 3. Verification results (as specifically required)
+
+**After `patch-platform-module-foundation.sql`:**
+- `platform_modules` exists ✅ and `organization_modules` exists ✅ (confirmed via `to_regclass`)
+- All 11 seeded modules present with correct routes: `requests`→`requests`, `prisoner_correspondence`→`prisoner-letters`, `entry`→`entry`, `administration`→`admin`; `prison_registry`/`meetings`/`rooms`/`tasks`/`calendar`/`reports`/`document_signing` correctly still `NULL` at this point (route activation is patches 4–5, not this one)
+- `organization_modules` has 0 rows — expected and correct, since staging has zero organizations; the seed's `INSERT ... SELECT FROM organizations CROSS JOIN ...` naturally produces zero rows against an empty `organizations` table
+
+**After `patch-rooms-booking-foundation.sql`:**
+- `meeting_rooms`, `meeting_room_managers`, `meeting_room_blocks`, `meeting_room_bookings` all exist ✅ (confirmed via `to_regclass`)
+- All 12 expected RPCs/helpers present: `create_booking_hold`, `submit_booking_request`, `create_room_booking`, `approve_booking`, `reject_booking`, `cancel_booking`, `reschedule_booking`, `create_room_block`, `cancel_room_block`, `check_room_availability`, `is_room_manager`, `rooms_module_active_for`
+- **`meeting_room_bookings` and `meeting_room_blocks` each have exactly one policy — `SELECT` only.** Directly queried `pg_policies` for both tables: no `INSERT`/`UPDATE`/`DELETE` policy exists for either. Confirms all mutation is exclusively through the SECURITY DEFINER RPCs, exactly as designed.
+
+**After `patch-meetings-foundation.sql`:**
+- `meetings` and `meeting_participants` both exist ✅
+- `meeting_room_bookings.meeting_id`'s FK constraint (`meeting_room_bookings_meeting_id_fkey`) exists ✅ — confirmed via `pg_constraint`
+- Participant privacy function `meeting_participant_list` exists ✅, along with all 9 other expected functions (`can_view_meeting`, `can_manage_meeting`, `create_meeting`, `update_meeting`, `cancel_meeting`, `add_participant`, `remove_participant`, `assign_room_booking`, `detach_room_booking`)
+- `meetings` and `meeting_participants` each have exactly one policy — `SELECT` only, no direct-write policy on either
+
+**After both route patches:**
+- `platform_modules.route` for `rooms` = `'rooms'` ✅, for `meetings` = `'meetings'` ✅ — both confirmed populated by direct query
+
+### 4. Warnings
+
+- **Supabase MCP disconnected mid-sequence**, between applying patch 3 and verifying it. Handled per the standing "stop if Supabase disconnects again" instruction: all work stopped immediately, the interruption was reported plainly with no fabricated verification, and — once reconnected — the target was independently re-verified before resuming verification of patch 3 (not assumed to still be correct), followed by fresh target re-verification before each of the two remaining patches. No SQL was applied blind during the outage.
+- **Zero ERROR-level security advisor findings** after patches 3 and 5 (the two checkpoints where an advisor scan was run this step). All WARN-level findings (`function_search_path_mutable` on every new custom function; `anon_security_definer_function_executable`/`authenticated_security_definer_function_executable` on every SECURITY DEFINER RPC newly added by these patches) are pre-existing characteristics of the source files exactly as written, consistent with the pattern already seen after the canonical baseline.
+- Same two by-design INFO/WARN items persist unchanged from the canonical-baseline step (`letter_reference_sequences` no-policy, `login_attempts_insert`'s documented `WITH CHECK (true)`) — no new instance of either pattern was introduced by any of the 5 patches.
+- No blanket `USING (true)` or direct-write policy exists on any Rooms/Meetings table (`meeting_rooms`, `meeting_room_managers`, `meeting_room_blocks`, `meeting_room_bookings`, `meetings`, `meeting_participants`) — confirmed directly via `pg_policies`, not inferred.
+- `btree_gist` remains in the `public` schema rather than `extensions` — unchanged, pre-existing condition, not touched by this step.
+
+### 5. Deferred (not performed this step, by instruction)
+
+- SQL validation scripts (`validate-*.sql`) — not yet run
+- Rerunning any patch to confirm idempotency — not yet attempted
+- Auth configuration, Edge Function deployment, staging test account creation, frontend deployment — all remain out of scope
+
+Per `docs/18` §2's bootstrap order, steps 1–16 (schema through both route-activation patches) are now complete; step 17 (initial super admin) is next, preceded by the validation-script pass this step deliberately deferred.
+
+## 13. Confirmation
 
 - No SQL was applied (all queries executed were read-only `SELECT`s against `information_schema`, `pg_catalog`, and `storage.buckets`).
 - No storage buckets were created.
