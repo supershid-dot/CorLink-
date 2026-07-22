@@ -117,3 +117,32 @@ ORDER BY o.name, pm.display_order;
 --    platform_modules.is_active = FALSE (if any) survived the rerun:
 -- SELECT module_key, is_active FROM platform_modules WHERE is_active = FALSE;
 -- Expect: unchanged from before the rerun.
+
+-- 10. Regression check: rerunning the seed does not clear a module's
+--     already-activated route. The seed's own literal values are NULL
+--     for every not-yet-shipped module (route activation happens later,
+--     via a separate one-line patch per module — see
+--     patch-rooms-route-activation.sql / patch-meetings-route-
+--     activation.sql). A bare `route = EXCLUDED.route` in the seed's
+--     ON CONFLICT clause would silently null out any already-activated
+--     route on every reseed; the corrected clause
+--     (`route = COALESCE(EXCLUDED.route, platform_modules.route)`)
+--     must not. Run this sequence against a target project:
+--       1. Apply patch-platform-module-foundation.sql (if not already).
+--       2. Apply patch-rooms-route-activation.sql and
+--          patch-meetings-route-activation.sql.
+--       3. Re-run patch-platform-module-foundation.sql a second time.
+--       4. Run the two SELECTs below.
+SELECT module_key, route FROM platform_modules WHERE module_key = 'rooms';
+-- Expect: exactly 1 row, route = 'rooms' (not NULL).
+
+SELECT module_key, route FROM platform_modules WHERE module_key = 'meetings';
+-- Expect: exactly 1 row, route = 'meetings' (not NULL).
+
+-- Re-run checks 1 and 1b (module count/keys) and check 2 (no duplicate
+-- org-module assignments) after this same reseed — all three must
+-- still pass exactly as before: platform_modules must still contain
+-- exactly 11 rows (one per module_key, no duplicates), and
+-- organization_modules must show no duplicate (organization_id,
+-- module_id) pairs. This confirms the COALESCE fix didn't change the
+-- seed's other, already-correct idempotency properties.

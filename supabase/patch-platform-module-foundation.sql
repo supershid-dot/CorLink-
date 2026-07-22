@@ -185,6 +185,24 @@ CREATE POLICY "organization_modules_write" ON organization_modules
 -- without ever inserting a duplicate row, and deliberately does NOT
 -- touch is_active — so a super admin's manual platform-wide kill
 -- switch survives a re-run of this seed.
+--
+-- route uses COALESCE(EXCLUDED.route, platform_modules.route) rather
+-- than a bare EXCLUDED.route: this seed's own literal values are NULL
+-- for every module that hasn't shipped a frontend yet (Meetings, Rooms,
+-- Tasks, Calendar, Reports, Document Signing, Prison Registry), and a
+-- module's own route-activation patch (e.g.
+-- patch-rooms-route-activation.sql) is the one place that ever sets a
+-- real value there afterward — a separate, later, one-line UPDATE, not
+-- this seed. A bare EXCLUDED.route would make re-running this seed
+-- silently null out any route a module has since shipped, undoing
+-- route activation with no error and no warning (found and confirmed
+-- reproducible during staging bootstrap idempotency testing — see
+-- docs/19 §13). COALESCE keeps this seed's real job (rows always
+-- correct, name/description/etc. always in sync) while never being the
+-- thing that un-ships an already-shipped module's route. Every other
+-- column above is safe with a bare EXCLUDED.<col> as-is: none of them
+-- have a second, later patch that owns updating them out-of-band the
+-- way route-activation patches own route.
 
 INSERT INTO platform_modules (module_key, name, description, category, route, icon, display_order) VALUES
   ('requests',               'Requests',               'Inter-organization correspondence: request, response, approval workflow.', 'correspondence', 'requests',        'ti-inbox',      10),
@@ -202,7 +220,7 @@ ON CONFLICT (module_key) DO UPDATE SET
   name          = EXCLUDED.name,
   description   = EXCLUDED.description,
   category      = EXCLUDED.category,
-  route         = EXCLUDED.route,
+  route         = COALESCE(EXCLUDED.route, platform_modules.route),
   icon          = EXCLUDED.icon,
   display_order = EXCLUDED.display_order,
   updated_at    = NOW();

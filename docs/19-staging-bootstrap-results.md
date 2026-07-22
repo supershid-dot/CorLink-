@@ -402,6 +402,35 @@ Independently re-verified via `list_projects` before every write this step (5 se
 - Live-session RLS/impersonation checks across all three validation scripts — deferred to actual UAT with real staging accounts (not yet created).
 - Concurrency scenarios (Rooms/Meetings booking race conditions) — already verified against local Postgres during original development (per `docs/11`/`docs/14`), not re-verified against hosted staging.
 
+### 6. Fix: platform-module route idempotency defect
+
+**Status:** Fixed, tested locally, applied to staging, verified. This subsection documents the fix for the defect first identified in §13 §2/§4 above.
+
+**Defect:** Rerunning `supabase/patch-platform-module-foundation.sql` on a database where the two route-activation patches (`patch-rooms-route-activation.sql`, `patch-meetings-route-activation.sql`) had already run would silently revert `platform_modules.route` back to `NULL` for both `rooms` and `meetings`.
+
+**Root cause:** The seed's `INSERT INTO platform_modules (...) VALUES (...) ON CONFLICT (module_key) DO UPDATE SET ... route = EXCLUDED.route, ...` unconditionally overwrote the stored `route` with the seed's own literal value on every rerun. That literal value is `NULL` for 7 of the 11 seeded modules (`prison_registry`, `meetings`, `rooms`, `tasks`, `calendar`, `reports`, `document_signing`) — every module that hadn't shipped a working frontend route as of when this seed was originally written. Route activation for a module happens later, via a separate one-line patch per module (e.g. `patch-rooms-route-activation.sql`) — not through this seed. This is a general defect, not specific to Rooms/Meetings: any future module whose route gets activated the same way would hit the identical bug the next time this seed is rerun for any reason (a name/description/icon/display_order fix, for example).
+
+**Correction:** Changed the `SET` clause's `route = EXCLUDED.route` to `route = COALESCE(EXCLUDED.route, platform_modules.route)` — the table's existing row is referenced by its own unaliased name (`platform_modules`) inside the `ON CONFLICT ... DO UPDATE SET` clause, confirmed correct for this INSERT statement's context (the target table has no alias in this file). This preserves a currently-stored non-`NULL` route whenever the seed's own value for that row is `NULL`, while still allowing a genuinely-changed non-`NULL` seed value to update the stored route (verified — see local testing below). No other column in the same `SET` clause needed the same treatment: `name`/`description`/`category`/`icon`/`display_order` are never NULL in this seed's literal values and have no equivalent later-arriving, out-of-band-owning patch the way `route` does. No other unsafe `ON CONFLICT ... DO UPDATE` pattern exists elsewhere in this file — the file's other two `INSERT`s (organization-module enablement) both use `ON CONFLICT ... DO NOTHING`, which carries no equivalent risk.
+
+**Local test result:** A local PostgreSQL 16 instance was used (matching this repo's established local-testing convention — stub `auth` schema, minimal `organizations`/`users` tables, the specific `rls.sql` helper functions this patch's own bodies/policies reference). Sequence run and observed:
+1. Applied the **original, unmodified** patch, then both route-activation patches, then reran the **original** patch again — reproduced the defect exactly: `rooms`/`meetings` routes both reverted to `NULL`. Confirms the defect is real and reproducible, not staging-specific.
+2. Applied the fix to the actual repository file, reset the test database, and replayed the same sequence with the **corrected** patch: routes remained `'rooms'`/`'meetings'` after the rerun.
+3. Directly tested that a genuinely non-`NULL` changed seed value (e.g. simulating `requests`'s route changing to `'requests-v2'`) still correctly overwrites the stored value — confirming the fix doesn't make `route` permanently frozen after first-set, only NULL-seed-value-safe.
+4. Confirmed module count remained 11 and no duplicate `module_key` rows were introduced by any of the above reruns.
+
+**Staging test result:** Target independently re-verified (`vjobntuyzymhcuanyeak` ≠ `infjjroktzzhaxjvfknr`) before the write. Applied the corrected patch to staging (staging was already in the post-idempotency-testing state from §13 — routes had already been manually restored there via the route-activation reruns, so this application's meaningful effect was purely the `SET`-clause code fix itself, not a further data change). Verified afterward:
+- `rooms` route = `'rooms'` ✅
+- `meetings` route = `'meetings'` ✅
+- Module count = 11, no duplicate `module_key` rows ✅
+- No duplicate `(organization_id, module_id)` rows in `organization_modules` ✅
+- Object counts unchanged: 38 tables, 273 functions, 109 RLS policies, 31 triggers ✅
+- `organization_modules` row count unchanged (0 — staging still has zero organizations) ✅
+- Security advisor scan (type `security`): **zero ERROR-level findings**, no new WARN/INFO categories beyond the same pre-existing pattern already documented in §11–§13 ✅
+
+**Regression check added:** `supabase/validate-platform-module-foundation.sql` §10 (new) — an automated, repeatable check: apply the platform-module patch, apply both route-activation patches, reapply the platform-module patch a second time, then assert `rooms`/`meetings` routes are still non-`NULL` and correct, alongside a re-check of the pre-existing module-count/no-duplicate-keys checks (1, 1b, 2).
+
+**Rollback file:** Not created. Per instruction, a rollback note is only warranted when a correction requires one — this change alters only the literal expression inside an existing `ON CONFLICT ... DO UPDATE SET` clause of an already-idempotent, already-applied seed statement. It introduces no new table, column, policy, function signature, or destructive operation; the "rollback" of this exact fix is simply reverting the one-line `SET` clause in source control, which git already provides. `docs/rollback/001-platform-module-foundation.md` (if referenced elsewhere) needs no update, since nothing about this patch's actual rollback procedure (dropping the tables/policies/functions it created) changed.
+
 ## 14. Confirmation
 
 - No SQL was applied (all queries executed were read-only `SELECT`s against `information_schema`, `pg_catalog`, and `storage.buckets`).
