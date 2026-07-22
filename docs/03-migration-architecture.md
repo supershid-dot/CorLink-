@@ -221,13 +221,14 @@ Each phase includes purpose, prerequisites, changes, validation, rollback condit
 - **Rollback condition:** Any RLS gap found in local verification (e.g. a private meeting readable by a non-participant).
 - **Approval required before continuing:** **Yes.**
 
-### Phase 4 — Room schema
+### Phase 4 — Room schema — **Implemented (database layer only)**
 - **Purpose:** Create `meeting_rooms`, `meeting_room_blocks`, `meeting_room_bookings` per §5 and `docs/09-rooms-booking-v1-decisions.md` (target shape, statuses, RLS, and conflict-prevention design are now fully specified — no live-DDL inspection of MeetFlow's `bookings`/`pre_bookings` remains a prerequisite; `docs/08` already confirmed both are legacy, unreferenced, and empty). Includes enabling the `btree_gist` extension (required for `docs/09` §7's exclusion-constraint design — not currently enabled on CorLink, per `docs/09`'s conformance check) and resolving `docs/09` §16's remaining implementation-time questions (room-manager grant shape/granularity, the `completed`-transition mechanism, reverse room-block conflict handling, and the exact new `audit_logs`/`notifications` CHECK-constraint values) before or during this phase.
 - **Prerequisites:** Phase 1 complete; `docs/09` approved (this document's own approval, distinct from Phase 4's execution approval below).
 - **Changes:** New tables + RLS; zero existing tables altered.
 - **Validation:** Same local-Postgres RLS verification convention as Phase 3, plus concurrency testing of the exclusion-constraint/trigger conflict-prevention design (`docs/09` §7) under simulated concurrent booking attempts.
 - **Rollback condition:** Same as Phase 3, plus any conflict-prevention gap found under concurrent-request testing (e.g. a race allowing two overlapping `confirmed` bookings).
 - **Approval required before continuing:** **Yes.**
+- **Status:** The database layer (`meeting_rooms`, `meeting_room_managers`, `meeting_room_blocks`, `meeting_room_bookings`, the hybrid conflict-prevention design, 10 RPCs, RLS) is implemented, tested (including real two-session concurrency and a rollback fail-then-succeed cycle) against a local PostgreSQL instance, and committed — see `docs/11-rooms-booking-database-foundation.md`. **Not yet applied to any hosted Supabase project** (see that document §5 for the specific live checks still required) and **no frontend was built in this step** — the Rooms module's `platform_modules.route` remains `NULL`, so it stays unreachable from the UI until a future, separately-authorized frontend phase.
 
 ### Phase 5 — Identity mapping review
 - **Purpose:** Populate `meetflow_staff_mapping` by running the §4 matching rules against MeetFlow's live `staff` table (read-only extraction) and CorLink's live `users`, producing `exact_match`/`probable_match`/`duplicate_conflict`/`unmatched` rows for human review.
