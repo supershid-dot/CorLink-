@@ -113,6 +113,7 @@ const AppShell = {
     const canLetters = this.canAccessPrisonerLetters(user) && this.isModuleEnabled(user, 'prisoner_correspondence');
     const showRequests = this.isModuleEnabled(user, 'requests');
     const showEntry = this.isModuleEnabled(user, 'entry');
+    const showRooms = this.isModuleEnabled(user, 'rooms');
     const item = (route, label, icon, withBadge) =>
       `<a href="#${route}" class="sidebar-link${activeRoute === route ? ' sidebar-link--active' : ''}">
         <i class="ti ${icon}"></i><span>${label}</span>${withBadge ? '<span class="nav-action-badge" data-action-badge hidden></span>' : ''}
@@ -131,6 +132,7 @@ const AppShell = {
           ${item('dashboard', 'Dashboard', 'ti-layout-dashboard')}
           ${showRequests ? item('requests', 'Requests', 'ti-inbox', true) : ''}
           ${showEntry ? item('entry', 'Entry', 'ti-mailbox') : ''}
+          ${showRooms ? item('rooms', 'Rooms', 'ti-door') : ''}
           ${canLetters ? item('prisoner-letters', 'Prisoner Letters', 'ti-mail') : ''}
           ${admin ? item('admin', 'Administration', 'ti-settings') : ''}
         </nav>
@@ -151,6 +153,7 @@ const AppShell = {
     const canLetters = this.canAccessPrisonerLetters(user) && this.isModuleEnabled(user, 'prisoner_correspondence');
     const showRequests = this.isModuleEnabled(user, 'requests');
     const showEntry = this.isModuleEnabled(user, 'entry');
+    const showRooms = this.isModuleEnabled(user, 'rooms');
     const link = (route, label, withBadge) =>
       `<a href="#${route}" class="topbar-link${activeRoute === route ? ' topbar-link--active' : ''}">${label}${withBadge ? '<span class="nav-action-badge" data-action-badge hidden></span>' : ''}</a>`;
 
@@ -165,6 +168,7 @@ const AppShell = {
           ${link('dashboard', 'Dashboard')}
           ${showRequests ? link('requests', 'Requests', true) : ''}
           ${showEntry ? link('entry', 'Entry') : ''}
+          ${showRooms ? link('rooms', 'Rooms') : ''}
           ${canLetters ? link('prisoner-letters', 'Letters') : ''}
           ${admin ? link('admin', 'Admin') : ''}
         </nav>
@@ -234,6 +238,7 @@ const AppShell = {
     const canLetters = this.canAccessPrisonerLetters(user) && this.isModuleEnabled(user, 'prisoner_correspondence');
     const showRequests = this.isModuleEnabled(user, 'requests');
     const showEntry = this.isModuleEnabled(user, 'entry');
+    const showRooms = this.isModuleEnabled(user, 'rooms');
     const item = (route, label, icon, withBadge) =>
       `<a href="#${route}" class="bottom-nav-item${activeRoute === route ? ' bottom-nav-item--active' : ''}">
         <span class="bottom-nav-icon-wrap"><i class="ti ${icon}"></i>${withBadge ? '<span class="nav-action-badge nav-action-badge--corner" data-action-badge hidden></span>' : ''}</span>
@@ -245,6 +250,7 @@ const AppShell = {
         ${item('dashboard', 'Home', 'ti-home')}
         ${showRequests ? item('requests', 'Requests', 'ti-inbox', true) : ''}
         ${showEntry ? item('entry', 'Entry', 'ti-mailbox') : ''}
+        ${showRooms ? item('rooms', 'Rooms', 'ti-door') : ''}
         ${canLetters ? item('prisoner-letters', 'Letters', 'ti-mail') : ''}
         ${admin ? item('admin', 'Admin', 'ti-settings') : ''}
       </nav>
@@ -484,9 +490,20 @@ const AppShell = {
         // value it's already at (e.g. clicking a notification for the
         // request you're already viewing) doesn't fire hashchange, so
         // nothing else would refresh the badge/list in that case.
-        const routes = { prisoner_letter: 'prisoner-letter-detail', external_correspondence: 'entry-detail' };
-        const route = routes[btn.dataset.recordType] || 'request-detail';
-        Router.navigate(route, { id: btn.dataset.recordId });
+        //
+        // meeting_room_booking is a special case: there's no dedicated
+        // "-detail" route (rooms.js is a single-route, multi-tab view),
+        // so it navigates to #rooms with a bookingId param instead —
+        // rooms.js opens that booking's detail modal directly on load
+        // regardless of which tab a manager vs. a requester would
+        // otherwise land on.
+        if (btn.dataset.recordType === 'meeting_room_booking') {
+          Router.navigate('rooms', { bookingId: btn.dataset.recordId });
+        } else {
+          const routes = { prisoner_letter: 'prisoner-letter-detail', external_correspondence: 'entry-detail' };
+          const route = routes[btn.dataset.recordType] || 'request-detail';
+          Router.navigate(route, { id: btn.dataset.recordId });
+        }
         await this.loadNotifications();
       });
     });

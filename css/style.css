@@ -2071,6 +2071,25 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
    surface either. */
 .modal-box--md { max-width: 600px; width: 94vw; }
 .modal-box h3 { margin-bottom: 16px; }
+/* Read-only key/value pairs in a details modal (Rooms booking detail) —
+   two columns on wide modals, one on narrow, matching .field-row's own
+   breakpoint so both patterns look consistent inside the same modal size. */
+.detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 20px;
+}
+.detail-grid > div > strong {
+  display: block;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+  margin-bottom: 2px;
+}
+@media (max-width: 640px) {
+  .detail-grid { grid-template-columns: 1fr; }
+}
 .modal-form {
   display: flex;
   flex-direction: column;

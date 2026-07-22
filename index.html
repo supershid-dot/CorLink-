@@ -55,7 +55,7 @@
        whenever you push a CSS/JS change and want it guaranteed to
        reach every open tab on the next reload:
          sed -i 's/?v=[0-9]\{8\}/?v=YYYYMMDD/g' index.html -->
-  <link rel="stylesheet" href="css/style.css?v=20260717a" />
+  <link rel="stylesheet" href="css/style.css?v=20260722" />
 </head>
 <body>
   <!-- SPA container — all views are rendered here by JavaScript -->
@@ -90,7 +90,7 @@
   <script src="js/config.js?v=20260716" defer></script>
   <script src="js/supabase-client.js?v=20260709" defer></script>
   <script src="js/auth.js?v=20260721" defer></script>
-  <script src="js/router.js?v=20260721" defer></script>
+  <script src="js/router.js?v=20260722" defer></script>
 
   <!-- Lib — light/dark theme toggle. Self-initializes on load (sets
        data-theme on <html> before the first real view renders) — see
@@ -117,9 +117,10 @@
   <script src="js/data/cc-recipients-api.js?v=20260709" defer></script>
   <script src="js/data/prisoner-letters-api.js?v=20260716" defer></script>
   <script src="js/data/entry-api.js?v=20260716c" defer></script>
+  <script src="js/data/rooms-api.js?v=20260722" defer></script>
 
   <!-- Views -->
-  <script src="js/views/shell.js?v=20260721" defer></script>
+  <script src="js/views/shell.js?v=20260722" defer></script>
   <script src="js/views/login.js?v=20260709" defer></script>
   <script src="js/views/change-password.js?v=20260709" defer></script>
   <script src="js/views/dashboard.js?v=20260716b" defer></script>
@@ -130,8 +131,9 @@
   <script src="js/views/prisoner-letter-detail.js?v=20260709" defer></script>
   <script src="js/views/entry.js?v=20260716b" defer></script>
   <script src="js/views/entry-detail.js?v=20260716e" defer></script>
+  <script src="js/views/rooms.js?v=20260722" defer></script>
 
   <!-- Boot -->
-  <script src="js/app.js?v=20260714" defer></script>
+  <script src="js/app.js?v=20260722" defer></script>
 </body>
 </html>

@@ -22,6 +22,7 @@ const Router = (() => {
     'prisoner-letters':       'prisoner_correspondence',
     'prisoner-letter-detail': 'prisoner_correspondence',
     'admin':                  'administration',
+    'rooms':                  'rooms',
   };
 
   // Mirrors the exact Layer 2 check shell.js uses to decide whether to
