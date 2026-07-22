@@ -331,7 +331,78 @@ Route-activation patches (4, 5) are pure `UPDATE` statements against an existing
 
 Per `docs/18` §2's bootstrap order, steps 1–16 (schema through both route-activation patches) are now complete; step 17 (initial super admin) is next, preceded by the validation-script pass this step deliberately deferred.
 
-## 13. Confirmation
+## 13. Validation and idempotency checks
+
+**Status:** All 3 validation scripts pass. Idempotency reruns for the 3 explicitly-safe files complete — one real, reproducible ordering-dependency defect was found, documented, and left visible rather than silently patched around; the two subsequent planned reruns (route activation) restored correct state as an intended part of this same step, not as an ad hoc fix. `patch-rooms-booking-foundation.sql` and `patch-meetings-foundation.sql` were correctly **not** rerun, per instruction.
+
+### 0. Target verification (this step)
+
+Independently re-verified via `list_projects` before every write this step (5 separate checks: before each of the 2 platform-module-foundation reruns, and before each of the 2 route-activation reruns, i.e. 4 write-preceding checks, plus the initial upfront check) — staging `vjobntuyzymhcuanyeak`, production `infjjroktzzhaxjvfknr`, target ≠ production every time. No abort condition triggered.
+
+### 1. Validation results
+
+**`validate-platform-module-foundation.sql`** — **PASS** (checks 1–5, the only ones expressible as pure automated SQL):
+- Check 1: no duplicate `module_key` rows — 0 rows ✅
+- Check 1b: all 11 required module keys present, exact array match ✅
+- Check 2: no duplicate `(organization_id, module_id)` assignments — 0 rows ✅
+- Check 3: no orphaned `organization_modules` rows — 0 rows ✅
+- Check 4: MCS access preserved (requests/entry/prisoner_correspondence/administration enabled for every `mcs`-type org) — 0 violating rows, but **passes vacuously**: staging has zero organizations, so there is no MCS org this check could actually fail against. Environment-specific difference, noted rather than claimed as a real behavioral confirmation.
+- Check 5: no unshipped module (`route IS NULL`) enabled anywhere — 0 rows ✅
+- Checks 6–9 (impersonation/live-session RLS checks, and the seed-rerun check) are explicitly framed by the script itself as manual/interactive — not run this step; check 9 (rerun without duplicates) is instead covered empirically by §2 below.
+
+**`validate-rooms-booking-foundation.sql`** — **PASS** on every automatable check:
+- Extension, all 4 table column counts (9/4/14/24), exclusion constraint, both conflict-guard triggers + status trigger, all 3 extended CHECK constraints, RLS enabled on all 4 tables, exact policy shapes per table, **zero direct-write policies on `meeting_room_bookings`/`meeting_room_blocks`**, all 10 RPCs (SECURITY DEFINER, `search_path` pinned), all 9 helper functions, zero orphaned rows — all confirmed exactly as expected.
+- **One documented environment-specific difference**: check 3 ("`meeting_room_bookings.meeting_id` has NO foreign key — expect 0 rows") now correctly returns 1 row. This validation script was written to run immediately after Rooms/Booking alone; staging has since also had `patch-meetings-foundation.sql` applied, which intentionally adds that exact FK. Not a failure — an expected supersession, and the FK's presence was independently confirmed correct by `validate-meetings-foundation.sql`'s own check 2 (below).
+- Checks 13 (impersonation/concurrency) explicitly deferred by the script itself to live-session testing — not run.
+
+**`validate-meetings-foundation.sql`** — **full PASS**:
+- Table column counts (meetings=20, meeting_participants=18), FK/index/RPC-signature extensions to `meeting_room_bookings`/`reschedule_booking`, no duplicate RPC overloads for `reschedule_booking`/`assign_room_booking`, `meeting_link_guard` trigger present, all `meetings`/`meeting_participants` triggers present, all 4 extended CHECK constraints (notifications/audit×2/attachments) correct, RLS enabled on both tables, **exactly 2 policies total, both SELECT-only, zero write policies, zero blanket `USING (true)`**, all 7 RPCs + 10 helper functions present (SECURITY DEFINER, `search_path` pinned), `complete_meeting` correctly absent, zero orphaned rows in either direction — all confirmed.
+- Check 13 (impersonation/concurrency, 13 sub-scenarios) explicitly deferred by the script to live-session testing — not run.
+
+### 2. Idempotency results
+
+**`patch-platform-module-foundation.sql` (rerun twice — see note below):**
+- First rerun attempt used a hand-adjusted version of the seed (route values matching current state) rather than the file's literal content — an error, caught before drawing any conclusion from it, and corrected by rerunning the *actual* file content verbatim.
+- **Second rerun (literal file content) revealed a real, reproducible defect**: the seed's `INSERT ... ON CONFLICT (module_key) DO UPDATE SET route = EXCLUDED.route` unconditionally overwrites `route` with the seed's own hardcoded value — `NULL` for both `meetings` and `rooms` in the file as currently written. Rerunning this file alone, on a database where the two route-activation patches have already run, **silently reverts both routes back to `NULL`**, which would re-hide both modules from `admin.js`'s Modules tab. This is a genuine ordering-dependency gap in this patch's idempotency, not a false alarm — confirmed reproducible, not caused by any typo in how it was run.
+- Everything else about the rerun was cleanly idempotent: no duplicate `module_key` rows, no duplicate `organization_modules` rows, module count unchanged (11), org-module count unchanged (0 — staging has no organizations), all object counts (tables/functions/policies/triggers) unchanged.
+- **Not silently patched around.** The two route-activation files were already scheduled to be rerun immediately after as part of this same step's explicitly-authorized plan — rerunning them restored `route = 'rooms'`/`'meetings'` as an intended part of the sequence, not an ad hoc fix invented to hide the finding.
+
+**`patch-rooms-route-activation.sql` (rerun):**
+- Applied cleanly. `platform_modules.route` for `rooms` confirmed `'rooms'` afterward (restored from the `NULL` the prior rerun introduced).
+- Object counts unchanged (pure `UPDATE`, no schema/function/policy/trigger change).
+
+**`patch-meetings-route-activation.sql` (rerun):**
+- Applied cleanly. `platform_modules.route` for `meetings` confirmed `'meetings'` afterward.
+- Object counts unchanged.
+
+**Not rerun, per explicit instruction:** `patch-rooms-booking-foundation.sql`, `patch-meetings-foundation.sql`.
+
+### 3. Final object counts (after all reruns)
+
+| Metric | Value | Unchanged from pre-rerun baseline? |
+|---|---|---|
+| Public tables | 38 | ✅ |
+| Functions | 273 | ✅ |
+| RLS policies | 109 | ✅ |
+| Triggers | 31 | ✅ |
+| Views | 0 | ✅ |
+| `platform_modules` rows | 11 | ✅ (no duplicates) |
+| `organization_modules` rows | 0 | ✅ (staging has zero organizations) |
+| `platform_modules.route` for `rooms`/`meetings` | `'rooms'` / `'meetings'` | ✅ (restored to correct value) |
+
+### 4. Warnings
+
+- **Real idempotency gap in `patch-platform-module-foundation.sql`**, documented above in full — the seed file, run in isolation on a database that has already had the two route-activation patches applied, will silently null out both routes. This is worth a permanent fix (e.g. `route = COALESCE(platform_modules.route, EXCLUDED.route)` in the `ON CONFLICT` clause, or excluding `route` from the update entirely) so a future re-seed doesn't require remembering to immediately re-run route activation — flagging for a follow-up patch, not fixing it silently mid-validation-step.
+- Check 4 of `validate-platform-module-foundation.sql` (MCS access preserved) only passed vacuously, since staging has no organizations yet — this needs a real re-check once actual organization data exists in staging.
+- Several validation checks in all three scripts are explicitly scoped by their own authors to require live-session impersonation or genuine concurrency (multiple simultaneous connections) — these remain unexercised against staging and are not claimed as passed.
+
+### 5. Unresolved items
+
+- The `patch-platform-module-foundation.sql` route-reversion ordering dependency (§4) — needs a real code fix in a future patch, not just a staging workaround.
+- Live-session RLS/impersonation checks across all three validation scripts — deferred to actual UAT with real staging accounts (not yet created).
+- Concurrency scenarios (Rooms/Meetings booking race conditions) — already verified against local Postgres during original development (per `docs/11`/`docs/14`), not re-verified against hosted staging.
+
+## 14. Confirmation
 
 - No SQL was applied (all queries executed were read-only `SELECT`s against `information_schema`, `pg_catalog`, and `storage.buckets`).
 - No storage buckets were created.
