@@ -1033,8 +1033,9 @@ const MeetingsView = {
     this._openModal(`
       <h3>${this._escapeHtml(meeting.title)}</h3>
       ${locked ? `<div class="alert alert-warning" style="margin-bottom:12px;"><i class="ti ti-lock"></i> This meeting is locked. Only its creator, an organization administrator (within their own organization), or a super administrator can make changes.</div>` : ''}
+      ${meeting.status === 'draft' ? `<div class="alert alert-info" style="margin-bottom:12px;"><i class="ti ti-pencil"></i> This is a draft. It is not visible to participants and generates no notifications, RSVPs, attendance, minutes, or locking until you change its status to Scheduled via Edit.</div>` : ''}
       ${meeting.series_id ? this._renderSeriesBanner(meeting) : ''}
-      ${myParticipant ? this._renderMyRsvp(myParticipant, meeting) : ''}
+      ${myParticipant && meeting.status !== 'draft' ? this._renderMyRsvp(myParticipant, meeting) : ''}
       <div class="detail-grid">
         <div><strong>Status</strong><div>${this._capitalize(meeting.status)}</div></div>
         <div><strong>Effective Status</strong><div>${this._statusLabel(meeting)}</div></div>
@@ -1082,7 +1083,8 @@ const MeetingsView = {
         <button type="button" class="btn btn-secondary" data-close-modal>Close</button>
         ${this._renderLockControls(meeting, canOverrideLock)}
         ${canEdit ? `<button type="button" class="btn btn-secondary" id="detail-edit-btn">Edit</button>` : ''}
-        ${canCancel ? `<button type="button" class="btn" style="background:var(--color-error-bg); color:var(--color-error-dark);" id="detail-cancel-btn">Cancel Meeting</button>` : ''}
+        ${canCancel && meeting.status !== 'draft' ? `<button type="button" class="btn" style="background:var(--color-error-bg); color:var(--color-error-dark);" id="detail-cancel-btn">Cancel Meeting</button>` : ''}
+        ${canManageEffective && meeting.status === 'draft' ? `<button type="button" class="btn" style="background:var(--color-error-bg); color:var(--color-error-dark);" id="detail-delete-draft-btn">Delete Draft</button>` : ''}
       </div>
     `, { large: true });
 
@@ -1095,6 +1097,10 @@ const MeetingsView = {
     document.getElementById('detail-cancel-btn')?.addEventListener('click', () => {
       this._closeModal();
       this._openCancelMeetingModal(meeting, booking);
+    });
+    document.getElementById('detail-delete-draft-btn')?.addEventListener('click', () => {
+      this._closeModal();
+      this._openDeleteDraftModal(meeting);
     });
     document.getElementById('lock-meeting-btn')?.addEventListener('click', () => {
       this._closeModal();
@@ -1173,7 +1179,10 @@ const MeetingsView = {
   // only ever sees an "Override Lock" affordance to unlock an already
   // -locked meeting; they can never lock someone else's meeting.
   _renderLockControls(meeting, canOverrideLock) {
-    if (meeting.status === 'cancelled') return '';
+    // A draft can never be locked (lock_meeting() rejects it server-
+    // side, supabase/patch-meetings-drafts.sql) — no lock affordance
+    // is offered for one.
+    if (meeting.status === 'cancelled' || meeting.status === 'draft') return '';
     if (this._isCreator(meeting)) {
       return meeting.is_locked
         ? `<button type="button" class="btn btn-secondary" id="unlock-meeting-btn"><i class="ti ti-lock-open"></i> Unlock Meeting</button>`
@@ -1308,6 +1317,10 @@ const MeetingsView = {
   // file's established simplification, see _canManage's own comment)
   // so this._isAdmin needs no additional org comparison here.
   _renderMinutesPanel(meeting, canManage, canOverrideLock) {
+    // Minutes describe what happened at a meeting — a draft hasn't been
+    // confirmed to happen at all yet (update_minutes/finalize_minutes
+    // both reject a draft server-side, supabase/patch-meetings-drafts.sql).
+    if (meeting.status === 'draft') return '';
     const notCancelled = meeting.status !== 'cancelled';
     const notBlockedByLock = !meeting.is_locked || canOverrideLock;
     const canEditNow = notCancelled && notBlockedByLock && (meeting.minutes_finalized ? this._isAdmin : canManage);
@@ -1486,6 +1499,10 @@ const MeetingsView = {
   },
 
   _renderParticipants(participants, meeting, canManage) {
+    // Attendance cannot be marked on a draft (mark_attendance() rejects
+    // it server-side, supabase/patch-meetings-drafts.sql) — the button
+    // is withheld for one; participants can still be added/removed.
+    const canMarkAttendance = canManage && meeting.status !== 'draft';
     if (participants.length === 0) {
       return `<div class="structure-empty">No participants yet.</div>${canManage ? `<button type="button" class="btn btn-secondary btn-xs" id="add-participant-btn" style="margin-top:6px;"><i class="ti ti-plus"></i> Add Participant</button>` : ''}`;
     }
@@ -1500,7 +1517,7 @@ const MeetingsView = {
             <td data-label="Invitation">${this._capitalize(p.invitation_status)}${p.invitation_note ? `<div class="structure-empty" style="font-size:12px;">${this._escapeHtml(p.invitation_note)}</div>` : ''}</td>
             <td data-label="Attendance">${this._capitalize(p.attendance_status)}${p.attendance_note ? `<div class="structure-empty" style="font-size:12px;">${this._escapeHtml(p.attendance_note)}</div>` : ''}</td>
             ${canManage ? `<td data-label="Actions" style="white-space:nowrap;">
-              <button type="button" class="btn btn-secondary btn-xs" data-mark-attendance="${p.id}">Attendance</button>
+              ${canMarkAttendance ? `<button type="button" class="btn btn-secondary btn-xs" data-mark-attendance="${p.id}">Attendance</button>` : ''}
               ${p.is_organizer ? '' : `<button type="button" class="btn btn-secondary btn-xs" data-remove-participant="${p.id}" style="margin-left:4px;">Remove</button>`}
             </td>` : ''}
           </tr>
@@ -1614,6 +1631,34 @@ const MeetingsView = {
         await this._renderTab();
       } catch (err) {
         const errEl = form.querySelector('.modal-error');
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
+  // Draft-only hard delete (docs/22 §3.3 Q4) — a draft was never
+  // announced to anyone, so it is removed outright rather than
+  // soft-cancelled; delete_draft_meeting() itself rejects a non-draft
+  // meeting, so this action is never offered once a meeting is
+  // scheduled (see the detail modal's own status check above).
+  _openDeleteDraftModal(meeting) {
+    this._openModal(`
+      <h3>Delete Draft</h3>
+      <p>This will permanently delete "${this._escapeHtml(meeting.title)}". This cannot be undone. Any room reservation held for it will be released.</p>
+      <div class="modal-error alert alert-error hidden"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" data-close-modal>Keep Draft</button>
+        <button type="button" class="btn" style="background:var(--color-error-bg); color:var(--color-error-dark);" id="confirm-delete-draft-btn">Delete Draft</button>
+      </div>
+    `);
+    document.getElementById('confirm-delete-draft-btn').addEventListener('click', async () => {
+      try {
+        await MeetingsAPI.deleteDraftMeeting(meeting.id);
+        this._closeModal();
+        await this._renderTab();
+      } catch (err) {
+        const errEl = document.querySelector('#modal-root .modal-error');
         errEl.textContent = err.message;
         errEl.classList.remove('hidden');
       }

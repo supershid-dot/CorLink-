@@ -186,6 +186,17 @@ const MeetingsAPI = (() => {
       if (error) throw error;
     },
 
+    // Draft-only hard delete (supabase/patch-meetings-drafts.sql) —
+    // the RPC itself rejects a non-draft meeting; use cancelMeeting for
+    // one that's already scheduled. Not a variant of cancelMeeting: a
+    // draft was never announced to anyone, so it is removed outright
+    // rather than soft-cancelled.
+    async deleteDraftMeeting(meetingId) {
+      const db = getSupabase();
+      const { error } = await db.rpc('delete_draft_meeting', { p_meeting_id: meetingId });
+      if (error) throw error;
+    },
+
     async addParticipant(meetingId, {
       userId = null, externalName = null, externalEmail = null, externalPhone = null,
       externalOrganizationName = null, participantRole = 'attendee', notes = null,
