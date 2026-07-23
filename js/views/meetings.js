@@ -101,6 +101,7 @@ const MeetingsView = {
             </div>
             <div class="field-row" style="gap:8px;">
               <button type="button" class="icon-btn" id="meetings-refresh-btn" title="Refresh"><i class="ti ti-refresh"></i></button>
+              <button type="button" class="btn btn-secondary btn-sm" id="new-recurring-meeting-btn"><i class="ti ti-repeat"></i> Recurring Series</button>
               <button type="button" class="btn btn-primary btn-sm" id="new-meeting-btn"><i class="ti ti-plus"></i> New Meeting</button>
             </div>
           </div>
@@ -130,6 +131,7 @@ const MeetingsView = {
     });
     this._highlightTabs();
     document.getElementById('new-meeting-btn').addEventListener('click', () => this._openMeetingFormModal());
+    document.getElementById('new-recurring-meeting-btn').addEventListener('click', () => this._openRecurringMeetingModal());
     document.getElementById('meetings-refresh-btn').addEventListener('click', () => this._renderTab());
   },
 
@@ -483,7 +485,7 @@ const MeetingsView = {
     return `
       <tr>
         <td data-label="Title">
-          <div>${this._escapeHtml(m.title)}</div>
+          <div>${this._escapeHtml(m.title)} ${m.series_id ? `<i class="ti ti-repeat" title="Part of a recurring series"></i>` : ''}</div>
           <div class="structure-empty">by ${this._escapeHtml(m.created_by_user?.full_name || '')}</div>
         </td>
         <td data-label="Type">${this._capitalize(m.meeting_type)}</td>
@@ -726,6 +728,232 @@ const MeetingsView = {
     });
   },
 
+  // ── Create a recurring series (docs/22/23 Phase F, Phase 1) ─────
+  // Creates a meeting_series template row plus one occurrence per
+  // generated date, all in one server-side transaction
+  // (create_recurring_meeting) — no edit path exists here (docs/23:
+  // series-wide editing is Phase 2), so this modal is create-only,
+  // unlike _openMeetingFormModal which doubles as both create and edit.
+  async _openRecurringMeetingModal() {
+    let rooms = [], groups = [];
+    try {
+      const fetches = [MeetingsAPI.fetchMeetingGroups(this._orgId)];
+      if (this._roomsEnabled) fetches.push(RoomsAPI.fetchRooms(this._orgId));
+      const results = await Promise.all(fetches);
+      groups = results[0] || [];
+      if (this._roomsEnabled) rooms = (results[1] || []).filter(r => r.is_active);
+    } catch (err) {
+      console.error('CorLink: failed to load rooms/groups for recurring series', err);
+    }
+
+    const { start: defStart, end: defEnd } = this._defaultMeetingTimes();
+    const defDate = defStart.slice(0, 10);
+    const defStartTime = defStart.slice(11, 16);
+    const defEndTime = defEnd.slice(11, 16);
+
+    this._openModal(`
+      <h3>New Recurring Series</h3>
+      <p class="field-hint">Creates one meeting per occurrence, all sharing the same title, type, and time-of-day. Each occurrence can later be edited, cancelled, or locked individually without affecting the rest of the series.</p>
+      <form id="recurring-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Title</label>
+          <input class="field-input-plain" name="title" required />
+        </div>
+        <div class="field-group">
+          <label class="field-label">Description (optional)</label>
+          <textarea class="field-input-plain" name="description" rows="2"></textarea>
+        </div>
+        <div class="field-row">
+          <div class="field-group">
+            <label class="field-label">Meeting Type</label>
+            <select class="field-select" name="meetingType">
+              ${['general', 'interview', 'training', 'operational', 'administrative', 'other'].map(t =>
+                `<option value="${t}">${this._capitalize(t)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Visibility</label>
+            <select class="field-select" name="visibility">
+              ${['private', 'participants', 'organization'].map(v =>
+                `<option value="${v}" ${v === 'participants' ? 'selected' : ''}>${this._capitalize(v)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field-group">
+            <label class="field-label">Recurrence</label>
+            <select class="field-select" name="recurrencePattern">
+              <option value="weekly">Weekly</option>
+              <option value="biweekly">Bi-weekly</option>
+              <option value="monthly">Monthly</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Every</label>
+            <input class="field-input-plain" type="number" name="intervalCount" min="1" value="1" required />
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field-group">
+            <label class="field-label">Series Start Date</label>
+            <input class="field-input-plain" type="date" name="seriesStartDate" required value="${defDate}" />
+          </div>
+          <div class="field-group">
+            <label class="field-label">Series End Date</label>
+            <input class="field-input-plain" type="date" name="seriesEndDate" required value="${defDate}" />
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field-group">
+            <label class="field-label">Start Time</label>
+            <input class="field-input-plain" type="time" name="startTime" required value="${defStartTime}" />
+          </div>
+          <div class="field-group">
+            <label class="field-label">End Time</label>
+            <input class="field-input-plain" type="time" name="endTime" required value="${defEndTime}" />
+          </div>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Timezone</label>
+          <select class="field-select" name="timezone">
+            ${['Indian/Maldives', 'Asia/Colombo', 'Asia/Kolkata', 'Asia/Dubai', 'UTC'].map(tz =>
+              `<option value="${tz}" ${tz === 'Indian/Maldives' ? 'selected' : ''}>${tz}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Location</label>
+          <select class="field-select" name="locationMode" id="recurring-location-mode">
+            <option value="">Not decided yet</option>
+            ${this._roomsEnabled ? `<option value="room">Room</option>` : ''}
+            <option value="external">External location</option>
+            <option value="virtual">Virtual</option>
+          </select>
+        </div>
+        ${this._roomsEnabled ? `
+          <div class="field-group hidden" id="recurring-room-group">
+            <label class="field-label">Room</label>
+            <select class="field-select" name="roomId">
+              <option value="">Select a room…</option>
+              ${rooms.map(r => `<option value="${r.id}">${this._escapeHtml(r.name)}</option>`).join('')}
+            </select>
+            <p class="field-hint">If any occurrence's time slot conflicts with an existing booking, the entire series is rejected — nothing is created.</p>
+          </div>
+        ` : ''}
+        <div class="field-group hidden" id="recurring-external-group">
+          <label class="field-label">External Location</label>
+          <input class="field-input-plain" name="externalLocation" />
+        </div>
+        <div class="field-group hidden" id="recurring-virtual-group">
+          <label class="field-label">Virtual Link (https:// only)</label>
+          <input class="field-input-plain" type="url" name="virtualLink" placeholder="https://…" />
+        </div>
+        <div class="field-group">
+          <label class="field-label">Invite a Group (optional)</label>
+          <select class="field-select" name="groupId">
+            <option value="">No group — I'll add participants after creating</option>
+            ${groups.map(g => `<option value="${g.id}">${this._escapeHtml(g.name)}</option>`).join('')}
+          </select>
+          <p class="field-hint">The group's current members are added to every occurrence at creation time. Editing the group later never changes occurrences already created.</p>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary" id="recurring-form-submit">Create Series</button>
+        </div>
+      </form>
+    `, { medium: true });
+
+    const form = document.getElementById('recurring-form');
+    const errEl = form.querySelector('.modal-error');
+    const submitBtn = document.getElementById('recurring-form-submit');
+    const locSelect = document.getElementById('recurring-location-mode');
+    const roomGroup = document.getElementById('recurring-room-group');
+    const extGroup = document.getElementById('recurring-external-group');
+    const virtGroup = document.getElementById('recurring-virtual-group');
+
+    const syncLocationFields = () => {
+      if (roomGroup) roomGroup.classList.toggle('hidden', locSelect.value !== 'room');
+      extGroup.classList.toggle('hidden', locSelect.value !== 'external');
+      virtGroup.classList.toggle('hidden', locSelect.value !== 'virtual');
+    };
+    locSelect.addEventListener('change', syncLocationFields);
+    syncLocationFields();
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errEl.classList.add('hidden');
+      const fd = new FormData(form);
+      const locationMode = fd.get('locationMode') || null;
+      const externalLocation = fd.get('externalLocation') || null;
+      const virtualLink = fd.get('virtualLink') || null;
+      const roomId = fd.get('roomId') || null;
+
+      if (fd.get('seriesEndDate') < fd.get('seriesStartDate')) {
+        errEl.textContent = 'Series end date must not be before the start date.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (fd.get('endTime') <= fd.get('startTime')) {
+        errEl.textContent = 'End time must be after the start time.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (locationMode === 'room' && !roomId) {
+        errEl.textContent = 'Select a room, or choose a different location.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (locationMode === 'external' && !externalLocation) {
+        errEl.textContent = 'External location is required for an external series.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (locationMode === 'virtual' && (!virtualLink || !/^https:\/\//.test(virtualLink))) {
+        errEl.textContent = 'A valid https:// virtual link is required for a virtual series.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Creating…';
+      try {
+        const occurrences = await MeetingsAPI.createRecurringMeeting({
+          title: fd.get('title'),
+          description: fd.get('description') || null,
+          meetingType: fd.get('meetingType'),
+          visibility: fd.get('visibility'),
+          recurrencePattern: fd.get('recurrencePattern'),
+          intervalCount: parseInt(fd.get('intervalCount'), 10) || 1,
+          seriesStartDate: fd.get('seriesStartDate'),
+          seriesEndDate: fd.get('seriesEndDate'),
+          startTime: fd.get('startTime'),
+          endTime: fd.get('endTime'),
+          timezone: fd.get('timezone'),
+          locationMode,
+          externalLocation: locationMode === 'external' ? externalLocation : null,
+          virtualLink: locationMode === 'virtual' ? virtualLink : null,
+          roomId: locationMode === 'room' ? roomId : null,
+          groupId: fd.get('groupId') || null,
+        });
+        this._closeModal();
+        await this._renderTab();
+        if (occurrences.length > 0) {
+          try {
+            const first = await MeetingsAPI.fetchMeeting(occurrences[0].meeting_id);
+            this._openMeetingDetailModal(first);
+          } catch (err) {
+            console.error('CorLink: series created but failed to open its first occurrence', err);
+          }
+        }
+      } catch (err) {
+        errEl.textContent = err.message || 'Failed to create the recurring series.';
+        errEl.classList.remove('hidden');
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Create Series';
+      }
+    });
+  },
+
   // ── Meeting detail modal ─────────────────────────────────────────
   async _openMeetingDetailModal(meeting) {
     let participants = [], booking = null, attachments = [];
@@ -805,6 +1033,7 @@ const MeetingsView = {
     this._openModal(`
       <h3>${this._escapeHtml(meeting.title)}</h3>
       ${locked ? `<div class="alert alert-warning" style="margin-bottom:12px;"><i class="ti ti-lock"></i> This meeting is locked. Only its creator, an organization administrator (within their own organization), or a super administrator can make changes.</div>` : ''}
+      ${meeting.series_id ? this._renderSeriesBanner(meeting) : ''}
       ${myParticipant ? this._renderMyRsvp(myParticipant, meeting) : ''}
       <div class="detail-grid">
         <div><strong>Status</strong><div>${this._capitalize(meeting.status)}</div></div>
@@ -874,6 +1103,66 @@ const MeetingsView = {
     document.getElementById('unlock-meeting-btn')?.addEventListener('click', () => {
       this._closeModal();
       this._openUnlockMeetingModal(meeting);
+    });
+    document.getElementById('view-series-btn')?.addEventListener('click', () => {
+      this._openSeriesOccurrencesModal(meeting);
+    });
+  },
+
+  // ── Recurring series indicator (docs/22/23 Phase F, Phase 1) ─────
+  // Purely informational — every management action on this occurrence
+  // still goes through the same, unmodified create_meeting/
+  // update_meeting/cancel_meeting/etc. RPCs as any non-recurring
+  // meeting; nothing here grants a different permission. series_detached
+  // (stamped unconditionally by update_meeting() the first time this
+  // specific occurrence is edited) is shown as a note, not a warning —
+  // detaching is expected, ordinary behavior, not an error state.
+  _renderSeriesBanner(meeting) {
+    const template = meeting.series?.template_title;
+    const pattern = meeting.series?.recurrence_pattern;
+    return `
+      <div class="alert alert-info" style="margin-bottom:12px; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+        <span><i class="ti ti-repeat"></i> Part of the "${this._escapeHtml(template || 'recurring')}" ${pattern ? this._capitalize(pattern) : ''} series${meeting.series_detached ? ' — this occurrence has been edited independently and will not receive future series-wide changes' : ''}.</span>
+        <button type="button" class="btn btn-secondary btn-xs" id="view-series-btn">View All Occurrences</button>
+      </div>
+    `;
+  },
+
+  async _openSeriesOccurrencesModal(meeting) {
+    let occurrences = [];
+    try { occurrences = await MeetingsAPI.fetchSeriesOccurrences(meeting.series_id); }
+    catch (err) {
+      console.error('CorLink: failed to load series occurrences', err);
+    }
+    this._openModal(`
+      <h3>Series: ${this._escapeHtml(meeting.series?.template_title || '')}</h3>
+      <p class="field-hint">Each occurrence is its own meeting — editing, cancelling, locking, RSVPs, attendance, and minutes all apply to a single occurrence only.</p>
+      ${occurrences.length === 0
+        ? `<p class="field-hint">No occurrences found.</p>`
+        : `<div class="panel"><table class="data-table">
+            <thead><tr><th>Date</th><th>Status</th><th></th></tr></thead>
+            <tbody>${occurrences.map(o => `
+              <tr${o.id === meeting.id ? ' style="font-weight:600;"' : ''}>
+                <td data-label="Date">${new Date(o.start_at).toLocaleDateString()} ${this._timeRange(o.start_at, o.end_at)}${o.id === meeting.id ? ' <span class="structure-empty">(this occurrence)</span>' : ''}${o.series_detached ? ' <i class="ti ti-pencil" title="Edited independently"></i>' : ''}</td>
+                <td data-label="Status">${this._statusLabel(o)}</td>
+                <td data-label="Actions">${o.id === meeting.id ? '' : `<button type="button" class="btn btn-secondary btn-xs" data-view-occurrence="${o.id}">View</button>`}</td>
+              </tr>
+            `).join('')}</tbody>
+          </table></div>`}
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" data-close-modal>Close</button>
+      </div>
+    `, { medium: true });
+    document.querySelectorAll('[data-view-occurrence]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          const occ = await MeetingsAPI.fetchMeeting(btn.dataset.viewOccurrence);
+          this._closeModal();
+          this._openMeetingDetailModal(occ);
+        } catch (err) {
+          console.error('CorLink: failed to open occurrence', err);
+        }
+      });
     });
   },
 

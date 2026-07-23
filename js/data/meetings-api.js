@@ -31,7 +31,8 @@ const MeetingsAPI = (() => {
     created_by_user:users!meetings_created_by_fkey(id, full_name, service_number),
     updated_by_user:users!meetings_updated_by_fkey(full_name),
     cancelled_by_user:users!meetings_cancelled_by_fkey(full_name),
-    bookings:meeting_room_bookings!meeting_room_bookings_meeting_id_fkey(id, room_id, status, room:meeting_rooms!meeting_room_bookings_room_id_fkey(id, name))
+    bookings:meeting_room_bookings!meeting_room_bookings_meeting_id_fkey(id, room_id, status, room:meeting_rooms!meeting_room_bookings_room_id_fkey(id, name)),
+    series:meeting_series!meetings_series_id_fkey(id, template_title, recurrence_pattern, series_start_date, series_end_date)
   `;
 
   const LINKED_BOOKING_SELECT = `
@@ -399,6 +400,57 @@ const MeetingsAPI = (() => {
       });
       if (error) throw error;
       return data;
+    },
+
+    // ── Recurring Meetings (docs/22/23 Phase F, Phase 1) ────────────
+    // Creates a meeting_series row plus one meetings row per generated
+    // occurrence, all inside one server-side transaction (supabase/
+    // patch-meetings-recurring.sql) — a room-booking or cross-org
+    // conflict on ANY occurrence rolls back the entire series, nothing
+    // partial is ever left behind. Returns one {series_id, meeting_id,
+    // occurrence_date} row per occurrence created.
+    async createRecurringMeeting({
+      title, seriesStartDate, seriesEndDate, startTime, endTime, recurrencePattern,
+      description = null, meetingType = 'general', visibility = 'participants',
+      timezone = 'Indian/Maldives', locationMode = null, externalLocation = null,
+      virtualLink = null, roomId = null, groupId = null, intervalCount = 1,
+    }) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('create_recurring_meeting', {
+        p_title: title,
+        p_series_start_date: seriesStartDate,
+        p_series_end_date: seriesEndDate,
+        p_start_time: startTime,
+        p_end_time: endTime,
+        p_recurrence_pattern: recurrencePattern,
+        p_description: description || null,
+        p_meeting_type: meetingType,
+        p_visibility: visibility,
+        p_timezone: timezone,
+        p_location_mode: locationMode || null,
+        p_external_location: externalLocation || null,
+        p_virtual_link: virtualLink || null,
+        p_room_id: roomId || null,
+        p_group_id: groupId || null,
+        p_interval_count: intervalCount,
+      });
+      if (error) throw error;
+      return data || [];
+    },
+
+    // Every occurrence belonging to one series (including cancelled
+    // ones — meetings.js decides how to label those), for a "other
+    // occurrences in this series" panel on the meeting detail view.
+    // Same MEETING_SELECT as every other meeting read; RLS (not this
+    // query) is what actually scopes visibility.
+    async fetchSeriesOccurrences(seriesId) {
+      const db = getSupabase();
+      const { data, error } = await db.from('meetings')
+        .select(MEETING_SELECT)
+        .eq('series_id', seriesId)
+        .order('series_occurrence_date', { ascending: true });
+      if (error) throw error;
+      return data || [];
     },
   };
 })();
