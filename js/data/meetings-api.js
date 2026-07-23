@@ -276,6 +276,28 @@ const MeetingsAPI = (() => {
       if (error) throw error;
     },
 
+    // Personal notes — private, own-row only, never returned by
+    // fetchMeetingParticipants()/meeting_participant_list(). Deliberately
+    // NOT blocked by meeting locking (supabase/patch-meetings-personal-
+    // notes.sql): a private note is a personal act, not a management
+    // action, the same carve-out already established for RSVP.
+    async fetchMyNotes(participantId) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('get_my_notes', { p_participant_id: participantId });
+      if (error) throw error;
+      return data || null;
+    },
+
+    // p_notes = null or blank clears the note — same convention as
+    // updateMinutes.
+    async updateMyNotes(participantId, notes) {
+      const db = getSupabase();
+      const { error } = await db.rpc('update_my_notes', {
+        p_participant_id: participantId, p_notes: notes || null,
+      });
+      if (error) throw error;
+    },
+
     // Delegates to the trusted booking layer server-side (create_room_booking
     // or submit_booking_request) — never a raw insert, and always the
     // meeting's own start/end/timezone (docs/12 §10). No p_start_at/

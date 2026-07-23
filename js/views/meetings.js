@@ -556,10 +556,26 @@ const MeetingsView = {
         this._orgUserNames = {};
       }
     }
-    this._renderMeetingDetailModal(meeting, participants, booking, attachments);
+    // Personal notes (docs/22/23 Phase B) are fetched through their
+    // own dedicated own-row RPC — never included in the participants
+    // list above, by design (supabase/patch-meetings-personal-notes.sql).
+    // Only attempted when the viewer has their own participant row;
+    // the error path here never logs err.message content beyond what
+    // Supabase itself returns (an authorization message, never note
+    // text — get_my_notes only ever returns note text on success).
+    let myNotes = null;
+    const myParticipantForNotes = participants.find(p => p.user_id === this._user.id);
+    if (myParticipantForNotes) {
+      try {
+        myNotes = await MeetingsAPI.fetchMyNotes(myParticipantForNotes.id);
+      } catch (err) {
+        console.error('CorLink: failed to load personal notes', err);
+      }
+    }
+    this._renderMeetingDetailModal(meeting, participants, booking, attachments, myNotes);
   },
 
-  _renderMeetingDetailModal(meeting, participants, booking, attachments) {
+  _renderMeetingDetailModal(meeting, participants, booking, attachments, myNotes = null) {
     const canManage = this._canManage(meeting);
     const canOverrideLock = this._canOverrideLock(meeting);
     const locked = meeting.is_locked;
@@ -634,6 +650,8 @@ const MeetingsView = {
 
       ${this._renderMinutesPanel(meeting, canManage, canOverrideLock)}
 
+      ${myParticipant ? this._renderMyNotesPanel(meeting, myNotes) : ''}
+
       <div class="modal-actions" style="margin-top:16px;">
         <button type="button" class="btn btn-secondary" data-close-modal>Close</button>
         ${this._renderLockControls(meeting, canOverrideLock)}
@@ -642,7 +660,7 @@ const MeetingsView = {
       </div>
     `, { large: true });
 
-    this._bindMeetingDetailModal(meeting, participants, booking, attachments, { canManageParticipants, canManageRoom });
+    this._bindMeetingDetailModal(meeting, participants, booking, attachments, { canManageParticipants, canManageRoom, myParticipant, myNotes });
 
     document.getElementById('detail-edit-btn')?.addEventListener('click', () => {
       this._closeModal();
@@ -879,6 +897,72 @@ const MeetingsView = {
     });
   },
 
+  // ── Personal notes (docs/22/23 Phase B) ──────────────────────────
+  // Private to the viewing participant — fetched via a dedicated
+  // own-row RPC (get_my_notes), never via meeting_participant_list()
+  // (supabase/patch-meetings-personal-notes.sql). Visible/editable
+  // only when the viewer has their own participant row on this
+  // meeting; not gated by canManage/canOverrideLock/is_locked at
+  // all — a personal note is the participant's own act, not a
+  // meeting-management action (this feature's explicit requirement,
+  // mirroring RSVP's identical carve-out). Only gated on the
+  // meeting's own cancelled status, matching update_my_notes()'s own
+  // server-side rule — reads always work regardless of status.
+  _renderMyNotesPanel(meeting, myNotes) {
+    const hasNotes = !!(myNotes && myNotes.trim() !== '');
+    const canEditNotes = meeting.status !== 'cancelled';
+    const dvClass = hasNotes ? RichEditor.dvClass(myNotes) : '';
+    return `
+      <div style="margin-top:12px;">
+        <label class="field-label">My Notes <span class="structure-empty">(private — visible only to you)</span></label>
+        <div style="margin-top:6px;">
+          ${hasNotes
+            ? `<div class="${dvClass}" style="white-space:pre-wrap;">${this._escapeHtml(myNotes)}</div>`
+            : `<div class="structure-empty">No personal notes yet.</div>`}
+          ${canEditNotes ? `<button type="button" class="btn btn-secondary btn-xs" id="edit-my-notes-btn" style="margin-top:8px;">${hasNotes ? 'Edit Notes' : 'Add Notes'}</button>` : ''}
+        </div>
+      </div>
+    `;
+  },
+
+  _openEditMyNotesModal(meeting, participant, currentNotes) {
+    const lang = RichEditor.isDivehi(currentNotes || '') ? 'dv' : 'en';
+    this._openModal(`
+      <h3>${currentNotes ? 'Edit' : 'Add'} My Notes</h3>
+      <p class="field-hint">Private — only you can see these notes.</p>
+      <form id="edit-my-notes-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Notes</label>
+          ${RichEditor.langToggleHtml('notesLanguage', lang)}
+          <textarea class="field-input-plain${lang === 'dv' ? ' field-divehi' : ''}" name="notes" rows="8" id="my-notes-textarea">${this._escapeHtml(currentNotes || '')}</textarea>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    `);
+    const form = document.getElementById('edit-my-notes-form');
+    const textarea = document.getElementById('my-notes-textarea');
+    const syncDir = (newLang) => textarea.classList.toggle('field-divehi', newLang === 'dv');
+    RichEditor.bindLangToggle(form, 'notesLanguage', syncDir);
+    RichEditor.bindAutoDetect(textarea, form, 'notesLanguage', syncDir);
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const notes = (new FormData(form).get('notes') || '').trim();
+      try {
+        await MeetingsAPI.updateMyNotes(participant.id, notes || null);
+        this._closeModal();
+        await this._openMeetingDetailModal(meeting);
+      } catch (err) {
+        const errEl = form.querySelector('.modal-error');
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
   _renderLocationDetail(meeting, booking) {
     if (meeting.location_mode === 'room') {
       if (!booking) return `<div class="structure-empty">No room assigned yet.</div>`;
@@ -958,7 +1042,7 @@ const MeetingsView = {
     return parts.join(' · ');
   },
 
-  async _bindMeetingDetailModal(meeting, participants, booking, attachments, { canManageParticipants, canManageRoom }) {
+  async _bindMeetingDetailModal(meeting, participants, booking, attachments, { canManageParticipants, canManageRoom, myNotes }) {
     const myParticipant = participants.find(p => p.user_id === this._user.id);
     document.getElementById('rsvp-accept-btn')?.addEventListener('click', () => {
       this._closeModal();
@@ -1009,6 +1093,10 @@ const MeetingsView = {
     document.getElementById('finalize-minutes-btn')?.addEventListener('click', () => {
       this._closeModal();
       this._openFinalizeMinutesModal(meeting);
+    });
+    document.getElementById('edit-my-notes-btn')?.addEventListener('click', () => {
+      this._closeModal();
+      this._openEditMyNotesModal(meeting, myParticipant, myNotes);
     });
   },
 
