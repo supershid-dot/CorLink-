@@ -607,7 +607,7 @@ const MeetingsView = {
           <div class="field-group">
             <label class="field-label">Status</label>
             <select class="field-select" name="status">
-              <option value="draft" ${(isEdit ? meeting.status : 'scheduled') === 'draft' ? 'selected' : ''}>Draft (not visible to participants yet)</option>
+              <option value="draft" ${(isEdit ? meeting.status : 'scheduled') === 'draft' ? 'selected' : ''}>Draft (not announced yet — added participants can still see it)</option>
               <option value="scheduled" ${(isEdit ? meeting.status : 'scheduled') === 'scheduled' ? 'selected' : ''}>Scheduled (publish now)</option>
             </select>
           </div>
@@ -1033,7 +1033,7 @@ const MeetingsView = {
     this._openModal(`
       <h3>${this._escapeHtml(meeting.title)}</h3>
       ${locked ? `<div class="alert alert-warning" style="margin-bottom:12px;"><i class="ti ti-lock"></i> This meeting is locked. Only its creator, an organization administrator (within their own organization), or a super administrator can make changes.</div>` : ''}
-      ${meeting.status === 'draft' ? `<div class="alert alert-info" style="margin-bottom:12px;"><i class="ti ti-pencil"></i> This is a draft. It is not visible to participants and generates no notifications, RSVPs, attendance, minutes, or locking until you change its status to Scheduled via Edit.</div>` : ''}
+      ${meeting.status === 'draft' ? `<div class="alert alert-info" style="margin-bottom:12px;"><i class="ti ti-pencil"></i> This is a draft. It is not automatically announced to participants — anyone already added can still see it, but no notifications are sent, and RSVPs, attendance, minutes, and locking stay unavailable until you change its status to Scheduled via Edit.</div>` : ''}
       ${meeting.series_id ? this._renderSeriesBanner(meeting) : ''}
       ${myParticipant && meeting.status !== 'draft' ? this._renderMyRsvp(myParticipant, meeting) : ''}
       <div class="detail-grid">
