@@ -553,9 +553,16 @@ const MeetingsView = {
     const canCancel = canManage && meeting.status !== 'cancelled';
     const canManageParticipants = canManage && meeting.status !== 'cancelled';
     const canManageRoom = canManage && meeting.status !== 'cancelled' && this._roomsEnabled;
+    // The caller's own active participant row, if any — drives the
+    // "Your RSVP" block below. A caller with no participant row (e.g.
+    // an org supervisor viewing via the 'organization' visibility
+    // grant without being invited) simply sees no RSVP block, same as
+    // MeetFlow's own "only participants get an RSVP" behavior.
+    const myParticipant = participants.find(p => p.user_id === this._user.id);
 
     this._openModal(`
       <h3>${this._escapeHtml(meeting.title)}</h3>
+      ${myParticipant ? this._renderMyRsvp(myParticipant, meeting) : ''}
       <div class="detail-grid">
         <div><strong>Status</strong><div>${this._capitalize(meeting.status)}</div></div>
         <div><strong>Effective Status</strong><div>${this._statusLabel(meeting)}</div></div>
@@ -614,6 +621,71 @@ const MeetingsView = {
     });
   },
 
+  // ── RSVP (Phase A, docs/22/23) ───────────────────────────────────
+  // 'not_required' participants get no respond controls at all — that
+  // status exists specifically for people who don't need to answer
+  // (mirrors the schema's own intent, docs/12 §8). Once a meeting is
+  // cancelled, respond_to_invitation itself rejects the call server-
+  // side (supabase/patch-meetings-rsvp.sql) — respondable here is UX
+  // only, matching this file's own stated convention that every
+  // client-side gate mirrors, never replaces, the real RPC-level rule.
+  _renderMyRsvp(participant, meeting) {
+    if (participant.invitation_status === 'not_required') return '';
+    const status = participant.invitation_status;
+    const respondable = meeting.status !== 'cancelled';
+    const badgeClass = status === 'accepted' ? 'badge-success' : status === 'declined' ? 'badge-error' : 'badge-warning';
+    return `
+      <div class="alert" style="margin-bottom:12px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+          <div>
+            <strong>Your RSVP</strong>
+            <span class="badge ${badgeClass}" style="margin-left:8px;">${this._capitalize(status)}</span>
+            ${participant.invitation_note ? `<div class="structure-empty" style="margin-top:4px;">${this._escapeHtml(participant.invitation_note)}</div>` : ''}
+          </div>
+          ${respondable ? `
+            <div class="field-row" style="gap:8px;">
+              ${status !== 'accepted' ? `<button type="button" class="btn btn-primary btn-xs" id="rsvp-accept-btn">Accept</button>` : ''}
+              ${status !== 'declined' ? `<button type="button" class="btn btn-secondary btn-xs" id="rsvp-decline-btn">Decline</button>` : ''}
+            </div>
+          ` : ''}
+        </div>
+      </div>
+    `;
+  },
+
+  _openRsvpModal(meeting, participant, response) {
+    const verb = response === 'accepted' ? 'Accept' : 'Decline';
+    this._openModal(`
+      <h3>${verb} Invitation</h3>
+      <p>${this._escapeHtml(meeting.title)}</p>
+      <form id="rsvp-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Note (optional)</label>
+          <textarea class="field-input-plain" name="note" rows="2">${this._escapeHtml(participant.invitation_note || '')}</textarea>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">${verb}</button>
+        </div>
+      </form>
+    `);
+    const form = document.getElementById('rsvp-form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const note = new FormData(form).get('note') || null;
+      try {
+        await MeetingsAPI.respondToInvitation(participant.id, response, note);
+        this._closeModal();
+        await this._openMeetingDetailModal(meeting);
+      } catch (err) {
+        const errEl = form.querySelector('.modal-error');
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
   _renderLocationDetail(meeting, booking) {
     if (meeting.location_mode === 'room') {
       if (!booking) return `<div class="structure-empty">No room assigned yet.</div>`;
@@ -662,7 +734,7 @@ const MeetingsView = {
             <td data-label="Name">${this._escapeHtml(p.user_id ? (this._participantUserName(p) || 'CorLink user') : (p.external_name || ''))}${p.is_organizer ? ' <span class="badge badge-outline">Organizer</span>' : ''}${!p.user_id ? ' <span class="structure-empty">(external)</span>' : ''}</td>
             <td data-label="Role">${this._capitalize(p.participant_role)}</td>
             <td data-label="Contact">${p.user_id ? '<span class="structure-empty">Internal user</span>' : this._externalContact(p)}</td>
-            <td data-label="Invitation">${this._capitalize(p.invitation_status)}</td>
+            <td data-label="Invitation">${this._capitalize(p.invitation_status)}${p.invitation_note ? `<div class="structure-empty" style="font-size:12px;">${this._escapeHtml(p.invitation_note)}</div>` : ''}</td>
             <td data-label="Attendance">${this._capitalize(p.attendance_status)}</td>
             ${canManage ? `<td data-label="Actions">${p.is_organizer ? '<span class="structure-empty" title="The sole organizer cannot be removed">—</span>' : `<button type="button" class="btn btn-secondary btn-xs" data-remove-participant="${p.id}">Remove</button>`}</td>` : ''}
           </tr>
@@ -691,6 +763,15 @@ const MeetingsView = {
   },
 
   async _bindMeetingDetailModal(meeting, participants, booking, attachments, { canManageParticipants, canManageRoom }) {
+    const myParticipant = participants.find(p => p.user_id === this._user.id);
+    document.getElementById('rsvp-accept-btn')?.addEventListener('click', () => {
+      this._closeModal();
+      this._openRsvpModal(meeting, myParticipant, 'accepted');
+    });
+    document.getElementById('rsvp-decline-btn')?.addEventListener('click', () => {
+      this._closeModal();
+      this._openRsvpModal(meeting, myParticipant, 'declined');
+    });
     document.getElementById('view-booking-in-rooms')?.addEventListener('click', () => {
       Router.navigate('rooms', { bookingId: booking.id });
     });

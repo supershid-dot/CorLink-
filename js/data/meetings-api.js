@@ -212,6 +212,18 @@ const MeetingsAPI = (() => {
       if (error) throw error;
     },
 
+    // A participant may respond only on their own row — RLS grants no
+    // write on meeting_participants at all, own-row-or-not; the RPC
+    // itself is what checks user_id = auth.uid() (supabase/patch-
+    // meetings-rsvp.sql). response must be 'accepted' or 'declined'.
+    async respondToInvitation(participantId, response, note = null) {
+      const db = getSupabase();
+      const { error } = await db.rpc('respond_to_invitation', {
+        p_participant_id: participantId, p_response: response, p_note: note || null,
+      });
+      if (error) throw error;
+    },
+
     // Delegates to the trusted booking layer server-side (create_room_booking
     // or submit_booking_request) — never a raw insert, and always the
     // meeting's own start/end/timezone (docs/12 §10). No p_start_at/
