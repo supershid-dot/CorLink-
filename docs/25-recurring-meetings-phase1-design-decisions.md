@@ -1,0 +1,92 @@
+# Recurring Meetings Phase 1 — Design Decisions and Implementation Alignment
+
+**Type:** Retrospective design-decision document, required by `docs/23-rooms-meetings-implementation-specification.md` §Phase F ("This phase gets its own separate design-decision doc before any schema work begins, mirroring the `docs/09`/`docs/12` precedent"). That document was not written before schema work began — Recurring Meetings Phase 1 shipped directly from `docs/22`/`docs/23`'s own specification instead. This document exists to close that gap after the fact: it records the decisions actually reflected in the shipped implementation, reconciles every point where the implementation differs from `docs/23`'s original text, and records one further product decision (the recurring room-booking notification strategy, §4) that was identified as a gap during a post-ship regression review and is formally decided here for future implementation.
+**Date:** 2026-07-23
+**Status:** Recurring Meetings Phase 1 is **shipped** — `supabase/patch-meetings-recurring.sql`, committed `2517c25` on `feature/corlink-platform-migration`, pushed to `origin/feature/corlink-platform-migration`. This document is documentation-only: it changes no code, no SQL, and no database object. It records what already exists and decides one piece of *future* work (§4) without implementing it.
+**Companion documents:** `docs/22-rooms-meetings-meetflow-parity-roadmap.md` §3.3/§5 Q3 (the original product decision), `docs/23-rooms-meetings-implementation-specification.md` §Phase F (the original technical specification this implementation was built from).
+
+---
+
+## 1. Architecture shipped
+
+The implementation follows `docs/23` §Phase F's "true recurring-series architecture" decision exactly, with no structural deviation:
+
+- **`meeting_series` is the series/template entity** — one row per recurring series, holding the recurrence pattern, interval, date range, and a full copy of every `meetings`-equivalent template field (title, description, type, visibility, start/end time, timezone, location fields). It is metadata only; it is never itself a schedulable event.
+- **Each occurrence remains a normal `meetings` row**, created through the existing, completely unmodified `create_meeting()` RPC — not a parallel or duplicated insert path. This is the single architectural decision the whole implementation rests on: because `can_view_meeting()`/`can_manage_meeting()`/`meetings_select`/`meeting_participants_select` all key off columns every meeting already has (`organization_id`, `created_by`, `status`, `visibility`), never `series_id`, every existing meeting-scoped RPC and RLS policy already governs an occurrence correctly with zero code changes.
+- **`meetings.series_id` and `meetings.series_occurrence_date`** associate an occurrence with its series and its position within it. Both are `NULL` for every non-recurring meeting, past and future — existing meeting ids and existing meeting behavior are completely unaffected by this feature's existence.
+- **`series_detached`** is a boolean on `meetings`, `FALSE` by default, set unconditionally to `TRUE` by `update_meeting()` the moment a specific occurrence is edited — computed once per call, applied via `CASE WHEN series_id IS NOT NULL THEN TRUE ELSE series_detached END`, so it cannot be skipped by a partial code path. It exists now, in Phase 1, purely so Phase 2's future "edit all future occurrences" operation has a reliable signal for which occurrences were already individually customized and must not be silently overwritten.
+- **`meeting_series_exceptions` exists as inert Phase 2 foundation** — the table, its RLS (SELECT-only, same org-scoping as `meeting_series`), and its indexes are all present now so Phase 2 never requires a further migration against already-live Phase 1 data. Zero RPCs write to it and zero UI references it in this phase; this was independently re-confirmed as part of the regression review that preceded this document (§5 below).
+- **RSVP, attendance, minutes, personal notes, locking, participants, groups, and room bookings all remain occurrence-specific**, with no code changes to any of their RPCs. Every one of these features operates on a `meeting_id`, and an occurrence's `meeting_id` is exactly as real and exactly as isolated as any non-recurring meeting's.
+- **Meeting Groups are copied into each occurrence at series-creation time, and do not remain linked.** When a group is supplied to `create_recurring_meeting()`, its current membership is applied once per occurrence via the existing, unmodified `add_group_as_participants()`. There is no stored, ongoing relationship between the group and the occurrences it was applied to — editing the group's membership afterward never retroactively changes an already-created occurrence, identical to applying a group to any single ordinary meeting.
+- **Series creation is transactional and rolls back fully on any occurrence failure.** `create_recurring_meeting()` is a single `SECURITY DEFINER` PL/pgSQL function; a room-booking conflict, a cross-organization group, or any other exception raised while generating any one occurrence aborts the entire call by ordinary Postgres transaction semantics — no partial series, no orphaned meeting, no partial room booking is ever left behind.
+- **Monthly generation is anchored to the original `series_start_date`**, never computed incrementally from the previous occurrence. Every occurrence date is derived directly as `series_start_date + N × interval`, which avoids Postgres's month-length clamping silently drifting later occurrences (an incremental approach anchored on day 31, for example, would clamp to Feb 28/29 and then — incorrectly — continue from that clamped date, producing Mar 28 instead of Mar 31; the shipped implementation produces the correct Mar 31).
+- **Phase 1 supports weekly, bi-weekly, and monthly recurrence** — exactly the three patterns `docs/22` §3.3 Q3 specifies for parity, no more.
+- **Phase 1 does not include** series-wide edits, future-occurrence edits, skipped occurrences, exception dates, or series cancellation. Each of these is Phase 2 scope per `docs/22`/`docs/23`, deliberately not built now; the schema listed above exists specifically so none of them requires a further migration when their turn comes.
+- **Draft/Pre-booked Meetings were intentionally excluded from this implementation round and will be implemented separately.** `docs/23` §Phase F specifies Recurring Meetings Phase 1 and Draft/Pre-booked Meetings as one combined phase sharing the same bulk-creation engine (`recurrence_pattern='custom_days'`, `p_is_draft`, `days_of_week`). This implementation shipped only the non-draft half; `is_draft_series` and `days_of_week` exist on `meeting_series` as inert, unused columns (default `FALSE`/`NULL`, never set by anything in the shipped patch), and `custom_days` is accepted by the table's `CHECK` constraint but explicitly rejected as a `create_recurring_meeting()` input — see §2.
+
+## 2. Implementation deviations and additions
+
+Two points where the shipped implementation differs from `docs/23`'s original text, and two implementation-added safety controls not present in that text at all:
+
+- **The migration shipped as one file, `supabase/patch-meetings-recurring.sql`**, rather than the two-file split `docs/23` §9 originally suggested (`patch-meetings-recurring-series-foundation.sql` then `patch-meetings-recurring-series-rpcs.sql`, "for review clarity"). The single file is additive and idempotent exactly as either arrangement would be; the split was a review-process suggestion, not a technical requirement, and was not followed. Recorded here so the deviation is a documented decision rather than something a future reader has to notice on their own.
+- **Phase F is currently partially completed.** `docs/23` frames Recurring Meetings Phase 1 and Draft/Pre-booked Meetings as one phase; in practice they shipped as two separable pieces of work. **Recurring Meetings Phase 1 is shipped. Draft/Pre-booked Meetings remain pending**, not yet scheduled. Both `docs/22` and `docs/23` are updated by this same documentation step (§6 below) to reflect this split explicitly, so "Phase F" is never mistaken for fully complete until Draft/Pre-booked Meetings actually ships.
+- **A maximum of 260 occurrences is enforced** by `create_recurring_meeting()`, checked inside the generation loop (`RAISE EXCEPTION` once the count would exceed 260). This is an implementation safety control, not present in `docs/23`'s text — it exists to bound worst-case transaction size and row count for a single RPC call (roughly five years of weekly occurrences), not to express any product requirement.
+- **A maximum recurrence range of five years is enforced**, checked up front against the requested date range before the generation loop runs (`(p_series_end_date - p_series_start_date) > (366 * 5)`). Also an implementation safety control, not a `docs/23` requirement, added to reject a pathological request (e.g. a multi-decade series) cheaply, before doing any work.
+
+Both limits are deliberately generous relative to any real, expected use of this feature — they exist as guardrails against malformed input, not as product-meaningful caps a user is expected to encounter in ordinary use.
+
+## 3. Notification design decision — recurring room-booking approval
+
+### 3.1 The problem, as confirmed by post-ship regression review
+
+`assign_room_booking()` (existing, unmodified, reused per-occurrence by `create_recurring_meeting()`) routes to `submit_booking_request()` whenever the series creator is not a room manager for the target room. `submit_booking_request()` sends a `booking_submitted` notification ("A new room booking request is awaiting your decision.") to every manager of that room, on every call. Because `create_recurring_meeting()` calls `assign_room_booking()` once per occurrence, a room-booked recurring series created by a non-room-manager currently sends one identical `booking_submitted` notification per occurrence to every manager of that room. This was empirically reproduced during the regression review that preceded this document: a plain staff member creating a 4-occurrence weekly series against a room they do not manage produced 4 identical notifications to the same admin within the same second. A longer series (a 52-week weekly booking, for example) would produce 52.
+
+This behavior is inherited unmodified from `assign_room_booking()`'s already-shipped, already-accepted single-meeting behavior — nothing about it is new or broken for a single meeting. Bulk creation is what turns an acceptable single-notification behavior into a real, confirmed notification-fatigue risk for room managers.
+
+### 3.2 Decision (approved; not yet implemented)
+
+The following behavior is the approved target for a future, separate implementation step. **No notification code is changed by this document.**
+
+- A normal, standalone (non-recurring) booking request continues to generate its current `booking_submitted` notification, unchanged — this decision only concerns bulk creation via a recurring series.
+- **Creating a recurring series must not generate one identical room-approval notification per occurrence.** When room approval is required (i.e. the series creator is not a room manager for the target room), each relevant room manager must receive **one consolidated notification for the whole series**, not one per occurrence.
+- The consolidated notification's message must state that a recurring series has created multiple pending room-booking requests, and must identify: the series (by its template title), the room, the date range, and the number of occurrences awaiting a decision.
+- **Individual booking rows remain independently reviewable.** Consolidating the *notification* does not consolidate the underlying `meeting_room_bookings` rows or the review/approval workflow — a room manager still approves or rejects each occurrence's booking individually, exactly as today. Only the notification volume changes.
+- **Individual booking audit entries remain unchanged**, because each booking is a real, individually auditable record — consolidating notifications must not consolidate or drop any `audit_logs` row. Every occurrence's `submitted`/`meeting_room_booking` audit row (and, on later decision, its `approved`/`rejected` row) continues to be written exactly as it is today.
+- **The future implementation must not depend on the current ordering of `assign_room_booking()` and `add_group_as_participants()` inside `create_recurring_meeting()`'s occurrence loop to suppress participant notifications.** Today, `assign_room_booking()` is called before `add_group_as_participants()`, which means its own `room_assigned` notification (sent via `meeting_participant_recipient_ids()`) currently always resolves to zero recipients, since no participant besides the creator exists yet at that point in the loop. This is an ordering coincidence, not a documented invariant, and must not be relied upon — a future change to that ordering would silently reintroduce a second notification-storm vector (one `room_assigned` notification per occurrence, to every group member, for a room-booked series with a group applied). The future implementation must explicitly control notification behavior — batching, deduplication, or an explicit skip condition — rather than relying on call ordering to suppress it as a side effect.
+- This document records the decision only. Implementing it (consolidating `submit_booking_request()`'s or `assign_room_booking()`'s notification behavior, or introducing a batching layer in `create_recurring_meeting()` itself) is out of scope for this documentation-only step and is not scheduled by this document.
+
+## 4. Relationship to `docs/22` and `docs/23`
+
+This document does not supersede `docs/22`/`docs/23` — it is the retrospective decision record those documents' own process (§Phase F, §7) required, reconciling their prospective specification against what was actually built. `docs/22` §6 (Phase F's roadmap row) and `docs/23` §Phase F are both updated by this same documentation step to point back here and to record the single-file migration, the 260/5-year limits, and the partial (Recurring-Phase-1-only) completion status of Phase F.
+
+## 5. Phase 2 readiness — confirmed, not just claimed
+
+Every column and table needed for the deferred Phase 2 operations (`update_series_this_and_future()`, `update_entire_series()`, `cancel_series_this_and_future()`, `cancel_entire_series()`, `create_series_exception()`, per `docs/23`'s own traceability list) already exists and requires no further schema change:
+
+- **Edit series / edit future** — `series_id` + `series_occurrence_date` on `meetings` directly support filtering "every occurrence of series X from date Y onward"; `series_detached` already flags which occurrences must be excluded from a bulk "edit all future" operation because they were individually customized.
+- **Skip occurrence / exception dates** — `meeting_series_exceptions` (`exception_type IN ('skipped', 'modified')`, unique per `(series_id, exception_date)`) exists exactly as specified, with correct RLS, and zero rows.
+- **Cancel series** — `meeting_series.status IN ('active', 'cancelled')` exists and defaults to `'active'`; no RPC writes `'cancelled'` yet, which is the correct Phase 1 state (individual occurrences continue to be cancelled one at a time via the existing, unmodified `cancel_meeting()`).
+
+This was independently re-verified — not merely re-stated from `docs/23`'s original design intent — during the regression review that preceded this document: a fresh local Postgres instance confirmed `meeting_series_exceptions` has zero rows and zero writing functions, and that the accumulated schema requires no additional columns for any of the five Phase 2 operations listed above.
+
+## 6. `docs/03`/`docs/22`/`docs/23` status corrections made alongside this document
+
+As part of this same documentation-only step:
+
+- `docs/03-migration-architecture.md`'s migration-decision table replaced its stale "Recurring meetings | **Later**" row (written before this feature existed) with an accurate "Phase 1 shipped, Phase 2 pending" status, referencing this document.
+- `docs/23-rooms-meetings-implementation-specification.md` §Phase F gained a status note recording that Recurring Meetings Phase 1 has shipped separately from Draft/Pre-booked Meetings, the actual single-migration-file implementation, the 260-occurrence and five-year limits, a reference to this document, and the consolidated-notification decision (§3 above) as approved-but-pending implementation.
+- `docs/22-rooms-meetings-meetflow-parity-roadmap.md`'s Phase F roadmap row and Q3 decision-table entry were updated to distinguish shipped Phase 1 functionality from pending Phase 2 functionality and pending Draft/Pre-booked Meetings, without rewriting any unrelated section.
+
+---
+
+## Validation (performed before committing this document)
+
+- **Compared against the actually-shipped `supabase/patch-meetings-recurring.sql`** — every architectural claim in §1 was checked directly against that file's contents, not against `docs/22`/`docs/23`'s prospective text, and found accurate.
+- **Compared against `docs/23` §Phase F line by line** — every deviation (§2) and every point of alignment (§1) was individually identified; nothing was silently reconciled without being stated.
+- **The notification-storm finding (§3.1) was independently, empirically reproduced** against a scratch local Postgres instance during the regression review immediately preceding this document (not merely inferred from reading the code) — a non-room-manager creating a 4-occurrence room-booked series produced 4 identical `booking_submitted` notifications to the same recipient.
+- **No implementation files were changed** — only this document, plus surgical updates to `docs/03`, `docs/22`, and `docs/23` (this document's own §6).
+- **No SQL was written or applied.** No database object was created, altered, or dropped. No Supabase project was accessed. No frontend or backend application file was changed. Nothing was deployed or pushed.
+
+---
+
+*End of document. No database table was created or altered. No RLS was written or changed. No application code was changed. No Supabase project was accessed or modified. Nothing was deployed or pushed.*

@@ -293,6 +293,8 @@ Low. Primary risk is scope creep toward an approval workflow (explicitly exclude
 
 **This phase gets its own separate design-decision doc before any schema work begins**, mirroring the `docs/09`/`docs/12` precedent, given its size and the Phase-2-readiness requirement. The specification below is the input to that doc, not a replacement for it.
 
+**Status: Recurring Meetings Phase 1 has shipped** (`supabase/patch-meetings-recurring.sql`, single migration file — see §13 below), separately from Draft/Pre-booked Meetings, which **has not shipped and remains pending**. The design-decision doc this section calls for was written retrospectively, after implementation, as `docs/25-recurring-meetings-phase1-design-decisions.md` — see that document for the full reconciliation between this specification and what actually shipped, including the approved-but-not-yet-implemented consolidated recurring room-booking notification decision (§13 below).
+
 ### 1. Objective
 Implement Q3's Phase 1 (weekly/biweekly/monthly + end date, single-transaction bulk creation, individually editable/cancellable occurrences) with schema designed for Q3's Phase 2 from day one, and Q4's Draft/Pre-booked Meetings sharing the same bulk-creation engine with a draft flag.
 
@@ -346,6 +348,15 @@ Inherits Phase B's lock-check automatically (via the unchanged `update_meeting()
 
 ### 12. Risks
 **Highest in this roadmap.** Two specific risks called out for dedicated attention: (1) transactional multi-occurrence room-booking with per-occurrence advisory locks — must be proven deadlock-free under real testing, not just assumed safe because each individual booking call is already safe in isolation; (2) `series_detached` bookkeeping is easy to get subtly wrong (must fire on every field-changing path through `update_meeting()`, not just some), and a bug here would be invisible in Phase 1's own UI while silently corrupting Phase 2's future correctness — recommend a dedicated code-review pass specifically on this one field's handling before merging, independent of the standard review.
+
+### 13. Implementation status (as shipped)
+
+Full record in `docs/25-recurring-meetings-phase1-design-decisions.md`; summarized here for anyone reading this specification directly.
+
+- **Recurring Meetings Phase 1 is shipped** (`supabase/patch-meetings-recurring.sql`). **Draft/Pre-booked Meetings, the other half of this phase, has not shipped and remains pending** — `is_draft_series`/`days_of_week` exist as inert columns; `custom_days` is rejected as a `create_recurring_meeting()` input.
+- **The migration shipped as a single file**, not the two-file split §9 above describes.
+- **A 260-occurrence cap and a five-year recurrence-range cap are enforced** by `create_recurring_meeting()` — implementation safety controls not called for by this specification's original text.
+- **Consolidated recurring room-booking notification — approved, not yet implemented.** Post-ship regression review confirmed that a room-booked series created by a caller who is not a room manager currently sends one `booking_submitted` notification per occurrence to every manager of that room (inherited, unmodified, from `assign_room_booking()`'s existing single-meeting behavior — a real notification-fatigue risk once applied N times in one series-creation action). The approved target behavior — one consolidated per-series notification to each relevant room manager, individual booking rows and audit entries otherwise unchanged, no reliance on `assign_room_booking()`/`add_group_as_participants()` call ordering — is recorded in full in `docs/25` §3. It is not implemented by this specification or by the shipped Phase 1 patch.
 
 ---
 
