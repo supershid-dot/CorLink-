@@ -735,8 +735,11 @@ const MeetingsView = {
             <td data-label="Role">${this._capitalize(p.participant_role)}</td>
             <td data-label="Contact">${p.user_id ? '<span class="structure-empty">Internal user</span>' : this._externalContact(p)}</td>
             <td data-label="Invitation">${this._capitalize(p.invitation_status)}${p.invitation_note ? `<div class="structure-empty" style="font-size:12px;">${this._escapeHtml(p.invitation_note)}</div>` : ''}</td>
-            <td data-label="Attendance">${this._capitalize(p.attendance_status)}</td>
-            ${canManage ? `<td data-label="Actions">${p.is_organizer ? '<span class="structure-empty" title="The sole organizer cannot be removed">—</span>' : `<button type="button" class="btn btn-secondary btn-xs" data-remove-participant="${p.id}">Remove</button>`}</td>` : ''}
+            <td data-label="Attendance">${this._capitalize(p.attendance_status)}${p.attendance_note ? `<div class="structure-empty" style="font-size:12px;">${this._escapeHtml(p.attendance_note)}</div>` : ''}</td>
+            ${canManage ? `<td data-label="Actions" style="white-space:nowrap;">
+              <button type="button" class="btn btn-secondary btn-xs" data-mark-attendance="${p.id}">Attendance</button>
+              ${p.is_organizer ? '' : `<button type="button" class="btn btn-secondary btn-xs" data-remove-participant="${p.id}" style="margin-left:4px;">Remove</button>`}
+            </td>` : ''}
           </tr>
         `).join('')}</tbody>
       </table></div>
@@ -790,6 +793,13 @@ const MeetingsView = {
     document.getElementById('add-participant-btn')?.addEventListener('click', () => {
       this._closeModal();
       this._openAddParticipantModal(meeting, participants);
+    });
+    document.querySelectorAll('[data-mark-attendance]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const p = participants.find(x => x.id === btn.dataset.markAttendance);
+        this._closeModal();
+        this._openMarkAttendanceModal(meeting, p);
+      });
     });
     document.querySelectorAll('[data-remove-participant]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -950,6 +960,54 @@ const MeetingsView = {
         errEl.textContent = err.message;
         errEl.classList.remove('hidden');
         submitBtn.disabled = false;
+      }
+    });
+  },
+
+  // ── Attendance marking (Phase A, docs/22/23) ─────────────────────
+  // Manager-only (canManageParticipants already gates the button
+  // itself; the real gate is can_manage_meeting() inside
+  // mark_attendance, supabase/patch-meetings-attendance.sql) — the
+  // deliberate inverse of RSVP's own-row-only rule. Available for the
+  // organizer too (only removal is blocked for the sole organizer,
+  // not attendance).
+  _openMarkAttendanceModal(meeting, participant) {
+    if (!participant) return;
+    this._openModal(`
+      <h3>Mark Attendance</h3>
+      <p>${this._escapeHtml(participant.external_name || this._participantUserName(participant) || 'this participant')}</p>
+      <form id="mark-attendance-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Status</label>
+          <select class="field-select" name="status" required>
+            <option value="attended" ${participant.attendance_status === 'attended' ? 'selected' : ''}>Attended</option>
+            <option value="absent" ${participant.attendance_status === 'absent' ? 'selected' : ''}>Absent</option>
+            <option value="excused" ${participant.attendance_status === 'excused' ? 'selected' : ''}>Excused</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Note (optional)</label>
+          <textarea class="field-input-plain" name="note" rows="2">${this._escapeHtml(participant.attendance_note || '')}</textarea>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    `);
+    const form = document.getElementById('mark-attendance-form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      try {
+        await MeetingsAPI.markAttendance(participant.id, fd.get('status'), fd.get('note') || null);
+        this._closeModal();
+        await this._openMeetingDetailModal(meeting);
+      } catch (err) {
+        const errEl = form.querySelector('.modal-error');
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
       }
     });
   },

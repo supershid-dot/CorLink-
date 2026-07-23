@@ -224,6 +224,19 @@ const MeetingsAPI = (() => {
       if (error) throw error;
     },
 
+    // The deliberate inverse of respondToInvitation — manager-only
+    // (can_manage_meeting()), never the participant's own row. status
+    // must be 'attended', 'absent', or 'excused' (supabase/patch-
+    // meetings-attendance.sql); 'unknown' is the unset default and is
+    // not a settable input here.
+    async markAttendance(participantId, status, note = null) {
+      const db = getSupabase();
+      const { error } = await db.rpc('mark_attendance', {
+        p_participant_id: participantId, p_status: status, p_note: note || null,
+      });
+      if (error) throw error;
+    },
+
     // Delegates to the trusted booking layer server-side (create_room_booking
     // or submit_booking_request) — never a raw insert, and always the
     // meeting's own start/end/timezone (docs/12 §10). No p_start_at/
