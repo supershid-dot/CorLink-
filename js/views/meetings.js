@@ -602,6 +602,8 @@ const MeetingsView = {
         <div style="margin-top:6px;">${this._renderAttachments('meeting', meeting.id, attachments, canManage && meeting.status !== 'cancelled')}</div>
       </div>
 
+      ${this._renderMinutesPanel(meeting, canManage)}
+
       <div class="modal-actions" style="margin-top:16px;">
         <button type="button" class="btn btn-secondary" data-close-modal>Close</button>
         ${canEdit ? `<button type="button" class="btn btn-secondary" id="detail-edit-btn">Edit</button>` : ''}
@@ -680,6 +682,89 @@ const MeetingsView = {
         await this._openMeetingDetailModal(meeting);
       } catch (err) {
         const errEl = form.querySelector('.modal-error');
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
+  // ── Meeting minutes (docs/22/23 Phase B — minutes only, no ──────
+  // personal notes, no meeting lock) ───────────────────────────────
+  // canEditNow mirrors update_minutes()'s own server-side gate exactly:
+  // can_manage_meeting() before finalization, org-admin/super-admin
+  // only after. canManage is already correctly scoped to the viewer's
+  // own org for a non-super-admin (per this file's established
+  // simplification, see _canManage's own comment) so this._isAdmin
+  // needs no additional org comparison here.
+  _renderMinutesPanel(meeting, canManage) {
+    const notCancelled = meeting.status !== 'cancelled';
+    const canEditNow = notCancelled && (meeting.minutes_finalized ? this._isAdmin : canManage);
+    const hasMinutes = !!(meeting.minutes && meeting.minutes.trim() !== '');
+    const canFinalize = notCancelled && this._isSupervisor && !meeting.minutes_finalized && hasMinutes;
+    return `
+      <div style="margin-top:12px;">
+        <label class="field-label">Minutes${meeting.minutes_finalized ? ' <span class="badge badge-outline">Finalized</span>' : ''}</label>
+        <div style="margin-top:6px;">
+          ${hasMinutes ? `<div style="white-space:pre-wrap;">${this._escapeHtml(meeting.minutes)}</div>` : `<div class="structure-empty">No minutes yet.</div>`}
+          ${canEditNow || canFinalize ? `
+            <div class="field-row" style="gap:8px; margin-top:8px;">
+              ${canEditNow ? `<button type="button" class="btn btn-secondary btn-xs" id="edit-minutes-btn">${hasMinutes ? 'Edit Minutes' : 'Add Minutes'}</button>` : ''}
+              ${canFinalize ? `<button type="button" class="btn btn-secondary btn-xs" id="finalize-minutes-btn">Finalize</button>` : ''}
+            </div>
+          ` : ''}
+        </div>
+      </div>
+    `;
+  },
+
+  _openEditMinutesModal(meeting) {
+    this._openModal(`
+      <h3>${meeting.minutes ? 'Edit' : 'Add'} Minutes</h3>
+      <form id="edit-minutes-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Minutes</label>
+          <textarea class="field-input-plain" name="minutes" rows="8">${this._escapeHtml(meeting.minutes || '')}</textarea>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    `);
+    const form = document.getElementById('edit-minutes-form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const minutes = (new FormData(form).get('minutes') || '').trim();
+      try {
+        await MeetingsAPI.updateMinutes(meeting.id, minutes || null);
+        this._closeModal();
+        await this._openMeetingDetailModal(meeting);
+      } catch (err) {
+        const errEl = form.querySelector('.modal-error');
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
+  _openFinalizeMinutesModal(meeting) {
+    this._openModal(`
+      <h3>Finalize Minutes</h3>
+      <p>Once finalized, only an organization administrator or super administrator will be able to edit these minutes. This cannot be undone.</p>
+      <div class="modal-error alert alert-error hidden"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+        <button type="button" class="btn btn-primary" id="confirm-finalize-minutes-btn">Finalize</button>
+      </div>
+    `);
+    document.getElementById('confirm-finalize-minutes-btn').addEventListener('click', async () => {
+      try {
+        await MeetingsAPI.finalizeMinutes(meeting.id);
+        this._closeModal();
+        await this._openMeetingDetailModal(meeting);
+      } catch (err) {
+        const errEl = document.querySelector('#modal-root .modal-error');
         errEl.textContent = err.message;
         errEl.classList.remove('hidden');
       }
@@ -809,6 +894,14 @@ const MeetingsView = {
       });
     });
     this._bindAttachmentEvents(document.getElementById('modal-root'), () => this._openMeetingDetailModal(meeting));
+    document.getElementById('edit-minutes-btn')?.addEventListener('click', () => {
+      this._closeModal();
+      this._openEditMinutesModal(meeting);
+    });
+    document.getElementById('finalize-minutes-btn')?.addEventListener('click', () => {
+      this._closeModal();
+      this._openFinalizeMinutesModal(meeting);
+    });
   },
 
   // ── Cancel meeting ────────────────────────────────────────────────

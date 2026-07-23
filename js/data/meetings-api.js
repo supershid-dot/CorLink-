@@ -237,6 +237,26 @@ const MeetingsAPI = (() => {
       if (error) throw error;
     },
 
+    // can_manage_meeting() normally; once minutes_finalized, restricted
+    // server-side to an org admin (same org) or super admin — the RPC
+    // itself is the real gate, not this call site (supabase/patch-
+    // meetings-minutes.sql).
+    async updateMinutes(meetingId, minutes) {
+      const db = getSupabase();
+      const { error } = await db.rpc('update_minutes', {
+        p_meeting_id: meetingId, p_minutes: minutes || null,
+      });
+      if (error) throw error;
+    },
+
+    // Supervisor-or-above (or super admin) only, and only once minutes
+    // already contain non-blank text — both enforced server-side.
+    async finalizeMinutes(meetingId) {
+      const db = getSupabase();
+      const { error } = await db.rpc('finalize_minutes', { p_meeting_id: meetingId });
+      if (error) throw error;
+    },
+
     // Delegates to the trusted booking layer server-side (create_room_booking
     // or submit_booking_request) — never a raw insert, and always the
     // meeting's own start/end/timezone (docs/12 §10). No p_start_at/
