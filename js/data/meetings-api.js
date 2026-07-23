@@ -319,5 +319,86 @@ const MeetingsAPI = (() => {
       });
       if (error) throw error;
     },
+
+    // ── Meeting Groups (docs/22/23 Phase E) — real SELECT-only RLS ──
+    // on meeting_groups/meeting_group_members (same-org or super
+    // admin; no separate "who may use this group" grant table — any
+    // meeting creator in the group's own org may see and apply it),
+    // so reads go directly through the client, same convention
+    // fetchMeetings()/fetchMeeting() already use for meetings itself.
+    // Every write still goes exclusively through a SECURITY DEFINER
+    // RPC (supabase/patch-meetings-groups.sql) — this file never
+    // issues a direct .insert()/.update()/.delete() against either
+    // table.
+    async fetchMeetingGroups(organizationId) {
+      const db = getSupabase();
+      const { data, error } = await db.from('meeting_groups')
+        .select('*')
+        .eq('organization_id', organizationId)
+        .order('name');
+      if (error) throw error;
+      return data || [];
+    },
+
+    // Ordered by position (set_group_members() persists the caller's
+    // supplied array order) — the "ordered member list" requirement.
+    async fetchGroupMembers(groupId) {
+      const db = getSupabase();
+      const { data, error } = await db.from('meeting_group_members')
+        .select('user_id, position, user:users!meeting_group_members_user_id_fkey(id, full_name, service_number)')
+        .eq('group_id', groupId)
+        .order('position');
+      if (error) throw error;
+      return data || [];
+    },
+
+    async createMeetingGroup(organizationId, name, description = null) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('create_meeting_group', {
+        p_organization_id: organizationId, p_name: name, p_description: description || null,
+      });
+      if (error) throw error;
+      return data;
+    },
+
+    async updateMeetingGroup(groupId, { name, description } = {}) {
+      const db = getSupabase();
+      const { error } = await db.rpc('update_meeting_group', {
+        p_group_id: groupId, p_name: name ?? null, p_description: description ?? null,
+      });
+      if (error) throw error;
+    },
+
+    async deleteMeetingGroup(groupId) {
+      const db = getSupabase();
+      const { error } = await db.rpc('delete_meeting_group', { p_group_id: groupId });
+      if (error) throw error;
+    },
+
+    // p_user_ids order is preserved as each member's position — an
+    // atomic replace, not a diff (docs/23 §Phase E/§4's explicit,
+    // narrow exception to the general "diff, don't replace" rule).
+    async setGroupMembers(groupId, userIds) {
+      const db = getSupabase();
+      const { error } = await db.rpc('set_group_members', {
+        p_group_id: groupId, p_user_ids: userIds || [],
+      });
+      if (error) throw error;
+    },
+
+    // Adds the group's CURRENT members as participants — a one-time
+    // copy, never a stored link (requirement 6: no permanent
+    // dependency; later group edits never retroactively change a
+    // meeting it was already applied to). Returns the count of newly
+    // added participants; an already-active participant is skipped
+    // gracefully, not an error (requirement 7).
+    async applyGroupToMeeting(meetingId, groupId) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('add_group_as_participants', {
+        p_meeting_id: meetingId, p_group_id: groupId,
+      });
+      if (error) throw error;
+      return data;
+    },
   };
 })();

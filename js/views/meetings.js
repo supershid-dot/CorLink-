@@ -38,7 +38,7 @@ const MeetingsView = {
     this._orgId = user.org_id;
     this._roomsEnabled = AppShell.isModuleEnabled(user, 'rooms');
 
-    const validTabs = ['upcoming', 'my-meetings', 'past', 'cancelled'];
+    const validTabs = ['upcoming', 'my-meetings', 'past', 'cancelled', 'groups'];
     if (params.tab && validTabs.includes(params.tab)) this._state.tab = params.tab;
 
     container.innerHTML = this._shell();
@@ -109,6 +109,7 @@ const MeetingsView = {
             <button class="tab-btn" data-tab="my-meetings">My Meetings</button>
             <button class="tab-btn" data-tab="past">Past</button>
             <button class="tab-btn" data-tab="cancelled">Cancelled</button>
+            <button class="tab-btn" data-tab="groups">Groups</button>
           </div>
           <div id="meetings-tab-content"></div>
         </main>
@@ -142,6 +143,10 @@ const MeetingsView = {
   async _renderTab() {
     const content = document.getElementById('meetings-tab-content');
     content.innerHTML = `<div class="tab-loading"><span class="spinner spinner--dark"></span> Loading…</div>`;
+    if (this._state.tab === 'groups') {
+      await this._renderGroupsTab(content);
+      return;
+    }
     try {
       let meetings;
       if (this._state.tab === 'upcoming') {
@@ -165,6 +170,198 @@ const MeetingsView = {
       console.error('CorLink: failed to load meetings tab', err);
       content.innerHTML = `<div class="alert alert-error"><i class="ti ti-alert-triangle"></i> Couldn't load this tab: ${this._escapeHtml(err.message || 'unknown error')}.</div>`;
     }
+  },
+
+  // ── Meeting Groups (docs/22/23 Phase E) ──────────────────────────
+  // Read access is same-org-or-super-admin for everyone (RLS itself,
+  // supabase/patch-meetings-groups.sql) — any meeting creator can see
+  // and apply an existing group (requirement 3). Management actions
+  // (create/edit/delete/members) are admin-or-super-admin-only client
+  // -side, mirroring but never replacing the identical server-side
+  // gate inside create_meeting_group()/update_meeting_group()/
+  // delete_meeting_group()/set_group_members().
+  async _renderGroupsTab(content) {
+    const canManageGroups = this._isAdmin;
+    try {
+      this._groups = await MeetingsAPI.fetchMeetingGroups(this._orgId);
+    } catch (err) {
+      console.error('CorLink: failed to load meeting groups', err);
+      content.innerHTML = `<div class="alert alert-error"><i class="ti ti-alert-triangle"></i> Couldn't load groups: ${this._escapeHtml(err.message || 'unknown error')}.</div>`;
+      return;
+    }
+    content.innerHTML = `
+      <div class="page-header-row">
+        <p class="field-hint">Reusable, named invite lists. Anyone creating or editing a meeting can apply an existing group; only an organization administrator or super administrator can create, edit, or delete groups.</p>
+        ${canManageGroups ? `<button type="button" class="btn btn-primary btn-sm" id="new-group-btn"><i class="ti ti-plus"></i> New Group</button>` : ''}
+      </div>
+      ${this._groups.length === 0
+        ? this._emptyBlock({ icon: 'ti-users-group', title: 'No meeting groups yet', subtitle: canManageGroups ? 'Create a reusable invite list for meetings you schedule often.' : 'No groups have been created for your organization yet.' })
+        : `<div class="panel"><table class="data-table">
+            <thead><tr><th>Name</th><th>Description</th><th></th></tr></thead>
+            <tbody>${this._groups.map(g => `
+              <tr>
+                <td data-label="Name">${this._escapeHtml(g.name)}</td>
+                <td data-label="Description">${g.description ? this._escapeHtml(g.description) : '<span class="structure-empty">—</span>'}</td>
+                <td data-label="Actions">
+                  <button type="button" class="btn btn-secondary btn-xs" data-view-members="${g.id}">Members</button>
+                  ${canManageGroups ? `
+                    <button type="button" class="btn btn-secondary btn-xs" data-edit-group="${g.id}">Edit</button>
+                    <button type="button" class="btn btn-secondary btn-xs" data-delete-group="${g.id}">Delete</button>
+                  ` : ''}
+                </td>
+              </tr>
+            `).join('')}</tbody>
+          </table></div>`}
+    `;
+    document.getElementById('new-group-btn')?.addEventListener('click', () => this._openGroupFormModal());
+    content.querySelectorAll('[data-view-members]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const group = this._groups.find(g => g.id === btn.dataset.viewMembers);
+        this._openGroupMembersModal(group, canManageGroups);
+      });
+    });
+    content.querySelectorAll('[data-edit-group]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const group = this._groups.find(g => g.id === btn.dataset.editGroup);
+        this._openGroupFormModal(group);
+      });
+    });
+    content.querySelectorAll('[data-delete-group]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const group = this._groups.find(g => g.id === btn.dataset.deleteGroup);
+        this._openDeleteGroupModal(group);
+      });
+    });
+  },
+
+  _openGroupFormModal(group = null) {
+    this._openModal(`
+      <h3>${group ? 'Edit' : 'New'} Meeting Group</h3>
+      <form id="group-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Name</label>
+          <input class="field-input-plain" name="name" required value="${group ? this._escapeHtml(group.name) : ''}" />
+        </div>
+        <div class="field-group">
+          <label class="field-label">Description (optional)</label>
+          <textarea class="field-input-plain" name="description" rows="2">${group ? this._escapeHtml(group.description || '') : ''}</textarea>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">${group ? 'Save Changes' : 'Create Group'}</button>
+        </div>
+      </form>
+    `);
+    const form = document.getElementById('group-form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const name = (fd.get('name') || '').trim();
+      const description = (fd.get('description') || '').trim() || null;
+      try {
+        if (group) {
+          await MeetingsAPI.updateMeetingGroup(group.id, { name, description });
+        } else {
+          await MeetingsAPI.createMeetingGroup(this._orgId, name, description);
+        }
+        this._closeModal();
+        await this._renderTab();
+      } catch (err) {
+        const errEl = form.querySelector('.modal-error');
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
+  _openDeleteGroupModal(group) {
+    this._openModal(`
+      <h3>Delete Meeting Group</h3>
+      <p>Delete "${this._escapeHtml(group.name)}"? This does not affect any meeting the group was previously applied to — participants already added stay on those meetings.</p>
+      <div class="modal-error alert alert-error hidden"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+        <button type="button" class="btn" style="background:var(--color-error-bg); color:var(--color-error-dark);" id="confirm-delete-group-btn">Delete</button>
+      </div>
+    `);
+    document.getElementById('confirm-delete-group-btn').addEventListener('click', async () => {
+      try {
+        await MeetingsAPI.deleteMeetingGroup(group.id);
+        this._closeModal();
+        await this._renderTab();
+      } catch (err) {
+        const errEl = document.querySelector('#modal-root .modal-error');
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
+  // Checkbox list against the org roster, pre-checked for current
+  // members — set_group_members() replaces the whole membership
+  // atomically (not diffed) and persists whatever order the checked
+  // ids are submitted in as each member's position (the "ordered
+  // member list" requirement); the list itself is rendered
+  // alphabetically by name, so that order is the default. Read-only
+  // for a non-admin viewer (member list still visible, no Save button).
+  async _openGroupMembersModal(group, canManageGroups) {
+    let orgUsers = [], members = [];
+    try {
+      [orgUsers, members] = await Promise.all([
+        AdminAPI.listUsersByOrg(group.organization_id),
+        MeetingsAPI.fetchGroupMembers(group.id),
+      ]);
+    } catch (err) {
+      console.error('CorLink: failed to load group members', err);
+      return;
+    }
+    const memberIds = new Set(members.map(m => m.user_id));
+    const activeUsers = orgUsers.filter(u => u.is_active).sort((a, b) => a.full_name.localeCompare(b.full_name));
+
+    this._openModal(`
+      <h3>Members — ${this._escapeHtml(group.name)}</h3>
+      ${canManageGroups ? `
+        <form id="group-members-form" class="modal-form">
+          <div class="field-group" style="max-height:320px; overflow-y:auto;">
+            ${activeUsers.map(u => `
+              <label class="checkbox-row">
+                <input type="checkbox" name="memberIds" value="${u.id}" ${memberIds.has(u.id) ? 'checked' : ''} />
+                <span>${this._escapeHtml(u.full_name)}</span>
+              </label>
+            `).join('') || '<span class="structure-empty">No active users in this organization.</span>'}
+          </div>
+          <div class="modal-error alert alert-error hidden"></div>
+          <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+            <button type="submit" class="btn btn-primary">Save Members</button>
+          </div>
+        </form>
+      ` : `
+        <div class="badge-list" style="margin-bottom:16px;">
+          ${members.length === 0 ? '<span class="structure-empty">No members yet.</span>' : members.map(m => `
+            <span class="badge badge-outline">${this._escapeHtml(m.user?.full_name || 'Unknown user')}</span>
+          `).join('')}
+        </div>
+        <div class="modal-actions"><button type="button" class="btn btn-secondary" data-close-modal>Close</button></div>
+      `}
+    `);
+
+    const form = document.getElementById('group-members-form');
+    form?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const userIds = fd.getAll('memberIds');
+      try {
+        await MeetingsAPI.setGroupMembers(group.id, userIds);
+        this._closeModal();
+        await this._renderTab();
+      } catch (err) {
+        const errEl = form.querySelector('.modal-error');
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
   },
 
   _filtersBarHtml() {
@@ -1136,12 +1333,15 @@ const MeetingsView = {
 
   // ── Participant management ───────────────────────────────────────
   async _openAddParticipantModal(meeting, existingParticipants) {
-    let orgUsers = [];
+    let orgUsers = [], groups = [];
     try {
-      orgUsers = await AdminAPI.listUsersByOrg(meeting.organization_id);
+      [orgUsers, groups] = await Promise.all([
+        AdminAPI.listUsersByOrg(meeting.organization_id),
+        MeetingsAPI.fetchMeetingGroups(meeting.organization_id),
+      ]);
       this._orgUserNames = Object.fromEntries(orgUsers.map(u => [u.id, u.full_name]));
     } catch (err) {
-      console.warn('CorLink: failed to load org users for participant picker', err);
+      console.warn('CorLink: failed to load org users/groups for participant picker', err);
     }
     const activeInternalIds = new Set(existingParticipants.filter(p => p.user_id).map(p => p.user_id));
     const candidates = orgUsers.filter(u => u.is_active && !activeInternalIds.has(u.id));
@@ -1152,6 +1352,7 @@ const MeetingsView = {
       <div class="tabs" id="participant-type-tabs" style="margin-bottom:12px;">
         <button type="button" class="tab-btn tab-btn--active" data-ptype="internal">CorLink User</button>
         <button type="button" class="tab-btn" data-ptype="external">External</button>
+        <button type="button" class="tab-btn" data-ptype="group">Group</button>
       </div>
       <form id="add-participant-form" class="modal-form">
         <div id="internal-fields">
@@ -1183,16 +1384,28 @@ const MeetingsView = {
             <input class="field-input-plain" name="externalOrganizationName" />
           </div>
         </div>
-        <div class="field-group">
-          <label class="field-label">Role</label>
-          <select class="field-select" name="participantRole">
-            <option value="attendee" selected>Attendee</option>
-            <option value="observer">Observer</option>
-          </select>
+        <div id="group-fields" class="hidden">
+          <div class="field-group">
+            <label class="field-label">Meeting Group</label>
+            <select class="field-select" name="groupId">
+              <option value="">— Select a group —</option>
+              ${groups.map(g => `<option value="${g.id}">${this._escapeHtml(g.name)}</option>`).join('')}
+            </select>
+            <p class="field-hint">Adds the group's current members as attendees. This is a one-time copy — later changes to the group will not affect this meeting.</p>
+          </div>
         </div>
-        <div class="field-group">
-          <label class="field-label">Notes (optional)</label>
-          <textarea class="field-input-plain" name="notes" rows="2"></textarea>
+        <div id="role-notes-fields">
+          <div class="field-group">
+            <label class="field-label">Role</label>
+            <select class="field-select" name="participantRole">
+              <option value="attendee" selected>Attendee</option>
+              <option value="observer">Observer</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Notes (optional)</label>
+            <textarea class="field-input-plain" name="notes" rows="2"></textarea>
+          </div>
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
@@ -1205,34 +1418,63 @@ const MeetingsView = {
     let ptype = 'internal';
     const internalFields = document.getElementById('internal-fields');
     const externalFields = document.getElementById('external-fields');
+    const groupFields = document.getElementById('group-fields');
+    const roleNotesFields = document.getElementById('role-notes-fields');
+    const submitBtn = document.getElementById('add-participant-submit');
     document.querySelectorAll('[data-ptype]').forEach(btn => {
       btn.addEventListener('click', () => {
         ptype = btn.dataset.ptype;
         document.querySelectorAll('[data-ptype]').forEach(b => b.classList.toggle('tab-btn--active', b === btn));
         internalFields.classList.toggle('hidden', ptype !== 'internal');
         externalFields.classList.toggle('hidden', ptype !== 'external');
+        groupFields.classList.toggle('hidden', ptype !== 'group');
+        // Role/Notes only apply to a single internal/external
+        // participant — a group's members are always added as plain
+        // attendees (add_group_as_participants' own server-side rule).
+        roleNotesFields.classList.toggle('hidden', ptype === 'group');
+        submitBtn.textContent = ptype === 'group' ? 'Add Group' : 'Add Participant';
       });
     });
 
     const form = document.getElementById('add-participant-form');
     const errEl = form.querySelector('.modal-error');
-    const submitBtn = document.getElementById('add-participant-submit');
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       errEl.classList.add('hidden');
       const fd = new FormData(form);
+      submitBtn.disabled = true;
+      if (ptype === 'group') {
+        const groupId = fd.get('groupId');
+        if (!groupId) {
+          errEl.textContent = 'Select a group.';
+          errEl.classList.remove('hidden');
+          submitBtn.disabled = false;
+          return;
+        }
+        try {
+          await MeetingsAPI.applyGroupToMeeting(meeting.id, groupId);
+          this._closeModal();
+          this._openMeetingDetailModal(meeting);
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.classList.remove('hidden');
+          submitBtn.disabled = false;
+        }
+        return;
+      }
       const payload = { participantRole: fd.get('participantRole'), notes: fd.get('notes') || null };
       if (ptype === 'internal') {
         const userId = fd.get('userId');
-        if (!userId) { errEl.textContent = 'Select a staff member.'; errEl.classList.remove('hidden'); return; }
+        if (!userId) { errEl.textContent = 'Select a staff member.'; errEl.classList.remove('hidden'); submitBtn.disabled = false; return; }
         payload.userId = userId;
       } else {
         const name = (fd.get('externalName') || '').trim();
-        if (!name) { errEl.textContent = 'Name is required for an external participant.'; errEl.classList.remove('hidden'); return; }
+        if (!name) { errEl.textContent = 'Name is required for an external participant.'; errEl.classList.remove('hidden'); submitBtn.disabled = false; return; }
         const email = (fd.get('externalEmail') || '').trim();
         if (email && existingEmails.has(email.toLowerCase())) {
           errEl.textContent = 'A participant with this email has already been added.';
           errEl.classList.remove('hidden');
+          submitBtn.disabled = false;
           return;
         }
         payload.externalName = name;
@@ -1240,7 +1482,6 @@ const MeetingsView = {
         payload.externalPhone = (fd.get('externalPhone') || '').trim() || null;
         payload.externalOrganizationName = (fd.get('externalOrganizationName') || '').trim() || null;
       }
-      submitBtn.disabled = true;
       try {
         await MeetingsAPI.addParticipant(meeting.id, payload);
         this._closeModal();
