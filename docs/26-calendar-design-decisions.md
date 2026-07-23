@@ -3,7 +3,7 @@
 **Type:** Retrospective design-decision document, required by `docs/23-rooms-meetings-implementation-specification.md` Phase C ("This phase gets its own separate design-decision doc before any schema work begins, mirroring the `docs/09`/`docs/12` precedent, given it is a genuinely new module"). That document was not written before Calendar's frontend work began — Calendar shipped directly from `docs/22`/`docs/23`'s own specification instead. This document exists to close that gap after the fact: it records the architecture actually shipped, reconciles every point where the implementation differs from `docs/23`'s original Phase C text, and records what remains deferred.
 **Date:** 2026-07-23
 **Status:** Calendar is **shipped** — `js/data/calendar-api.js`, `js/views/calendar.js`, `supabase/patch-calendar-route-activation.sql`, committed `edd02b4` on `feature/corlink-platform-migration`, pushed to `origin/feature/corlink-platform-migration`. This document is documentation-only: it changes no code, no SQL, and no database object.
-**Companion documents:** `docs/22-rooms-meetings-meetflow-parity-roadmap.md` §3.2/§6 (the original product decision and phasing), `docs/23-rooms-meetings-implementation-specification.md` Phase C (the original technical specification this implementation was built from), `docs/25-recurring-meetings-phase1-design-decisions.md` (the immediately preceding design-decision doc, whose §1 architecture Calendar's recurring-occurrence handling depends on directly).
+**Companion documents:** `docs/22-rooms-meetings-meetflow-parity-roadmap.md` §3.2/§6 (the original product decision and phasing), `docs/23-rooms-meetings-implementation-specification.md` Phase C (the original technical specification this implementation was built from), `docs/25-recurring-meetings-phase1-design-decisions.md` (the immediately preceding design-decision doc, whose §1 architecture Calendar's recurring-occurrence handling depends on directly), `docs/27-draft-meetings-design-decisions.md` (shipped after this document; hardens the `status='draft'` state this document already described Calendar as rendering — see §8 below).
 
 ---
 
@@ -74,6 +74,10 @@ Identified during implementation and the subsequent regression review; none are 
 
 This document does not supersede `docs/22`/`docs/23` — it is the retrospective decision record those documents' own process (Phase C §"gets its own separate design-decision doc") required, reconciling their prospective specification against what was actually built. `docs/22` §3.2/§6 and `docs/23` Phase C are both updated by this same documentation step to point back here and to record Calendar's shipped status, its client-side composition architecture, and its deferred capabilities.
 
+## 8. Draft rendering is now backed by a fully hardened draft lifecycle
+
+At the time this document was written, `meetings.status='draft'` was a real but comparatively thin lifecycle state — Calendar already rendered it correctly (§2/§3 above), but several of the RPCs a draft meeting could still reach (RSVP, attendance, minutes, locking, cancellation) had not yet been made draft-aware, and participant-facing notifications were not yet suppressed while a meeting remained a draft. `supabase/patch-meetings-drafts.sql` (committed `b6ee08c`, after this document) closed those gaps — see `docs/27-draft-meetings-design-decisions.md` for the full record. Calendar's own code required no change: `CalendarAPI.fetchMeetingsInRange()` was already status-unfiltered and `calendar.js`'s `calendar-event--draft` styling already existed, so the draft events Calendar has always shown are now backed by a complete, hardened draft lifecycle rather than a bare status flag. §3's distinction between this state and the still-unbuilt bulk Draft/Pre-booked Meetings mechanism remains accurate and unchanged by this update.
+
 ---
 
 ## Validation (performed before committing this document)
@@ -81,6 +85,7 @@ This document does not supersede `docs/22`/`docs/23` — it is the retrospective
 - **Compared against the actually-shipped `js/data/calendar-api.js` and `js/views/calendar.js`** — every architectural claim in §1/§2/§4 was checked directly against those files' contents (including their own in-file comments, which already document several of these decisions), not against `docs/22`/`docs/23`'s prospective text.
 - **Compared against `docs/23` Phase C line by line** — every deviation (§6) and every point of alignment (§1) was individually identified; nothing was silently reconciled without being stated.
 - **Deferred-improvement claims (§5) are restated from the empirical findings of the Calendar regression review** that preceded this document (module-gating independence, absence of a date-range index, both confirmed directly against RLS/schema text and `EXPLAIN` output during that review), not newly asserted here.
+- **§8 was added in a later documentation-only step** (2026-07-23, alongside `docs/27-draft-meetings-design-decisions.md`) to record that the shipped Draft/Pre-booked Meetings implementation backs the draft rendering this document already described — no other section of this document was changed by that step.
 - **No implementation files were changed** — only this document, plus surgical updates to `docs/22` and `docs/23` (this document's own §7).
 - **No SQL was written or applied.** No database object was created, altered, or dropped. No Supabase project was accessed. No frontend or backend application file was changed. Nothing was deployed or pushed.
 
