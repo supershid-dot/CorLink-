@@ -24,6 +24,7 @@ const Router = (() => {
     'admin':                  'administration',
     'rooms':                  'rooms',
     'meetings':               'meetings',
+    'calendar':               'calendar',
   };
 
   // Mirrors the exact Layer 2 check shell.js uses to decide whether to

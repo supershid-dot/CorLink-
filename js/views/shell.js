@@ -115,6 +115,7 @@ const AppShell = {
     const showEntry = this.isModuleEnabled(user, 'entry');
     const showRooms = this.isModuleEnabled(user, 'rooms');
     const showMeetings = this.isModuleEnabled(user, 'meetings');
+    const showCalendar = this.isModuleEnabled(user, 'calendar');
     const item = (route, label, icon, withBadge) =>
       `<a href="#${route}" class="sidebar-link${activeRoute === route ? ' sidebar-link--active' : ''}">
         <i class="ti ${icon}"></i><span>${label}</span>${withBadge ? '<span class="nav-action-badge" data-action-badge hidden></span>' : ''}
@@ -135,6 +136,7 @@ const AppShell = {
           ${showEntry ? item('entry', 'Entry', 'ti-mailbox') : ''}
           ${showRooms ? item('rooms', 'Rooms', 'ti-door') : ''}
           ${showMeetings ? item('meetings', 'Meetings', 'ti-calendar-event') : ''}
+          ${showCalendar ? item('calendar', 'Calendar', 'ti-calendar') : ''}
           ${canLetters ? item('prisoner-letters', 'Prisoner Letters', 'ti-mail') : ''}
           ${admin ? item('admin', 'Administration', 'ti-settings') : ''}
         </nav>
@@ -157,6 +159,7 @@ const AppShell = {
     const showEntry = this.isModuleEnabled(user, 'entry');
     const showRooms = this.isModuleEnabled(user, 'rooms');
     const showMeetings = this.isModuleEnabled(user, 'meetings');
+    const showCalendar = this.isModuleEnabled(user, 'calendar');
     const link = (route, label, withBadge) =>
       `<a href="#${route}" class="topbar-link${activeRoute === route ? ' topbar-link--active' : ''}">${label}${withBadge ? '<span class="nav-action-badge" data-action-badge hidden></span>' : ''}</a>`;
 
@@ -173,6 +176,7 @@ const AppShell = {
           ${showEntry ? link('entry', 'Entry') : ''}
           ${showRooms ? link('rooms', 'Rooms') : ''}
           ${showMeetings ? link('meetings', 'Meetings') : ''}
+          ${showCalendar ? link('calendar', 'Calendar') : ''}
           ${canLetters ? link('prisoner-letters', 'Letters') : ''}
           ${admin ? link('admin', 'Admin') : ''}
         </nav>
@@ -244,6 +248,7 @@ const AppShell = {
     const showEntry = this.isModuleEnabled(user, 'entry');
     const showRooms = this.isModuleEnabled(user, 'rooms');
     const showMeetings = this.isModuleEnabled(user, 'meetings');
+    const showCalendar = this.isModuleEnabled(user, 'calendar');
     const item = (route, label, icon, withBadge) =>
       `<a href="#${route}" class="bottom-nav-item${activeRoute === route ? ' bottom-nav-item--active' : ''}">
         <span class="bottom-nav-icon-wrap"><i class="ti ${icon}"></i>${withBadge ? '<span class="nav-action-badge nav-action-badge--corner" data-action-badge hidden></span>' : ''}</span>
@@ -257,6 +262,7 @@ const AppShell = {
         ${showEntry ? item('entry', 'Entry', 'ti-mailbox') : ''}
         ${showRooms ? item('rooms', 'Rooms', 'ti-door') : ''}
         ${showMeetings ? item('meetings', 'Meetings', 'ti-calendar-event') : ''}
+        ${showCalendar ? item('calendar', 'Calendar', 'ti-calendar') : ''}
         ${canLetters ? item('prisoner-letters', 'Letters', 'ti-mail') : ''}
         ${admin ? item('admin', 'Admin', 'ti-settings') : ''}
       </nav>

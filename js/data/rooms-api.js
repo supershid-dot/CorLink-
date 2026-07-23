@@ -27,7 +27,7 @@ const RoomsAPI = (() => {
 
   const BLOCK_SELECT = `
     *,
-    room:meeting_rooms!meeting_room_blocks_room_id_fkey(id, name),
+    room:meeting_rooms!meeting_room_blocks_room_id_fkey(id, name, org_id),
     created_by_user:users!meeting_room_blocks_created_by_fkey(full_name),
     conflict_overridden_by_user:users!meeting_room_blocks_conflict_overridden_by_fkey(full_name)
   `;
@@ -166,11 +166,18 @@ const RoomsAPI = (() => {
     },
 
     // ── Room blocks (reads only — writes are the two RPCs below) ────
-    async fetchRoomBlocks({ roomId, activeOnly = true } = {}) {
+    // from/to (added for Calendar, docs/22/23 Phase C) narrow to blocks
+    // whose window overlaps [from, to) — same overlap shape fetchBookings
+    // already uses above, optional and additive, every existing caller
+    // (rooms.js's Blocks tab) keeps working unchanged since neither
+    // param is ever passed there.
+    async fetchRoomBlocks({ roomId, activeOnly = true, from, to } = {}) {
       const db = getSupabase();
       let query = db.from('meeting_room_blocks').select(BLOCK_SELECT);
       if (roomId) query = query.eq('room_id', roomId);
       if (activeOnly) query = query.eq('is_active', true);
+      if (from) query = query.gt('end_at', from);
+      if (to) query = query.lt('start_at', to);
       const { data, error } = await query.order('start_at');
       if (error) throw error;
       return data || [];

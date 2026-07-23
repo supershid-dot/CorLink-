@@ -452,5 +452,28 @@ const MeetingsAPI = (() => {
       if (error) throw error;
       return data || [];
     },
+
+    // ── Calendar (docs/22/23 Phase C) ────────────────────────────────
+    // Every meeting whose window overlaps [from, to) — every status
+    // included (draft/scheduled/cancelled), Calendar's own filter bar
+    // decides what to hide, not this query. A recurring occurrence is
+    // an ordinary row here exactly like every other meetings.js/
+    // meetings-api.js read (series_id/series_occurrence_date/
+    // series_detached/is_locked all come through unchanged via
+    // MEETING_SELECT's `*`) — Calendar adds no occurrence-specific
+    // logic of its own, matching docs/23 §Phase C's "no new business
+    // logic" requirement. RLS (meetings_select/can_view_meeting(),
+    // unchanged) is what actually scopes visibility and organization
+    // isolation — this is the exact same table every other Meetings
+    // read already queries, not a new read surface.
+    async fetchMeetingsInRange({ from, to }) {
+      const db = getSupabase();
+      let query = db.from('meetings').select(MEETING_SELECT);
+      if (from) query = query.gt('end_at', from);
+      if (to) query = query.lt('start_at', to);
+      const { data, error } = await query.order('start_at');
+      if (error) throw error;
+      return data || [];
+    },
   };
 })();
