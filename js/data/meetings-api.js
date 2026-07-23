@@ -257,6 +257,25 @@ const MeetingsAPI = (() => {
       if (error) throw error;
     },
 
+    // Creator-only — locking is the creator's own choice, not
+    // something an org admin initiates on someone else's meeting
+    // (supabase/patch-meetings-lock.sql).
+    async lockMeeting(meetingId) {
+      const db = getSupabase();
+      const { error } = await db.rpc('lock_meeting', { p_meeting_id: meetingId });
+      if (error) throw error;
+    },
+
+    // Gated by is_meeting_lock_overridable() server-side: the
+    // creator, a same-org admin, or a super admin — never a
+    // supervisor, room manager, or ordinary staff member, and never
+    // a cross-org admin.
+    async unlockMeeting(meetingId) {
+      const db = getSupabase();
+      const { error } = await db.rpc('unlock_meeting', { p_meeting_id: meetingId });
+      if (error) throw error;
+    },
+
     // Delegates to the trusted booking layer server-side (create_room_booking
     // or submit_booking_request) — never a raw insert, and always the
     // meeting's own start/end/timezone (docs/12 §10). No p_start_at/

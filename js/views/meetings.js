@@ -75,6 +75,19 @@ const MeetingsView = {
     return meeting.created_by === this._user.id;
   },
 
+  // Mirrors is_meeting_lock_overridable() (supabase/patch-meetings-
+  // lock.sql): super admin anywhere; an org admin only within their
+  // own organization (meeting.organization_id === this._orgId, NOT
+  // this._isAdmin alone — a cross-org admin must not see the
+  // override affordance); the meeting's own creator always. A
+  // supervisor or room manager is never overridable, regardless of
+  // _canManage().
+  _canOverrideLock(meeting) {
+    if (this._user.is_super_admin) return true;
+    if (meeting.created_by === this._user.id) return true;
+    return this._isAdmin && meeting.organization_id === this._orgId;
+  },
+
   // ── Shell / tabs ─────────────────────────────────────────────────
   _shell() {
     return `
@@ -548,20 +561,37 @@ const MeetingsView = {
 
   _renderMeetingDetailModal(meeting, participants, booking, attachments) {
     const canManage = this._canManage(meeting);
+    const canOverrideLock = this._canOverrideLock(meeting);
+    const locked = meeting.is_locked;
+    // Once locked, only the creator, a same-org admin, or a super
+    // admin may still take management actions — server-side, this is
+    // is_meeting_lock_overridable() gating update_meeting/
+    // cancel_meeting/add_participant/remove_participant/
+    // assign_room_booking/detach_room_booking/mark_attendance/
+    // update_minutes/finalize_minutes and the meeting-attachment RLS
+    // branches identically (supabase/patch-meetings-lock.sql). This
+    // client-side combination is UX only, mirroring never replacing
+    // those RPCs' own real gate.
+    const canManageEffective = canManage && (!locked || canOverrideLock);
     const eff = this._effectiveStatus(meeting);
-    const canEdit = canManage && meeting.status !== 'cancelled' && eff !== 'completed';
-    const canCancel = canManage && meeting.status !== 'cancelled';
-    const canManageParticipants = canManage && meeting.status !== 'cancelled';
-    const canManageRoom = canManage && meeting.status !== 'cancelled' && this._roomsEnabled;
+    const canEdit = canManageEffective && meeting.status !== 'cancelled' && eff !== 'completed';
+    const canCancel = canManageEffective && meeting.status !== 'cancelled';
+    const canManageParticipants = canManageEffective && meeting.status !== 'cancelled';
+    const canManageRoom = canManageEffective && meeting.status !== 'cancelled' && this._roomsEnabled;
+    const canUploadAttachments = canManageEffective && meeting.status !== 'cancelled';
     // The caller's own active participant row, if any — drives the
     // "Your RSVP" block below. A caller with no participant row (e.g.
     // an org supervisor viewing via the 'organization' visibility
     // grant without being invited) simply sees no RSVP block, same as
-    // MeetFlow's own "only participants get an RSVP" behavior.
+    // MeetFlow's own "only participants get an RSVP" behavior. RSVP
+    // is deliberately unaffected by lock state — responding to your
+    // own invitation is a personal act, not a management action
+    // (supabase/patch-meetings-rsvp.sql's own documented scope).
     const myParticipant = participants.find(p => p.user_id === this._user.id);
 
     this._openModal(`
       <h3>${this._escapeHtml(meeting.title)}</h3>
+      ${locked ? `<div class="alert alert-warning" style="margin-bottom:12px;"><i class="ti ti-lock"></i> This meeting is locked. Only its creator, an organization administrator (within their own organization), or a super administrator can make changes.</div>` : ''}
       ${myParticipant ? this._renderMyRsvp(myParticipant, meeting) : ''}
       <div class="detail-grid">
         <div><strong>Status</strong><div>${this._capitalize(meeting.status)}</div></div>
@@ -599,13 +629,14 @@ const MeetingsView = {
 
       <div style="margin-top:12px;">
         <label class="field-label">Attachments</label>
-        <div style="margin-top:6px;">${this._renderAttachments('meeting', meeting.id, attachments, canManage && meeting.status !== 'cancelled')}</div>
+        <div style="margin-top:6px;">${this._renderAttachments('meeting', meeting.id, attachments, canUploadAttachments)}</div>
       </div>
 
-      ${this._renderMinutesPanel(meeting, canManage)}
+      ${this._renderMinutesPanel(meeting, canManage, canOverrideLock)}
 
       <div class="modal-actions" style="margin-top:16px;">
         <button type="button" class="btn btn-secondary" data-close-modal>Close</button>
+        ${this._renderLockControls(meeting, canOverrideLock)}
         ${canEdit ? `<button type="button" class="btn btn-secondary" id="detail-edit-btn">Edit</button>` : ''}
         ${canCancel ? `<button type="button" class="btn" style="background:var(--color-error-bg); color:var(--color-error-dark);" id="detail-cancel-btn">Cancel Meeting</button>` : ''}
       </div>
@@ -620,6 +651,81 @@ const MeetingsView = {
     document.getElementById('detail-cancel-btn')?.addEventListener('click', () => {
       this._closeModal();
       this._openCancelMeetingModal(meeting, booking);
+    });
+    document.getElementById('lock-meeting-btn')?.addEventListener('click', () => {
+      this._closeModal();
+      this._openLockMeetingModal(meeting);
+    });
+    document.getElementById('unlock-meeting-btn')?.addEventListener('click', () => {
+      this._closeModal();
+      this._openUnlockMeetingModal(meeting);
+    });
+  },
+
+  // ── Meeting locking (docs/22/23 Phase B) ─────────────────────────
+  // Locking is creator-only; unlocking uses the broader override tier
+  // (creator, same-org admin, or super admin) — matches
+  // is_meeting_lock_overridable() exactly. A non-creator overrider
+  // only ever sees an "Override Lock" affordance to unlock an already
+  // -locked meeting; they can never lock someone else's meeting.
+  _renderLockControls(meeting, canOverrideLock) {
+    if (meeting.status === 'cancelled') return '';
+    if (this._isCreator(meeting)) {
+      return meeting.is_locked
+        ? `<button type="button" class="btn btn-secondary" id="unlock-meeting-btn"><i class="ti ti-lock-open"></i> Unlock Meeting</button>`
+        : `<button type="button" class="btn btn-secondary" id="lock-meeting-btn"><i class="ti ti-lock"></i> Lock Meeting</button>`;
+    }
+    if (canOverrideLock && meeting.is_locked) {
+      return `<button type="button" class="btn btn-secondary" id="unlock-meeting-btn"><i class="ti ti-lock-open"></i> Override Lock (Unlock)</button>`;
+    }
+    return '';
+  },
+
+  _openLockMeetingModal(meeting) {
+    this._openModal(`
+      <h3>Lock Meeting</h3>
+      <p>Locking this meeting will prevent anyone other than you (its creator), an organization administrator within your organization, or a super administrator from editing, rescheduling, cancelling, managing participants, marking attendance, or modifying its minutes.</p>
+      <div class="modal-error alert alert-error hidden"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+        <button type="button" class="btn btn-primary" id="confirm-lock-meeting-btn">Lock Meeting</button>
+      </div>
+    `);
+    document.getElementById('confirm-lock-meeting-btn').addEventListener('click', async () => {
+      try {
+        await MeetingsAPI.lockMeeting(meeting.id);
+        this._closeModal();
+        const fresh = await MeetingsAPI.fetchMeeting(meeting.id);
+        this._openMeetingDetailModal(fresh);
+      } catch (err) {
+        const errEl = document.querySelector('#modal-root .modal-error');
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
+  _openUnlockMeetingModal(meeting) {
+    this._openModal(`
+      <h3>Unlock Meeting</h3>
+      <p>Unlocking this meeting will allow its normal meeting managers to make changes again.</p>
+      <div class="modal-error alert alert-error hidden"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+        <button type="button" class="btn btn-primary" id="confirm-unlock-meeting-btn">Unlock Meeting</button>
+      </div>
+    `);
+    document.getElementById('confirm-unlock-meeting-btn').addEventListener('click', async () => {
+      try {
+        await MeetingsAPI.unlockMeeting(meeting.id);
+        this._closeModal();
+        const fresh = await MeetingsAPI.fetchMeeting(meeting.id);
+        this._openMeetingDetailModal(fresh);
+      } catch (err) {
+        const errEl = document.querySelector('#modal-root .modal-error');
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
     });
   },
 
@@ -688,19 +794,21 @@ const MeetingsView = {
     });
   },
 
-  // ── Meeting minutes (docs/22/23 Phase B — minutes only, no ──────
-  // personal notes, no meeting lock) ───────────────────────────────
+  // ── Meeting minutes (docs/22/23 Phase B — minutes shipped ───────
+  // separately from locking; personal notes still not implemented) ──
   // canEditNow mirrors update_minutes()'s own server-side gate exactly:
-  // can_manage_meeting() before finalization, org-admin/super-admin
-  // only after. canManage is already correctly scoped to the viewer's
-  // own org for a non-super-admin (per this file's established
-  // simplification, see _canManage's own comment) so this._isAdmin
-  // needs no additional org comparison here.
-  _renderMinutesPanel(meeting, canManage) {
+  // the lock check first (identical while locked regardless of
+  // finalized state), then can_manage_meeting() before finalization,
+  // org-admin/super-admin only after. canManage is already correctly
+  // scoped to the viewer's own org for a non-super-admin (per this
+  // file's established simplification, see _canManage's own comment)
+  // so this._isAdmin needs no additional org comparison here.
+  _renderMinutesPanel(meeting, canManage, canOverrideLock) {
     const notCancelled = meeting.status !== 'cancelled';
-    const canEditNow = notCancelled && (meeting.minutes_finalized ? this._isAdmin : canManage);
+    const notBlockedByLock = !meeting.is_locked || canOverrideLock;
+    const canEditNow = notCancelled && notBlockedByLock && (meeting.minutes_finalized ? this._isAdmin : canManage);
     const hasMinutes = !!(meeting.minutes && meeting.minutes.trim() !== '');
-    const canFinalize = notCancelled && this._isSupervisor && !meeting.minutes_finalized && hasMinutes;
+    const canFinalize = notCancelled && notBlockedByLock && this._isSupervisor && !meeting.minutes_finalized && hasMinutes;
     return `
       <div style="margin-top:12px;">
         <label class="field-label">Minutes${meeting.minutes_finalized ? ' <span class="badge badge-outline">Finalized</span>' : ''}</label>
