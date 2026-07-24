@@ -1089,6 +1089,8 @@ const MeetingsView = {
 
       ${this._renderMinutesPanel(meeting, canManage, canOverrideLock)}
 
+      ${meeting.series_id ? this._renderActivityPanel() : ''}
+
       ${myParticipant ? this._renderMyNotesPanel(meeting, myNotes) : ''}
 
       <div class="modal-actions" style="margin-top:16px;">
@@ -1125,6 +1127,11 @@ const MeetingsView = {
     document.getElementById('view-series-btn')?.addEventListener('click', () => {
       this._openSeriesOccurrencesModal(meeting);
     });
+
+    // Fire-and-forget — the rest of the modal above is already
+    // rendered; this fills in #series-activity-panel once it resolves,
+    // without delaying anything else in this function.
+    if (meeting.series_id) this._loadSeriesActivity(meeting);
   },
 
   // ── Recurring Meetings Phase 2: action-scope decision point ──────
@@ -1521,6 +1528,235 @@ const MeetingsView = {
         <button type="button" class="btn btn-primary" data-close-modal>Done</button>
       </div>
     `, { medium: true });
+  },
+
+  // ── Recurring Meetings Phase 2: series activity timeline ──────────
+  // Read-only. Renders a loading placeholder synchronously (so the
+  // rest of the detail modal never waits on this) and is filled in
+  // once _loadSeriesActivity() below resolves. Only ever included by
+  // the caller when meeting.series_id is set.
+  _renderActivityPanel() {
+    return `
+      <div style="margin-top:12px;">
+        <label class="field-label">Activity</label>
+        <div style="margin-top:6px;" id="series-activity-panel">
+          <p class="structure-empty">Loading activity…</p>
+        </div>
+      </div>
+    `;
+  },
+
+  // Fire-and-forget — called once per detail-modal render, right after
+  // the modal's DOM exists. Promise.allSettled() so one failed source
+  // (audit trail or exceptions) never blocks the other from rendering.
+  // Re-fetches #series-activity-panel after the await rather than
+  // reusing a variable captured before it, since the modal may have
+  // been closed (modal-root cleared) while this was in flight.
+  async _loadSeriesActivity(meeting) {
+    const [auditResult, exceptionResult] = await Promise.allSettled([
+      MeetingsAPI.fetchSeriesAuditTrail(meeting.series_id),
+      MeetingsAPI.fetchSeriesExceptions(meeting.series_id),
+    ]);
+    const panel = document.getElementById('series-activity-panel');
+    if (!panel) return;
+    panel.innerHTML = this._renderSeriesActivityContent(auditResult, exceptionResult);
+  },
+
+  // Merges the two settled results into one rendered timeline. Handles
+  // every combination: both succeeded, one failed, both failed, and
+  // "succeeded but empty" — each gets its own required wording.
+  _renderSeriesActivityContent(auditResult, exceptionResult) {
+    const auditOk = auditResult.status === 'fulfilled';
+    const exceptionOk = exceptionResult.status === 'fulfilled';
+
+    if (!auditOk && !exceptionOk) {
+      return `<p class="structure-empty">Activity could not be loaded.</p>`;
+    }
+
+    const auditRows = auditOk && Array.isArray(auditResult.value) ? auditResult.value : [];
+    const exceptionRows = exceptionOk && Array.isArray(exceptionResult.value) ? exceptionResult.value : [];
+
+    const events = [
+      ...auditRows.map(row => this._seriesAuditEvent(row)).filter(Boolean),
+      ...exceptionRows.map(row => this._seriesExceptionEvent(row)).filter(Boolean),
+    ];
+    // Array.prototype.sort is stable (ECMA-262) — events with an equal
+    // (including missing/0) sortKey keep their original relative order,
+    // which is the "stable fallback ordering" a missing timestamp needs.
+    events.sort((a, b) => b.sortKey - a.sortKey);
+
+    const partialNote = (!auditOk || !exceptionOk)
+      ? `<p class="field-hint">Some activity details could not be loaded.</p>`
+      : '';
+
+    if (events.length === 0) {
+      return `${partialNote}<p class="structure-empty">No activity has been recorded for this recurring series yet.</p>`;
+    }
+
+    return `${partialNote}<div class="activity-log-body">${events.map(e => this._renderSeriesActivityItem(e)).join('')}</div>`;
+  },
+
+  // audit_logs.notes' locked summary format (supabase/patch-meetings-
+  // recurring-phase2-*.sql, design decision "audit_logs.notes summary
+  // format"): 'scope=<scope>; affected=<count>; skipped=<count>;
+  // skipped_locked=<count>; skipped_completed=<count>;
+  // skipped_cancelled=<count>; skipped_detached=<count>' — a flat
+  // semicolon-separated key=value list, not JSON. Malformed/missing
+  // notes safely produce an empty object rather than throwing.
+  _parseAuditNotes(notes) {
+    const out = {};
+    if (!notes || typeof notes !== 'string') return out;
+    for (const part of notes.split(';')) {
+      const idx = part.indexOf('=');
+      if (idx === -1) continue;
+      const key = part.slice(0, idx).trim();
+      if (key) out[key] = part.slice(idx + 1).trim();
+    }
+    return out;
+  },
+
+  // Reuses the exact wording _summarizeSeriesEditOutcome()/
+  // _summarizeSeriesCancelOutcome() already established for these same
+  // outcome categories, built here from the real per-category counts
+  // audit_logs.notes already carries — never fabricated. affectedLabel
+  // is 'updated' for an edit action, 'cancelled' for a cancellation,
+  // matching each summarizer's own "N updated"/"N cancelled" wording.
+  _seriesAuditOutcomeSummary(notes, affectedLabel) {
+    const n = this._parseAuditNotes(notes);
+    const parts = [];
+    const push = (raw, suffix) => {
+      const count = parseInt(raw, 10);
+      if (!Number.isNaN(count) && count > 0) parts.push(`${count} ${suffix}`);
+    };
+    push(n.affected, affectedLabel);
+    push(n.skipped_detached, 'edited individually and left unchanged');
+    push(n.skipped_completed, 'completed and left unchanged');
+    push(n.skipped_cancelled, 'already cancelled and left unchanged');
+    push(n.skipped_locked, 'locked by another user and left unchanged');
+    return parts.join(', ');
+  },
+
+  // Converts one audit_logs row into a normalized timeline event, or
+  // null for a row this timeline doesn't recognize (safely ignored,
+  // never thrown). action alone doesn't distinguish entire-series from
+  // this-and-future for 'meeting_series_updated'/'meeting_series_
+  // cancelled' — both scopes can produce either action depending on
+  // whether a this-and-future edit/cancel collapsed to a first-
+  // occurrence entire-series call or produced a genuine split
+  // (supabase/patch-meetings-recurring-phase2-update-series-this-and-
+  // future.sql / -cancel-series-this-and-future.sql) — so the scope
+  // actually shown here is read from notes' own scope= field, not
+  // assumed from the action name.
+  _seriesAuditEvent(row) {
+    if (!row || typeof row !== 'object') return null;
+    const notes = this._parseAuditNotes(row.notes);
+    const isThisAndFuture = notes.scope === 'this_and_future';
+
+    let title, scopeLabel, affectedLabel;
+    if (row.action === 'meeting_series_created') {
+      title = 'Series created';
+    } else if (row.action === 'meeting_series_updated') {
+      title = isThisAndFuture ? 'This and future meetings updated' : 'Series updated';
+      scopeLabel = isThisAndFuture ? 'This and future' : 'Entire series';
+      affectedLabel = 'updated';
+    } else if (row.action === 'meeting_series_split') {
+      // A genuine this-and-future edit split always carries
+      // scope=this_and_future in its own notes — this action name is
+      // only ever written by that one call path.
+      title = 'This and future meetings updated';
+      scopeLabel = 'This and future';
+      affectedLabel = 'updated';
+    } else if (row.action === 'meeting_series_cancelled') {
+      title = isThisAndFuture ? 'This and future meetings cancelled' : 'Series cancelled';
+      scopeLabel = isThisAndFuture ? 'This and future' : 'Entire series';
+      affectedLabel = 'cancelled';
+    } else {
+      return null;
+    }
+
+    const createdAt = row.created_at ? new Date(row.created_at) : null;
+    const dateValid = !!createdAt && !Number.isNaN(createdAt.getTime());
+
+    return {
+      icon: row.action === 'meeting_series_cancelled' ? 'ti-ban' : (row.action === 'meeting_series_created' ? 'ti-calendar-plus' : 'ti-edit'),
+      title,
+      scopeLabel: scopeLabel || '',
+      summary: affectedLabel ? this._seriesAuditOutcomeSummary(row.notes, affectedLabel) : '',
+      actorName: row.user?.full_name || '',
+      designation: row.user?.designations?.name || '',
+      dateLabel: dateValid ? createdAt.toLocaleString() : '',
+      sortKey: dateValid ? createdAt.getTime() : 0,
+    };
+  },
+
+  // Converts one meeting_series_exceptions row into a normalized
+  // timeline event, or null for an unrecognized exception_type. This
+  // table's own real columns (supabase/patch-meetings-recurring.sql)
+  // are id/series_id/exception_date/exception_type/
+  // replacement_meeting_id/created_by/created_at — there is no reason
+  // column recording WHY an occurrence was skipped (completed vs.
+  // locked vs. already cancelled), and create_series_exception()'s own
+  // header comment (supabase/patch-meetings-recurring-phase2-series-
+  // exceptions.sql) documents that distinction as explicit future
+  // work. Per this task's own "do not fabricate unavailable details"
+  // requirement, 'skipped' is therefore shown with a single honest,
+  // generic label rather than an invented specific reason. There is
+  // also no join to users here (fetchSeriesExceptions() selects plain
+  // columns only), so actorName is always left blank for this source.
+  _seriesExceptionEvent(row) {
+    if (!row || typeof row !== 'object') return null;
+    let title;
+    if (row.exception_type === 'modified') {
+      title = 'Meeting edited individually';
+    } else if (row.exception_type === 'skipped') {
+      title = 'Meeting skipped in series';
+    } else {
+      return null;
+    }
+
+    const createdAt = row.created_at ? new Date(row.created_at) : null;
+    const createdAtValid = !!createdAt && !Number.isNaN(createdAt.getTime());
+    let dateLabel = createdAtValid ? createdAt.toLocaleString() : '';
+    let sortKey = createdAtValid ? createdAt.getTime() : 0;
+    if (!dateLabel && row.exception_date) {
+      const d = new Date(row.exception_date);
+      if (!Number.isNaN(d.getTime())) {
+        dateLabel = d.toLocaleDateString();
+        sortKey = d.getTime();
+      }
+    }
+
+    return {
+      icon: row.exception_type === 'modified' ? 'ti-edit' : 'ti-player-skip-forward',
+      title,
+      scopeLabel: 'Single meeting',
+      summary: '',
+      actorName: '',
+      designation: '',
+      dateLabel,
+      sortKey,
+    };
+  },
+
+  // Same .thread-receipt line shape request-detail.js's own activity
+  // log already uses (icon + content), reused here as-is — no new CSS.
+  _renderSeriesActivityItem(e) {
+    const scopeBadge = e.scopeLabel ? ` <span class="badge badge-outline">${this._escapeHtml(e.scopeLabel)}</span>` : '';
+    const metaBits = [];
+    if (e.actorName) metaBits.push(`By <strong>${this._escapeHtml(e.actorName)}</strong>${e.designation ? `, ${this._escapeHtml(e.designation)}` : ''}`);
+    if (e.dateLabel) metaBits.push(this._escapeHtml(e.dateLabel));
+    const metaLine = metaBits.length ? `<div class="structure-empty">${metaBits.join(' — ')}</div>` : '';
+    const summaryLine = e.summary ? `<div class="structure-empty">${this._escapeHtml(e.summary)}</div>` : '';
+    return `
+      <div class="thread-receipt">
+        <i class="ti ${e.icon}"></i>
+        <div>
+          <div><strong>${this._escapeHtml(e.title)}</strong>${scopeBadge}</div>
+          ${metaLine}
+          ${summaryLine}
+        </div>
+      </div>
+    `;
   },
 
   // Wall-clock time-of-day (HH:mm) in an arbitrary IANA zone, using
