@@ -464,6 +464,128 @@ const MeetingsAPI = (() => {
       return data || [];
     },
 
+    // ── Recurring Meetings Phase 2 (docs/28) — series-wide and this-
+    // and-future bulk operations. A patch field left undefined/null
+    // means "leave unchanged" server-side, same COALESCE-style
+    // convention updateMeeting() above already uses. Only template
+    // fields and time-of-day (TIME, not a full timestamp) are
+    // editable at series scope — neither RPC accepts a date or a room
+    // id: a date change stays a per-occurrence updateMeeting() edit,
+    // and a room change stays a per-occurrence assignRoomBooking()/
+    // detachRoomBooking() call. Every row of the RPC's own
+    // TABLE(meeting_id, occurrence_date, outcome) result is returned
+    // unmodified — the caller classifies affected/skipped_* itself,
+    // this layer never flattens, filters, or discards a row.
+    async updateEntireSeries(seriesId, patch = {}) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('update_entire_series', {
+        p_series_id: seriesId,
+        p_title: patch.title ?? null,
+        p_description: patch.description ?? null,
+        p_meeting_type: patch.meetingType ?? null,
+        p_visibility: patch.visibility ?? null,
+        p_start_time: patch.startTime ?? null,
+        p_end_time: patch.endTime ?? null,
+        p_timezone: patch.timezone ?? null,
+        p_location_mode: patch.locationMode ?? null,
+        p_external_location: patch.externalLocation ?? null,
+        p_virtual_link: patch.virtualLink ?? null,
+      });
+      if (error) throw error;
+      return data || [];
+    },
+
+    // A first-occurrence target delegates entirely, server-side, to
+    // update_entire_series() (docs/28 §7) and this call simply
+    // returns whichever rows that produced — no series id is ever
+    // inferred or constructed here, the backend decides.
+    async updateSeriesThisAndFuture(meetingId, patch = {}) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('update_series_this_and_future', {
+        p_meeting_id: meetingId,
+        p_title: patch.title ?? null,
+        p_description: patch.description ?? null,
+        p_meeting_type: patch.meetingType ?? null,
+        p_visibility: patch.visibility ?? null,
+        p_start_time: patch.startTime ?? null,
+        p_end_time: patch.endTime ?? null,
+        p_timezone: patch.timezone ?? null,
+        p_location_mode: patch.locationMode ?? null,
+        p_external_location: patch.externalLocation ?? null,
+        p_virtual_link: patch.virtualLink ?? null,
+      });
+      if (error) throw error;
+      return data || [];
+    },
+
+    // cancellationReason || null mirrors cancelMeeting()'s own reason
+    // handling above. An affected=0 result is still a successful
+    // call, never an error here — meeting_series.status still
+    // transitions to 'cancelled' unconditionally even when every
+    // occurrence was excluded (docs/28 §8).
+    async cancelEntireSeries(seriesId, cancellationReason = null) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('cancel_entire_series', {
+        p_series_id: seriesId, p_cancellation_reason: cancellationReason || null,
+      });
+      if (error) throw error;
+      return data || [];
+    },
+
+    // A first-occurrence target delegates to cancel_entire_series();
+    // a middle-occurrence split always creates and cancels the new
+    // split series even when affected=0 (docs/28 §9 — the deliberate
+    // divergence from the update RPC's discard-if-nothing-eligible
+    // behavior). This method never infers success or failure from
+    // the returned row count.
+    async cancelSeriesThisAndFuture(meetingId, cancellationReason = null) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('cancel_series_this_and_future', {
+        p_meeting_id: meetingId, p_cancellation_reason: cancellationReason || null,
+      });
+      if (error) throw error;
+      return data || [];
+    },
+
+    // meeting_series_exceptions' real columns (supabase/patch-meetings-
+    // recurring.sql): id, series_id, exception_date, exception_type
+    // ('skipped'|'modified'), replacement_meeting_id, created_by,
+    // created_at — there is no meeting_id column and no reason/notes
+    // column on this table. SELECT-only RLS
+    // (meeting_series_exceptions_select) is what actually scopes
+    // visibility; this is a plain filtered read, same convention as
+    // fetchMeetingGroups()/fetchGroupMembers() above, not an RPC.
+    async fetchSeriesExceptions(seriesId) {
+      const db = getSupabase();
+      const { data, error } = await db.from('meeting_series_exceptions')
+        .select('id, series_id, exception_date, exception_type, replacement_meeting_id, created_by, created_at')
+        .eq('series_id', seriesId)
+        .order('exception_date', { ascending: true })
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      return data || [];
+    },
+
+    // audit_logs' real columns (supabase/schema.sql): id, user_id,
+    // action, record_type, record_id, notes, ip_address, created_at.
+    // Phase 2 series-level operations write record_type='meeting_series'
+    // with action IN ('meeting_series_updated', 'meeting_series_split',
+    // 'meeting_series_cancelled') (supabase/patch-meetings-recurring-
+    // phase2-*.sql). Mirrors requests-api.js's listCaseAuditTrail()
+    // shape exactly — same user:users(full_name, designations(name))
+    // embed, same plain filtered read, no RPC, no RLS change.
+    async fetchSeriesAuditTrail(seriesId) {
+      const db = getSupabase();
+      const { data, error } = await db.from('audit_logs')
+        .select('*, user:users(full_name, designations(name))')
+        .eq('record_type', 'meeting_series')
+        .eq('record_id', seriesId)
+        .in('action', ['meeting_series_updated', 'meeting_series_split', 'meeting_series_cancelled'])
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      return data || [];
+    },
+
     // ── Calendar (docs/22/23 Phase C) ────────────────────────────────
     // Every meeting whose window overlaps [from, to) — every status
     // included (draft/scheduled/cancelled), Calendar's own filter bar
