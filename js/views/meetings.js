@@ -1165,18 +1165,17 @@ const MeetingsView = {
       if (action === 'edit') this._openMeetingFormModal(meeting);
       else this._openCancelMeetingModal(meeting, booking);
     });
-    // "This and future" cancel remains wiring-only — that cancellation
-    // form is a later step's scope. "This and future" edit and "Entire
-    // series" edit both open the same series edit modal below,
-    // parameterized by scope; "Entire series" cancel now opens the
-    // series cancel modal below the same way.
+    // "This and future" edit and "Entire series" edit both open the
+    // same series edit modal below, parameterized by scope; "This and
+    // future" cancel and "Entire series" cancel both open the same
+    // series cancel modal below, parameterized by scope, the same way.
     document.getElementById('scope-future-btn')?.addEventListener('click', () => {
       this._closeModal();
       if (action === 'edit') {
         this._openSeriesEditModal(meeting, 'this_and_future');
         return;
       }
-      alert('Series cancellation will be implemented in the next step.');
+      this._openSeriesCancelModal(meeting, 'this_and_future');
     });
     document.getElementById('scope-series-btn')?.addEventListener('click', () => {
       this._closeModal();
@@ -1400,19 +1399,23 @@ const MeetingsView = {
     return parts.length ? `Series updated: ${parts.join(', ')}.` : 'Series updated: no eligible occurrences were changed.';
   },
 
-  // ── Recurring Meetings Phase 2: entire-series cancellation ────────
-  // Only "entire_series" is supported here — "this_and_future"
-  // cancellation is a later step's scope, matching how
-  // _openSeriesEditModal was extended one scope at a time. cancel_
-  // entire_series() takes only p_series_id and p_cancellation_reason;
-  // there is no date/room/recurrence/attendee field to collect, unlike
-  // the edit modal's form.
+  // ── Recurring Meetings Phase 2: series cancellation ────────────────
+  // Shared by both cancellation scopes, same shape as
+  // _openSeriesEditModal's scope parameterization. cancel_
+  // entire_series()/cancel_series_this_and_future() take only a
+  // target id and p_cancellation_reason; there is no date/room/
+  // recurrence/attendee field to collect, unlike the edit modal's
+  // form.
   _openSeriesCancelModal(meeting, scope) {
-    if (scope !== 'entire_series') return;
+    if (scope !== 'entire_series' && scope !== 'this_and_future') return;
+    const isThisAndFuture = scope === 'this_and_future';
+    const submitLabel = isThisAndFuture ? 'Cancel This and Future' : 'Cancel Entire Series';
 
     this._openModal(`
-      <h3>Cancel Entire Series</h3>
-      <p class="field-hint">This cancels eligible meetings across the recurring series, not just this occurrence.</p>
+      <h3>${isThisAndFuture ? 'Cancel This and Future Meetings' : 'Cancel Entire Series'}</h3>
+      <p class="field-hint">${isThisAndFuture
+        ? 'This cancels this occurrence and eligible later occurrences in the series. Earlier occurrences remain unchanged.'
+        : 'This cancels eligible meetings across the recurring series, not just this occurrence.'}</p>
       <p class="field-hint">Already cancelled meetings may be skipped. Completed or locked occurrences may be left unchanged. Individually detached occurrences may also be left unchanged.</p>
       <form id="series-cancel-form" class="modal-form">
         <div class="field-group">
@@ -1421,8 +1424,8 @@ const MeetingsView = {
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" data-close-modal>Keep Series</button>
-          <button type="submit" class="btn" style="background:var(--color-error-bg); color:var(--color-error-dark);" id="series-cancel-submit">Cancel Entire Series</button>
+          <button type="button" class="btn btn-secondary" data-close-modal>${isThisAndFuture ? 'Keep Meetings' : 'Keep Series'}</button>
+          <button type="submit" class="btn" style="background:var(--color-error-bg); color:var(--color-error-dark);" id="series-cancel-submit">${submitLabel}</button>
         </div>
       </form>
     `, { medium: true });
@@ -1445,7 +1448,9 @@ const MeetingsView = {
       submitBtn.disabled = true;
       submitBtn.textContent = 'Cancelling…';
       try {
-        const rows = await MeetingsAPI.cancelEntireSeries(meeting.series_id, reason);
+        const rows = isThisAndFuture
+          ? await MeetingsAPI.cancelSeriesThisAndFuture(meeting.id, reason)
+          : await MeetingsAPI.cancelEntireSeries(meeting.series_id, reason);
         this._closeModal();
         await this._renderTab();
         alert(this._summarizeSeriesCancelOutcome(rows));
@@ -1453,7 +1458,7 @@ const MeetingsView = {
         errEl.textContent = err.message || 'This series could not be cancelled — it was not changed.';
         errEl.classList.remove('hidden');
         submitBtn.disabled = false;
-        submitBtn.textContent = 'Cancel Entire Series';
+        submitBtn.textContent = submitLabel;
       }
     });
   },
