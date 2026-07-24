@@ -1165,11 +1165,10 @@ const MeetingsView = {
       if (action === 'edit') this._openMeetingFormModal(meeting);
       else this._openCancelMeetingModal(meeting, booking);
     });
-    // Wiring only, per this step's scope — the series edit/cancel forms
-    // and their MeetingsAPI calls (updateEntireSeries/
-    // updateSeriesThisAndFuture/cancelEntireSeries/
-    // cancelSeriesThisAndFuture, already added to meetings-api.js) are
-    // implemented in a later step.
+    // "This and future" remains wiring-only for both actions, and so
+    // does "Entire series" for cancel — the this-and-future edit form,
+    // and both cancellation forms, are later steps' scope. "Entire
+    // series" for edit now opens the real series edit modal below.
     document.getElementById('scope-future-btn')?.addEventListener('click', () => {
       this._closeModal();
       alert(isCancel
@@ -1178,10 +1177,229 @@ const MeetingsView = {
     });
     document.getElementById('scope-series-btn')?.addEventListener('click', () => {
       this._closeModal();
-      alert(isCancel
-        ? 'Series cancellation will be implemented in the next step.'
-        : 'Series editing will be implemented in the next step.');
+      if (action === 'edit') {
+        this._openSeriesEditModal(meeting, 'entire_series');
+        return;
+      }
+      alert('Series cancellation will be implemented in the next step.');
     });
+  },
+
+  // ── Recurring Meetings Phase 2: entire-series edit ────────────────
+  // Only the fields update_entire_series() actually accepts: template
+  // fields plus time-of-day (TIME, not a date) and timezone. No date,
+  // no recurrence field, no room id/selector — a date change stays a
+  // per-occurrence edit via _openMeetingFormModal(), and room
+  // reassignment stays a per-occurrence action via
+  // _openAssignRoomModal()/_openChangeRoomModal(): this RPC never
+  // assigns a room, it only reschedules an occurrence's EXISTING
+  // booking to match a new time-of-day.
+  _openSeriesEditModal(meeting, scope) {
+    if (scope !== 'entire_series') return; // "this and future" is a later step
+
+    const tz = meeting.timezone || 'Indian/Maldives';
+    // Time-of-day must be read in the OCCURRENCE'S OWN configured
+    // timezone, not the browser's local zone and not raw UTC —
+    // update_entire_series() recomputes each occurrence's absolute
+    // time as (series_occurrence_date + this time-of-day) AT TIME
+    // ZONE (this timezone), so the value shown here has to be the
+    // correct wall-clock time in `tz` regardless of where the browser
+    // itself is. _timeOfDayInZone() below uses Intl.DateTimeFormat
+    // with an explicit timeZone, never the browser's own local zone.
+    const startVal = this._timeOfDayInZone(meeting.start_at, tz);
+    const endVal = this._timeOfDayInZone(meeting.end_at, tz);
+    const locationMode = meeting.location_mode || '';
+
+    this._openModal(`
+      <h3>Edit Entire Series</h3>
+      <p class="field-hint">This updates the supported fields across eligible meetings in the series. Each occurrence keeps its existing calendar date.</p>
+      <p class="field-hint">Individually edited occurrences may be skipped. Completed or locked occurrences may be left unchanged. Room assignments are not changed, although an existing room booking may be rescheduled to the new time.</p>
+      <form id="series-edit-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Title</label>
+          <input class="field-input-plain" name="title" required value="${this._escapeHtml(meeting.title)}" />
+        </div>
+        <div class="field-group">
+          <label class="field-label">Description (optional)</label>
+          <textarea class="field-input-plain" name="description" rows="3">${this._escapeHtml(meeting.description || '')}</textarea>
+        </div>
+        <div class="field-row">
+          <div class="field-group">
+            <label class="field-label">Meeting Type</label>
+            <select class="field-select" name="meetingType">
+              ${['general', 'interview', 'training', 'operational', 'administrative', 'other'].map(t =>
+                `<option value="${t}" ${meeting.meeting_type === t ? 'selected' : ''}>${this._capitalize(t)}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Visibility</label>
+            <select class="field-select" name="visibility">
+              ${['private', 'participants', 'organization'].map(v =>
+                `<option value="${v}" ${meeting.visibility === v ? 'selected' : ''}>${this._capitalize(v)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field-group">
+            <label class="field-label">Start Time</label>
+            <input class="field-input-plain" type="time" name="startTime" required value="${startVal}" />
+          </div>
+          <div class="field-group">
+            <label class="field-label">End Time</label>
+            <input class="field-input-plain" type="time" name="endTime" required value="${endVal}" />
+          </div>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Timezone</label>
+          <select class="field-select" name="timezone">
+            ${['Indian/Maldives', 'Asia/Colombo', 'Asia/Kolkata', 'Asia/Dubai', 'UTC'].map(z =>
+              `<option value="${z}" ${tz === z ? 'selected' : ''}>${z}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Location</label>
+          <select class="field-select" name="locationMode" id="series-location-mode">
+            <option value="" ${locationMode === '' ? 'selected' : ''}>Not decided yet</option>
+            <option value="room" ${locationMode === 'room' ? 'selected' : ''}>Room (existing booking rescheduled to the new time)</option>
+            <option value="external" ${locationMode === 'external' ? 'selected' : ''}>External location</option>
+            <option value="virtual" ${locationMode === 'virtual' ? 'selected' : ''}>Virtual</option>
+          </select>
+        </div>
+        <div class="field-group hidden" id="series-external-location-group">
+          <label class="field-label">External Location</label>
+          <input class="field-input-plain" name="externalLocation" value="${this._escapeHtml(meeting.external_location || '')}" />
+        </div>
+        <div class="field-group hidden" id="series-virtual-link-group">
+          <label class="field-label">Virtual Link (https:// only)</label>
+          <input class="field-input-plain" type="url" name="virtualLink" placeholder="https://…" value="${this._escapeHtml(meeting.virtual_link || '')}" />
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary" id="series-edit-submit">Save Changes</button>
+        </div>
+      </form>
+    `, { medium: true });
+
+    const form = document.getElementById('series-edit-form');
+    const errEl = form.querySelector('.modal-error');
+    const submitBtn = document.getElementById('series-edit-submit');
+    const locSelect = document.getElementById('series-location-mode');
+    const extGroup = document.getElementById('series-external-location-group');
+    const virtGroup = document.getElementById('series-virtual-link-group');
+
+    const syncLocationFields = () => {
+      extGroup.classList.toggle('hidden', locSelect.value !== 'external');
+      virtGroup.classList.toggle('hidden', locSelect.value !== 'virtual');
+    };
+    locSelect.addEventListener('change', syncLocationFields);
+    syncLocationFields();
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errEl.classList.add('hidden');
+      const fd = new FormData(form);
+      const title = fd.get('title');
+      const startTime = fd.get('startTime');
+      const endTime = fd.get('endTime');
+      const timezone = fd.get('timezone');
+      const locationMode = fd.get('locationMode') || null;
+      const externalLocation = fd.get('externalLocation') || null;
+      const virtualLink = fd.get('virtualLink') || null;
+
+      if (!title || !title.trim()) {
+        errEl.textContent = 'title must not be blank';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (!startTime || !endTime) {
+        errEl.textContent = 'Start time and end time are both required.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (endTime <= startTime) {
+        errEl.textContent = 'End time must be after the start time.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (locationMode === 'external' && !externalLocation) {
+        errEl.textContent = 'External location is required for an external series.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (locationMode === 'virtual' && (!virtualLink || !/^https:\/\//.test(virtualLink))) {
+        errEl.textContent = 'A valid https:// virtual link is required for a virtual series.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Saving…';
+      try {
+        const rows = await MeetingsAPI.updateEntireSeries(meeting.series_id, {
+          title,
+          description: fd.get('description') || null,
+          meetingType: fd.get('meetingType'),
+          visibility: fd.get('visibility'),
+          startTime,
+          endTime,
+          timezone,
+          locationMode,
+          externalLocation: locationMode === 'external' ? externalLocation : null,
+          virtualLink: locationMode === 'virtual' ? virtualLink : null,
+        });
+        this._closeModal();
+        await this._renderTab();
+        try {
+          const fresh = await MeetingsAPI.fetchMeeting(meeting.id);
+          this._openMeetingDetailModal(fresh);
+        } catch (err) {
+          console.error('CorLink: series updated but failed to reopen the meeting', err);
+        }
+        alert(this._summarizeSeriesEditOutcome(rows));
+      } catch (err) {
+        errEl.textContent = err.message || 'This series could not be updated — it was not changed.';
+        errEl.classList.remove('hidden');
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Save Changes';
+      }
+    });
+  },
+
+  // Counts each returned row by its outcome — update_entire_series()'s
+  // full outcome vocabulary (docs/28-recurring-meetings-phase2-
+  // implementation.md §5): updated, skipped_cancelled, skipped_detached,
+  // skipped_completed, skipped_locked. Only non-zero categories are
+  // shown. A private helper for this modal only — a shared, reusable
+  // result-summary component is a later step's scope, not this one's.
+  // An empty rows array is not an error; it produces the "no eligible
+  // occurrences" fallback line below, never a thrown exception.
+  _summarizeSeriesEditOutcome(rows) {
+    const counts = { updated: 0, skipped_cancelled: 0, skipped_detached: 0, skipped_completed: 0, skipped_locked: 0 };
+    for (const row of rows || []) {
+      if (Object.prototype.hasOwnProperty.call(counts, row.outcome)) counts[row.outcome]++;
+    }
+    const parts = [];
+    if (counts.updated) parts.push(`${counts.updated} updated`);
+    if (counts.skipped_detached) parts.push(`${counts.skipped_detached} edited individually and left unchanged`);
+    if (counts.skipped_completed) parts.push(`${counts.skipped_completed} completed and left unchanged`);
+    if (counts.skipped_cancelled) parts.push(`${counts.skipped_cancelled} already cancelled and left unchanged`);
+    if (counts.skipped_locked) parts.push(`${counts.skipped_locked} locked by another user and left unchanged`);
+    return parts.length ? `Series updated: ${parts.join(', ')}.` : 'Series updated: no eligible occurrences were changed.';
+  },
+
+  // Wall-clock time-of-day (HH:mm) in an arbitrary IANA zone, using
+  // only the native Intl API — no library, and critically no reliance
+  // on the browser's own local timezone (explicit timeZone: timezone
+  // is what makes this safe; toLocaleTimeString()/toISOString() alone
+  // would silently use the browser's zone or UTC instead).
+  _timeOfDayInZone(dateInput, timezone) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    }).formatToParts(new Date(dateInput));
+    const hh = parts.find(p => p.type === 'hour').value;
+    const mm = parts.find(p => p.type === 'minute').value;
+    return `${hh}:${mm}`;
   },
 
   // ── Recurring series indicator (docs/22/23 Phase F, Phase 1) ─────
