@@ -39,6 +39,28 @@ const AppShell = {
     return !!user.is_prisoner_letters_staff;
   },
 
+  // Layer 1 of the two-layer module access model (see
+  // docs/04-platform-module-foundation.md): is p_moduleKey enabled for
+  // the user's organization? user.enabledModules is populated at
+  // sign-in/refresh (js/auth.js, via ModulesAPI.listEnabledModuleKeys)
+  // and is one of three shapes:
+  //   - a real array              → the authoritative Layer 1 answer.
+  //   - null/undefined            → Layer 1 data couldn't be loaded
+  //     (network failure, or the organization_modules/platform_modules
+  //     tables don't exist yet on this project because this migration
+  //     hasn't been applied there yet). Treated as "no Layer 1 opinion
+  //     available" — pass through unchanged, so a module that already
+  //     shipped before this feature existed keeps working exactly as
+  //     it did before. This deliberately does NOT apply to any
+  //     not-yet-shipped module, because those never get a nav item in
+  //     the templates below regardless of this check's answer.
+  isModuleEnabled(user, moduleKey) {
+    if (user.is_super_admin) return true;
+    const modules = user.enabledModules;
+    if (!Array.isArray(modules)) return true; // no Layer 1 opinion yet — don't break existing nav
+    return modules.includes(moduleKey);
+  },
+
   initials(name) {
     return name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
   },
@@ -87,8 +109,13 @@ const AppShell = {
   // topbarHtml() as a sibling of the <header>, so every view gets it
   // without changing its own markup.
   sidebarHtml(user, activeRoute) {
-    const admin = this.isAdmin(user);
-    const canLetters = this.canAccessPrisonerLetters(user);
+    const admin = this.isAdmin(user) && this.isModuleEnabled(user, 'administration');
+    const canLetters = this.canAccessPrisonerLetters(user) && this.isModuleEnabled(user, 'prisoner_correspondence');
+    const showRequests = this.isModuleEnabled(user, 'requests');
+    const showEntry = this.isModuleEnabled(user, 'entry');
+    const showRooms = this.isModuleEnabled(user, 'rooms');
+    const showMeetings = this.isModuleEnabled(user, 'meetings');
+    const showCalendar = this.isModuleEnabled(user, 'calendar');
     const item = (route, label, icon, withBadge) =>
       `<a href="#${route}" class="sidebar-link${activeRoute === route ? ' sidebar-link--active' : ''}">
         <i class="ti ${icon}"></i><span>${label}</span>${withBadge ? '<span class="nav-action-badge" data-action-badge hidden></span>' : ''}
@@ -105,8 +132,11 @@ const AppShell = {
         </div>
         <nav class="sidebar-nav">
           ${item('dashboard', 'Dashboard', 'ti-layout-dashboard')}
-          ${item('requests', 'Requests', 'ti-inbox', true)}
-          ${item('entry', 'Entry', 'ti-mailbox')}
+          ${showRequests ? item('requests', 'Requests', 'ti-inbox', true) : ''}
+          ${showEntry ? item('entry', 'Entry', 'ti-mailbox') : ''}
+          ${showRooms ? item('rooms', 'Rooms', 'ti-door') : ''}
+          ${showMeetings ? item('meetings', 'Meetings', 'ti-calendar-event') : ''}
+          ${showCalendar ? item('calendar', 'Calendar', 'ti-calendar') : ''}
           ${canLetters ? item('prisoner-letters', 'Prisoner Letters', 'ti-mail') : ''}
           ${admin ? item('admin', 'Administration', 'ti-settings') : ''}
         </nav>
@@ -123,8 +153,13 @@ const AppShell = {
 
   topbarHtml(user, activeRoute) {
     const name = user.full_name;
-    const admin = this.isAdmin(user);
-    const canLetters = this.canAccessPrisonerLetters(user);
+    const admin = this.isAdmin(user) && this.isModuleEnabled(user, 'administration');
+    const canLetters = this.canAccessPrisonerLetters(user) && this.isModuleEnabled(user, 'prisoner_correspondence');
+    const showRequests = this.isModuleEnabled(user, 'requests');
+    const showEntry = this.isModuleEnabled(user, 'entry');
+    const showRooms = this.isModuleEnabled(user, 'rooms');
+    const showMeetings = this.isModuleEnabled(user, 'meetings');
+    const showCalendar = this.isModuleEnabled(user, 'calendar');
     const link = (route, label, withBadge) =>
       `<a href="#${route}" class="topbar-link${activeRoute === route ? ' topbar-link--active' : ''}">${label}${withBadge ? '<span class="nav-action-badge" data-action-badge hidden></span>' : ''}</a>`;
 
@@ -137,8 +172,11 @@ const AppShell = {
         </div>
         <nav class="topbar-nav" id="topbar-nav">
           ${link('dashboard', 'Dashboard')}
-          ${link('requests', 'Requests', true)}
-          ${link('entry', 'Entry')}
+          ${showRequests ? link('requests', 'Requests', true) : ''}
+          ${showEntry ? link('entry', 'Entry') : ''}
+          ${showRooms ? link('rooms', 'Rooms') : ''}
+          ${showMeetings ? link('meetings', 'Meetings') : ''}
+          ${showCalendar ? link('calendar', 'Calendar') : ''}
           ${canLetters ? link('prisoner-letters', 'Letters') : ''}
           ${admin ? link('admin', 'Admin') : ''}
         </nav>
@@ -204,8 +242,13 @@ const AppShell = {
   // the topbar links; see the .bottom-nav / .topbar-nav CSS toggle at
   // the mobile breakpoint.
   bottomNavHtml(user, activeRoute) {
-    const admin = this.isAdmin(user);
-    const canLetters = this.canAccessPrisonerLetters(user);
+    const admin = this.isAdmin(user) && this.isModuleEnabled(user, 'administration');
+    const canLetters = this.canAccessPrisonerLetters(user) && this.isModuleEnabled(user, 'prisoner_correspondence');
+    const showRequests = this.isModuleEnabled(user, 'requests');
+    const showEntry = this.isModuleEnabled(user, 'entry');
+    const showRooms = this.isModuleEnabled(user, 'rooms');
+    const showMeetings = this.isModuleEnabled(user, 'meetings');
+    const showCalendar = this.isModuleEnabled(user, 'calendar');
     const item = (route, label, icon, withBadge) =>
       `<a href="#${route}" class="bottom-nav-item${activeRoute === route ? ' bottom-nav-item--active' : ''}">
         <span class="bottom-nav-icon-wrap"><i class="ti ${icon}"></i>${withBadge ? '<span class="nav-action-badge nav-action-badge--corner" data-action-badge hidden></span>' : ''}</span>
@@ -215,8 +258,11 @@ const AppShell = {
     return `
       <nav class="bottom-nav">
         ${item('dashboard', 'Home', 'ti-home')}
-        ${item('requests', 'Requests', 'ti-inbox', true)}
-        ${item('entry', 'Entry', 'ti-mailbox')}
+        ${showRequests ? item('requests', 'Requests', 'ti-inbox', true) : ''}
+        ${showEntry ? item('entry', 'Entry', 'ti-mailbox') : ''}
+        ${showRooms ? item('rooms', 'Rooms', 'ti-door') : ''}
+        ${showMeetings ? item('meetings', 'Meetings', 'ti-calendar-event') : ''}
+        ${showCalendar ? item('calendar', 'Calendar', 'ti-calendar') : ''}
         ${canLetters ? item('prisoner-letters', 'Letters', 'ti-mail') : ''}
         ${admin ? item('admin', 'Admin', 'ti-settings') : ''}
       </nav>
@@ -456,9 +502,46 @@ const AppShell = {
         // value it's already at (e.g. clicking a notification for the
         // request you're already viewing) doesn't fire hashchange, so
         // nothing else would refresh the badge/list in that case.
-        const routes = { prisoner_letter: 'prisoner-letter-detail', external_correspondence: 'entry-detail' };
-        const route = routes[btn.dataset.recordType] || 'request-detail';
-        Router.navigate(route, { id: btn.dataset.recordId });
+        //
+        // meeting_room_booking and meeting are both special cases:
+        // neither has a dedicated "-detail" route (rooms.js and
+        // meetings.js are both single-route, multi-tab views), so each
+        // navigates to its own single route with an id param instead —
+        // the view itself opens that record's detail modal directly on
+        // load, same pattern for both.
+        if (btn.dataset.recordType === 'meeting_room_booking') {
+          Router.navigate('rooms', { bookingId: btn.dataset.recordId });
+        } else if (btn.dataset.recordType === 'meeting') {
+          Router.navigate('meetings', { meetingId: btn.dataset.recordId });
+        } else if (btn.dataset.recordType === 'meeting_series') {
+          // A Recurring Meetings Phase 2 consolidated notification's
+          // record_id is a meeting_series id, not a meeting id — meetings.js
+          // has no route param for a bare series id, only meetingId (which
+          // opens that occurrence's own detail modal; its existing "View
+          // All Occurrences" button already opens the series occurrences
+          // modal from there). Resolving to that series' earliest occurrence
+          // with a plain filtered read — same convention as every other
+          // meetings table read in this codebase, no new RPC — is enough to
+          // land the user in the right module instead of Request Detail.
+          let meetingId = null;
+          try {
+            const db = getSupabase();
+            const { data } = await db.from('meetings')
+              .select('id')
+              .eq('series_id', btn.dataset.recordId)
+              .order('series_occurrence_date', { ascending: true })
+              .limit(1)
+              .maybeSingle();
+            meetingId = data?.id || null;
+          } catch (err) {
+            console.error('CorLink: failed to resolve a series occurrence for notification routing', err);
+          }
+          Router.navigate('meetings', meetingId ? { meetingId } : {});
+        } else {
+          const routes = { prisoner_letter: 'prisoner-letter-detail', external_correspondence: 'entry-detail' };
+          const route = routes[btn.dataset.recordType] || 'request-detail';
+          Router.navigate(route, { id: btn.dataset.recordId });
+        }
         await this.loadNotifications();
       });
     });

@@ -611,6 +611,27 @@ match what changed since, instead of re-running the full files:
     timestamp round-trip entirely and write/read a bare date directly.
     Zero behavior change for Requests' own TIMESTAMPTZ deadlines
     (never bare-date, so `_isBareDate` is always false for them).
+- `supabase/patch-platform-module-foundation.sql` — Phase 1 of the
+  MeetFlow → CorLink migration (see `docs/03-migration-architecture.md`
+  and `docs/04-platform-module-foundation.md`). New `platform_modules`
+  (module catalogue) and `organization_modules` (per-org enablement)
+  tables plus 3 helper functions, implementing a two-layer module
+  access model: Layer 1 (org enablement, new) composed with Layer 2
+  (existing role/assignment checks, unchanged). Seeds all 11 target
+  module keys (`requests`, `prisoner_correspondence`, `entry`,
+  `prison_registry`, `meetings`, `rooms`, `tasks`, `calendar`,
+  `reports`, `document_signing`, `administration`) — only the first
+  four currently have a working route and are enabled for every
+  existing organization (preserving current unrestricted access; see
+  `docs/04`'s "Seed behavior" for the access-preservation-vs-narrowing
+  decision this made explicit). The other seven are seeded disabled
+  everywhere and stay unreachable (no route). Creates no
+  Meetings/Rooms/Calendar/Tasks/signing tables and migrates no
+  MeetFlow data — this patch is platform scaffolding only. Idempotent.
+  Run `supabase/validate-platform-module-foundation.sql` afterward to
+  confirm. **Not yet applied to any project as of this changelog
+  entry** — see `docs/03-migration-architecture.md` §8 Phase 1's
+  approval gate.
 
 ## 3. Auth Settings (Supabase Dashboard → Authentication → Settings)
 

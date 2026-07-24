@@ -12,13 +12,17 @@
        Restricts script/style/connect sources to only what CorLink needs:
        self, Google Fonts, jsDelivr (Supabase JS + Tabler Icons), and the
        Supabase project itself (REST + Realtime WebSocket).
-       connect-src/img-src are pinned to THIS project's own subdomain
-       (infjjroktzzhaxjvfknr.supabase.co, matching SUPABASE_URL in
-       js/config.js) rather than the broader https://*.supabase.co
-       wildcard — if a stored-XSS payload ever ran despite the rest of
-       this app's sanitization, the wildcard would let it exfiltrate
-       data to ANY Supabase project, not just this one. If you deploy
-       to a different Supabase project, update the ref here to match. -->
+       connect-src/img-src are pinned to a SINGLE project subdomain
+       (matching SUPABASE_URL in js/config.js) rather than the broader
+       https://*.supabase.co wildcard — if a stored-XSS payload ever ran
+       despite the rest of this app's sanitization, the wildcard would let
+       it exfiltrate data to ANY Supabase project, not just this one.
+       To deploy against a different Supabase project (staging, local),
+       do not hand-edit this file — run
+       scripts/set-frontend-environment.sh <production|staging|local>,
+       which swaps this origin (and js/config.js's) together, still as a
+       single pinned origin, never both at once. See
+       docs/23-staging-frontend-configuration.md. -->
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'self';
     script-src 'self' https://cdn.jsdelivr.net;
@@ -55,7 +59,7 @@
        whenever you push a CSS/JS change and want it guaranteed to
        reach every open tab on the next reload:
          sed -i 's/?v=[0-9]\{8\}/?v=YYYYMMDD/g' index.html -->
-  <link rel="stylesheet" href="css/style.css?v=20260717a" />
+  <link rel="stylesheet" href="css/style.css?v=20260722" />
 </head>
 <body>
   <!-- SPA container — all views are rendered here by JavaScript -->
@@ -89,8 +93,8 @@
   <!-- ─── CorLink scripts (load order matters; defer preserves order) ── -->
   <script src="js/config.js?v=20260716" defer></script>
   <script src="js/supabase-client.js?v=20260709" defer></script>
-  <script src="js/auth.js?v=20260714" defer></script>
-  <script src="js/router.js?v=20260709" defer></script>
+  <script src="js/auth.js?v=20260721" defer></script>
+  <script src="js/router.js?v=20260723a" defer></script>
 
   <!-- Lib — light/dark theme toggle. Self-initializes on load (sets
        data-theme on <html> before the first real view renders) — see
@@ -107,6 +111,7 @@
   <script src="js/lib/draft-autosave.js?v=20260709" defer></script>
 
   <!-- Data layer -->
+  <script src="js/data/modules-api.js?v=20260721" defer></script>
   <script src="js/data/admin-api.js?v=20260716a" defer></script>
   <script src="js/data/notifications-api.js?v=20260709" defer></script>
   <script src="js/data/requests-api.js?v=20260716" defer></script>
@@ -116,21 +121,27 @@
   <script src="js/data/cc-recipients-api.js?v=20260709" defer></script>
   <script src="js/data/prisoner-letters-api.js?v=20260716" defer></script>
   <script src="js/data/entry-api.js?v=20260716c" defer></script>
+  <script src="js/data/rooms-api.js?v=20260723a" defer></script>
+  <script src="js/data/meetings-api.js?v=20260723h" defer></script>
+  <script src="js/data/calendar-api.js?v=20260723a" defer></script>
 
   <!-- Views -->
-  <script src="js/views/shell.js?v=20260717" defer></script>
+  <script src="js/views/shell.js?v=20260723a" defer></script>
   <script src="js/views/login.js?v=20260709" defer></script>
   <script src="js/views/change-password.js?v=20260709" defer></script>
   <script src="js/views/dashboard.js?v=20260716b" defer></script>
-  <script src="js/views/admin.js?v=20260716a" defer></script>
+  <script src="js/views/admin.js?v=20260721" defer></script>
   <script src="js/views/requests.js?v=20260716a" defer></script>
   <script src="js/views/request-detail.js?v=20260716" defer></script>
   <script src="js/views/prisoner-letters.js?v=20260716" defer></script>
   <script src="js/views/prisoner-letter-detail.js?v=20260709" defer></script>
   <script src="js/views/entry.js?v=20260716b" defer></script>
   <script src="js/views/entry-detail.js?v=20260716e" defer></script>
+  <script src="js/views/rooms.js?v=20260722a" defer></script>
+  <script src="js/views/meetings.js?v=20260723h" defer></script>
+  <script src="js/views/calendar.js?v=20260723a" defer></script>
 
   <!-- Boot -->
-  <script src="js/app.js?v=20260714" defer></script>
+  <script src="js/app.js?v=20260723a" defer></script>
 </body>
 </html>
