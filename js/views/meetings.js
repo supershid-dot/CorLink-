@@ -1367,7 +1367,7 @@ const MeetingsView = {
         } catch (err) {
           console.error('CorLink: series updated but failed to reopen the meeting', err);
         }
-        alert(this._summarizeSeriesEditOutcome(rows));
+        this._openSeriesResultSummaryModal({ action: 'edit', scope, rows, summary: this._summarizeSeriesEditOutcome(rows) });
       } catch (err) {
         errEl.textContent = err.message || 'This series could not be updated — it was not changed.';
         errEl.classList.remove('hidden');
@@ -1453,7 +1453,7 @@ const MeetingsView = {
           : await MeetingsAPI.cancelEntireSeries(meeting.series_id, reason);
         this._closeModal();
         await this._renderTab();
-        alert(this._summarizeSeriesCancelOutcome(rows));
+        this._openSeriesResultSummaryModal({ action: 'cancel', scope, rows, summary: this._summarizeSeriesCancelOutcome(rows) });
       } catch (err) {
         errEl.textContent = err.message || 'This series could not be cancelled — it was not changed.';
         errEl.classList.remove('hidden');
@@ -1482,6 +1482,45 @@ const MeetingsView = {
     if (counts.skipped_cancelled) parts.push(`${counts.skipped_cancelled} already cancelled and left unchanged`);
     if (counts.skipped_locked) parts.push(`${counts.skipped_locked} locked by another user and left unchanged`);
     return parts.length ? `Series cancelled: ${parts.join(', ')}.` : 'Series cancellation completed: no eligible occurrences were changed.';
+  },
+
+  // Reusable success modal for all four series edit/cancel action×scope
+  // combinations, replacing the temporary alert()s above. Presentation
+  // only — outcome counting still belongs entirely to
+  // _summarizeSeriesEditOutcome()/_summarizeSeriesCancelOutcome(); this
+  // helper just renders their output plus a compact breakdown computed
+  // from the same raw rows, using the same recognized outcome codes.
+  _openSeriesResultSummaryModal({ action, scope, rows, summary }) {
+    const isThisAndFuture = scope === 'this_and_future';
+    const title = action === 'cancel'
+      ? (isThisAndFuture ? 'Meetings Cancelled' : 'Series Cancelled')
+      : (isThisAndFuture ? 'Meetings Updated' : 'Series Updated');
+    const scopeLine = isThisAndFuture
+      ? 'Applied to the selected meeting and eligible future meetings.'
+      : 'Applied across eligible meetings in the recurring series.';
+    const outcomeLabels = action === 'cancel'
+      ? { cancelled: 'Cancelled', skipped_detached: 'Edited individually', skipped_completed: 'Completed', skipped_cancelled: 'Already cancelled', skipped_locked: 'Locked' }
+      : { updated: 'Updated', skipped_detached: 'Edited individually', skipped_completed: 'Completed', skipped_cancelled: 'Already cancelled', skipped_locked: 'Locked' };
+
+    const counts = {};
+    for (const key of Object.keys(outcomeLabels)) counts[key] = 0;
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (Object.prototype.hasOwnProperty.call(counts, row.outcome)) counts[row.outcome]++;
+    }
+    const breakdownItems = Object.keys(outcomeLabels)
+      .filter(key => counts[key] > 0)
+      .map(key => `<li>${this._escapeHtml(outcomeLabels[key])}: ${counts[key]}</li>`)
+      .join('');
+
+    this._openModal(`
+      <h3>${this._escapeHtml(title)}</h3>
+      <p class="field-hint">${this._escapeHtml(scopeLine)}</p>
+      <p>${this._escapeHtml(summary)}</p>
+      ${breakdownItems ? `<ul>${breakdownItems}</ul>` : ''}
+      <div class="modal-actions">
+        <button type="button" class="btn btn-primary" data-close-modal>Done</button>
+      </div>
+    `, { medium: true });
   },
 
   // Wall-clock time-of-day (HH:mm) in an arbitrary IANA zone, using
