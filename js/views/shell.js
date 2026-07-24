@@ -513,6 +513,30 @@ const AppShell = {
           Router.navigate('rooms', { bookingId: btn.dataset.recordId });
         } else if (btn.dataset.recordType === 'meeting') {
           Router.navigate('meetings', { meetingId: btn.dataset.recordId });
+        } else if (btn.dataset.recordType === 'meeting_series') {
+          // A Recurring Meetings Phase 2 consolidated notification's
+          // record_id is a meeting_series id, not a meeting id — meetings.js
+          // has no route param for a bare series id, only meetingId (which
+          // opens that occurrence's own detail modal; its existing "View
+          // All Occurrences" button already opens the series occurrences
+          // modal from there). Resolving to that series' earliest occurrence
+          // with a plain filtered read — same convention as every other
+          // meetings table read in this codebase, no new RPC — is enough to
+          // land the user in the right module instead of Request Detail.
+          let meetingId = null;
+          try {
+            const db = getSupabase();
+            const { data } = await db.from('meetings')
+              .select('id')
+              .eq('series_id', btn.dataset.recordId)
+              .order('series_occurrence_date', { ascending: true })
+              .limit(1)
+              .maybeSingle();
+            meetingId = data?.id || null;
+          } catch (err) {
+            console.error('CorLink: failed to resolve a series occurrence for notification routing', err);
+          }
+          Router.navigate('meetings', meetingId ? { meetingId } : {});
         } else {
           const routes = { prisoner_letter: 'prisoner-letter-detail', external_correspondence: 'entry-detail' };
           const route = routes[btn.dataset.recordType] || 'request-detail';
