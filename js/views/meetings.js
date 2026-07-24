@@ -1165,10 +1165,11 @@ const MeetingsView = {
       if (action === 'edit') this._openMeetingFormModal(meeting);
       else this._openCancelMeetingModal(meeting, booking);
     });
-    // "This and future" cancel, and "Entire series" cancel, remain
-    // wiring-only — both cancellation forms are a later step's scope.
-    // "This and future" edit and "Entire series" edit both now open
-    // the same series edit modal below, parameterized by scope.
+    // "This and future" cancel remains wiring-only — that cancellation
+    // form is a later step's scope. "This and future" edit and "Entire
+    // series" edit both open the same series edit modal below,
+    // parameterized by scope; "Entire series" cancel now opens the
+    // series cancel modal below the same way.
     document.getElementById('scope-future-btn')?.addEventListener('click', () => {
       this._closeModal();
       if (action === 'edit') {
@@ -1183,7 +1184,7 @@ const MeetingsView = {
         this._openSeriesEditModal(meeting, 'entire_series');
         return;
       }
-      alert('Series cancellation will be implemented in the next step.');
+      this._openSeriesCancelModal(meeting, 'entire_series');
     });
   },
 
@@ -1397,6 +1398,85 @@ const MeetingsView = {
     if (counts.skipped_cancelled) parts.push(`${counts.skipped_cancelled} already cancelled and left unchanged`);
     if (counts.skipped_locked) parts.push(`${counts.skipped_locked} locked by another user and left unchanged`);
     return parts.length ? `Series updated: ${parts.join(', ')}.` : 'Series updated: no eligible occurrences were changed.';
+  },
+
+  // ── Recurring Meetings Phase 2: entire-series cancellation ────────
+  // Only "entire_series" is supported here — "this_and_future"
+  // cancellation is a later step's scope, matching how
+  // _openSeriesEditModal was extended one scope at a time. cancel_
+  // entire_series() takes only p_series_id and p_cancellation_reason;
+  // there is no date/room/recurrence/attendee field to collect, unlike
+  // the edit modal's form.
+  _openSeriesCancelModal(meeting, scope) {
+    if (scope !== 'entire_series') return;
+
+    this._openModal(`
+      <h3>Cancel Entire Series</h3>
+      <p class="field-hint">This cancels eligible meetings across the recurring series, not just this occurrence.</p>
+      <p class="field-hint">Already cancelled meetings may be skipped. Completed or locked occurrences may be left unchanged. Individually detached occurrences may also be left unchanged.</p>
+      <form id="series-cancel-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Cancellation reason</label>
+          <textarea class="field-input-plain" name="reason" rows="3"></textarea>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Keep Series</button>
+          <button type="submit" class="btn" style="background:var(--color-error-bg); color:var(--color-error-dark);" id="series-cancel-submit">Cancel Entire Series</button>
+        </div>
+      </form>
+    `, { medium: true });
+
+    const form = document.getElementById('series-cancel-form');
+    const errEl = form.querySelector('.modal-error');
+    const submitBtn = document.getElementById('series-cancel-submit');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errEl.classList.add('hidden');
+      const reason = (new FormData(form).get('reason') || '').trim();
+
+      if (!reason) {
+        errEl.textContent = 'reason must not be blank';
+        errEl.classList.remove('hidden');
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Cancelling…';
+      try {
+        const rows = await MeetingsAPI.cancelEntireSeries(meeting.series_id, reason);
+        this._closeModal();
+        await this._renderTab();
+        alert(this._summarizeSeriesCancelOutcome(rows));
+      } catch (err) {
+        errEl.textContent = err.message || 'This series could not be cancelled — it was not changed.';
+        errEl.classList.remove('hidden');
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Cancel Entire Series';
+      }
+    });
+  },
+
+  // Counts each returned row by its outcome — cancel_entire_series()'s
+  // outcome vocabulary mirrors update_entire_series()'s (docs/28 §8):
+  // cancelled, skipped_cancelled, skipped_detached, skipped_completed,
+  // skipped_locked. Only non-zero categories are shown. A private
+  // helper for this modal only, same convention as
+  // _summarizeSeriesEditOutcome(). An empty rows array is not an
+  // error; it produces the "no eligible occurrences" fallback line.
+  _summarizeSeriesCancelOutcome(rows) {
+    const counts = { cancelled: 0, skipped_cancelled: 0, skipped_detached: 0, skipped_completed: 0, skipped_locked: 0 };
+    for (const row of rows || []) {
+      if (Object.prototype.hasOwnProperty.call(counts, row.outcome)) counts[row.outcome]++;
+    }
+    const parts = [];
+    if (counts.cancelled) parts.push(`${counts.cancelled} cancelled`);
+    if (counts.skipped_detached) parts.push(`${counts.skipped_detached} edited individually and left unchanged`);
+    if (counts.skipped_completed) parts.push(`${counts.skipped_completed} completed and left unchanged`);
+    if (counts.skipped_cancelled) parts.push(`${counts.skipped_cancelled} already cancelled and left unchanged`);
+    if (counts.skipped_locked) parts.push(`${counts.skipped_locked} locked by another user and left unchanged`);
+    return parts.length ? `Series cancelled: ${parts.join(', ')}.` : 'Series cancellation completed: no eligible occurrences were changed.';
   },
 
   // Wall-clock time-of-day (HH:mm) in an arbitrary IANA zone, using
