@@ -71,6 +71,18 @@ const MeetingsView = {
     return this._isSupervisor;
   },
 
+  // Mirrors can_manage_series() (docs/28-recurring-meetings-phase2-
+  // implementation.md §11): series creator, an org-wide supervisor/
+  // admin, or a super admin — same shape as _canManage() above, kept
+  // as its own named helper (rather than reused directly) so a future
+  // divergence between the two RPCs' authorization rules is easy to
+  // spot and fix independently instead of silently coupling them.
+  _canManageSeries(meeting) {
+    if (this._user.is_super_admin) return true;
+    if (meeting.created_by === this._user.id) return true;
+    return this._isSupervisor;
+  },
+
   _isCreator(meeting) {
     return meeting.created_by === this._user.id;
   },
@@ -1092,11 +1104,11 @@ const MeetingsView = {
 
     document.getElementById('detail-edit-btn')?.addEventListener('click', () => {
       this._closeModal();
-      this._openMeetingFormModal(meeting);
+      this._openSeriesActionScopeDialog(meeting, 'edit', booking);
     });
     document.getElementById('detail-cancel-btn')?.addEventListener('click', () => {
       this._closeModal();
-      this._openCancelMeetingModal(meeting, booking);
+      this._openSeriesActionScopeDialog(meeting, 'cancel', booking);
     });
     document.getElementById('detail-delete-draft-btn')?.addEventListener('click', () => {
       this._closeModal();
@@ -1112,6 +1124,63 @@ const MeetingsView = {
     });
     document.getElementById('view-series-btn')?.addEventListener('click', () => {
       this._openSeriesOccurrencesModal(meeting);
+    });
+  },
+
+  // ── Recurring Meetings Phase 2: action-scope decision point ──────
+  // Wiring only — no series edit/cancel form and no result summary
+  // exist yet; those are separate later steps. A non-recurring meeting
+  // (series_id NULL) bypasses this entirely and keeps today's exact
+  // single-occurrence flow. The dialog is only ever reachable through
+  // the detail modal's existing Edit/Cancel buttons, which already
+  // gate on canEdit/canCancel (cancelled/draft/completed/locked-and-
+  // not-overridable are already excluded there) — so this helper does
+  // not re-check those conditions itself; it only adds the scope
+  // choice on top of an action already known to be permitted.
+  _openSeriesActionScopeDialog(meeting, action, booking = null) {
+    if (!meeting.series_id) {
+      if (action === 'edit') this._openMeetingFormModal(meeting);
+      else this._openCancelMeetingModal(meeting, booking);
+      return;
+    }
+
+    const canManageSeries = this._canManageSeries(meeting);
+    const isCancel = action === 'cancel';
+    const btnClass = isCancel ? 'btn' : 'btn btn-secondary';
+    const btnStyle = isCancel ? ' style="background:var(--color-error-bg); color:var(--color-error-dark);"' : '';
+
+    this._openModal(`
+      <h3>Recurring Meeting</h3>
+      <p>Choose which meetings you want this action to affect.</p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+        <button type="button" class="${btnClass}"${btnStyle} id="scope-this-btn">This meeting</button>
+        ${canManageSeries ? `<button type="button" class="${btnClass}"${btnStyle} id="scope-future-btn">This and future</button>` : ''}
+        ${canManageSeries ? `<button type="button" class="${btnClass}"${btnStyle} id="scope-series-btn">Entire series</button>` : ''}
+      </div>
+    `);
+
+    document.getElementById('scope-this-btn').addEventListener('click', () => {
+      this._closeModal();
+      if (action === 'edit') this._openMeetingFormModal(meeting);
+      else this._openCancelMeetingModal(meeting, booking);
+    });
+    // Wiring only, per this step's scope — the series edit/cancel forms
+    // and their MeetingsAPI calls (updateEntireSeries/
+    // updateSeriesThisAndFuture/cancelEntireSeries/
+    // cancelSeriesThisAndFuture, already added to meetings-api.js) are
+    // implemented in a later step.
+    document.getElementById('scope-future-btn')?.addEventListener('click', () => {
+      this._closeModal();
+      alert(isCancel
+        ? 'Series cancellation will be implemented in the next step.'
+        : 'Series editing will be implemented in the next step.');
+    });
+    document.getElementById('scope-series-btn')?.addEventListener('click', () => {
+      this._closeModal();
+      alert(isCancel
+        ? 'Series cancellation will be implemented in the next step.'
+        : 'Series editing will be implemented in the next step.');
     });
   },
 
