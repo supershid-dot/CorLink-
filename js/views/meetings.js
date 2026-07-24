@@ -1165,15 +1165,17 @@ const MeetingsView = {
       if (action === 'edit') this._openMeetingFormModal(meeting);
       else this._openCancelMeetingModal(meeting, booking);
     });
-    // "This and future" remains wiring-only for both actions, and so
-    // does "Entire series" for cancel — the this-and-future edit form,
-    // and both cancellation forms, are later steps' scope. "Entire
-    // series" for edit now opens the real series edit modal below.
+    // "This and future" cancel, and "Entire series" cancel, remain
+    // wiring-only — both cancellation forms are a later step's scope.
+    // "This and future" edit and "Entire series" edit both now open
+    // the same series edit modal below, parameterized by scope.
     document.getElementById('scope-future-btn')?.addEventListener('click', () => {
       this._closeModal();
-      alert(isCancel
-        ? 'Series cancellation will be implemented in the next step.'
-        : 'Series editing will be implemented in the next step.');
+      if (action === 'edit') {
+        this._openSeriesEditModal(meeting, 'this_and_future');
+        return;
+      }
+      alert('Series cancellation will be implemented in the next step.');
     });
     document.getElementById('scope-series-btn')?.addEventListener('click', () => {
       this._closeModal();
@@ -1195,7 +1197,8 @@ const MeetingsView = {
   // assigns a room, it only reschedules an occurrence's EXISTING
   // booking to match a new time-of-day.
   _openSeriesEditModal(meeting, scope) {
-    if (scope !== 'entire_series') return; // "this and future" is a later step
+    if (scope !== 'entire_series' && scope !== 'this_and_future') return;
+    const isThisAndFuture = scope === 'this_and_future';
 
     const tz = meeting.timezone || 'Indian/Maldives';
     // Time-of-day must be read in the OCCURRENCE'S OWN configured
@@ -1211,8 +1214,10 @@ const MeetingsView = {
     const locationMode = meeting.location_mode || '';
 
     this._openModal(`
-      <h3>Edit Entire Series</h3>
-      <p class="field-hint">This updates the supported fields across eligible meetings in the series. Each occurrence keeps its existing calendar date.</p>
+      <h3>${isThisAndFuture ? 'Edit This and Future' : 'Edit Entire Series'}</h3>
+      <p class="field-hint">${isThisAndFuture
+        ? 'This updates the supported fields across this occurrence and every later occurrence in the series. Earlier occurrences are never changed.'
+        : 'This updates the supported fields across eligible meetings in the series.'} Each occurrence keeps its existing calendar date.</p>
       <p class="field-hint">Individually edited occurrences may be skipped. Completed or locked occurrences may be left unchanged. Room assignments are not changed, although an existing room booking may be rescheduled to the new time.</p>
       <form id="series-edit-form" class="modal-form">
         <div class="field-group">
@@ -1336,7 +1341,10 @@ const MeetingsView = {
       submitBtn.disabled = true;
       submitBtn.textContent = 'Saving…';
       try {
-        const rows = await MeetingsAPI.updateEntireSeries(meeting.series_id, {
+        // Same patch shape for both scopes — only the target id and
+        // which RPC receives it differ (docs/28 §7: p_meeting_id
+        // instead of p_series_id; every other parameter is identical).
+        const patch = {
           title,
           description: fd.get('description') || null,
           meetingType: fd.get('meetingType'),
@@ -1347,7 +1355,10 @@ const MeetingsView = {
           locationMode,
           externalLocation: locationMode === 'external' ? externalLocation : null,
           virtualLink: locationMode === 'virtual' ? virtualLink : null,
-        });
+        };
+        const rows = isThisAndFuture
+          ? await MeetingsAPI.updateSeriesThisAndFuture(meeting.id, patch)
+          : await MeetingsAPI.updateEntireSeries(meeting.series_id, patch);
         this._closeModal();
         await this._renderTab();
         try {
