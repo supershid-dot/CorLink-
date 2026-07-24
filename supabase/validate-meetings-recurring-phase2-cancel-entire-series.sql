@@ -74,9 +74,23 @@ WHERE table_name IN ('meeting_series', 'meetings') ORDER BY table_name, column_n
 --      outcome='skipped_cancelled'; left untouched (status stays
 --      'cancelled', cancelled_at/cancelled_by unchanged from the
 --      original cancellation, not overwritten by this call).
---   G) An occurrence with end_at already in the past (test harness
---      backdates it directly): returns outcome='skipped_completed';
---      status remains 'scheduled', never touched.
+--   G) An occurrence with end_at already in the past (no legitimate
+--      RPC path produces this, so the test session was temporarily
+--      RESET to a role permitted to write meetings directly —
+--      meetings has no UPDATE policy for ordinary authenticated
+--      callers, so a write attempted under that role would silently
+--      match zero rows rather than error. Both start_at AND end_at
+--      were moved into the past together, preserving start_at <
+--      end_at as meetings_range_check requires, and the row was
+--      re-SELECTed to confirm the backdate actually took effect
+--      before the session was restored to the authenticated test
+--      role): returns outcome='skipped_completed'; status remains
+--      'scheduled', never touched. (An earlier draft of this fixture
+--      ran the backdating UPDATE under the authenticated role and
+--      moved only end_at, so it silently affected zero rows and never
+--      genuinely exercised this outcome. Corrected during the Phase 2
+--      final integration review; see
+--      docs/28-recurring-meetings-phase2-implementation.md §15.)
 --   H) An occurrence individually detached beforehand (plain
 --      update_meeting() edit): returns outcome='skipped_detached';
 --      status remains 'scheduled', completely untouched.

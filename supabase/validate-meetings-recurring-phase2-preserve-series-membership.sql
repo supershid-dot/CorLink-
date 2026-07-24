@@ -119,11 +119,29 @@ SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'notificatio
 --      invalid edit (blank title, end_at <= start_at) still raises
 --      the identical exception message and rolls back the same as
 --      before.
---   N) Exactly one live overload for each of update_meeting(),
+--   N) A genuinely completed occurrence, with p_preserve_series_
+--      membership in play: with the test session temporarily RESET to
+--      a role permitted to write meetings directly (meetings has no
+--      UPDATE policy for ordinary authenticated callers), both
+--      start_at AND end_at were moved into the past together
+--      (preserving start_at < end_at, required by
+--      meetings_range_check), and the row was re-SELECTed to confirm
+--      the backdate actually took effect before the session was
+--      restored to the authenticated test role. A subsequent
+--      update_entire_series() call (which now passes
+--      p_preserve_series_membership := TRUE internally) still reports
+--      that occurrence as outcome='skipped_completed' and leaves it
+--      completely untouched — confirming the completed-occurrence
+--      exclusion and the preserve-membership fix are independent
+--      checks that do not interact. (This scenario was originally
+--      absent from this patch's own validation and was added during
+--      the Phase 2 final integration review; see
+--      docs/28-recurring-meetings-phase2-implementation.md §15.)
+--   O) Exactly one live overload for each of update_meeting(),
 --      update_entire_series(), update_series_this_and_future() —
 --      confirmed via the structural query above; the old 13-parameter
 --      update_meeting() signature no longer resolves at all.
---   O) Idempotency: re-running patch-meetings-recurring-phase2-
+--   P) Idempotency: re-running patch-meetings-recurring-phase2-
 --      preserve-series-membership.sql a second time against the same
 --      project leaves overload_count at exactly 1 for all three
 --      functions, with no errors.

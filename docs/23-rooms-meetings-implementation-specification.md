@@ -446,7 +446,9 @@ Low. Primarily a frontend rework of an already-correct data source; main risk is
 
 ---
 
-## Recurring Meetings — Phase 2 *(not scheduled for implementation now — specified only for traceability against Phase F's schema)*
+## Recurring Meetings — Phase 2 *(specified below for traceability against Phase F's schema; see status note)*
+
+**Status: shipped and approved.** All five RPCs anticipated below were built (`skip_series_occurrence()` was not — its behavior is covered by the "skip an occurrence" workflow already provided by `cancel_meeting()` + `create_series_exception(..., 'skipped')`, per the locked skip-semantics design decision, rather than a sixth dedicated function). `update_entire_series()`, `update_series_this_and_future()`, `cancel_entire_series()`, `cancel_series_this_and_future()`, and `create_series_exception()` (the last of which actually shipped earlier, as part of the series-exceptions foundation patch within this same Phase 2 effort) are all implemented, validated, and pushed. See `docs/28-recurring-meetings-phase2-implementation.md` for the full architecture record, RPC-by-RPC behavior, and validation status — it supersedes this section's §2/§3/§4 as prospective specification; the sections below are retained for traceability against what was originally scoped.
 
 ### 1. Objective
 Ship the Q3-deferred capabilities once Phase F has been live and stable in real use: this-occurrence / this-and-future / entire-series edit and cancel; exception dates; skipped occurrences.
@@ -495,7 +497,7 @@ Not assessed in detail — this phase is intentionally not being specified for i
 | Phase H (Leave) | Phase C (Calendar) | Calendar must render a leave indicator from day one (Q5). **Not honored as shipped — Calendar shipped before Phase H, without a leave data source. See `docs/26` §5/§6.** |
 | Phase F (Recurring/Drafts) | Phase C (Calendar) | Calendar must render draft/recurring items from day one (Q5). **Partially honored — Recurring Meetings Phase 1 had shipped first, so recurring occurrences render; the bulk pre-booking mechanism never shipped, so Calendar has no bulk-draft-slot data source. Calendar has always rendered the single-draft-meeting `status='draft'` state, which has since been fully hardened — see `docs/26` §2/§3/§8 and `docs/27`.** |
 | Phase C (Calendar) | Phase D (Rooms grid view) | D directly reuses C's grid component. **Calendar shipped without a positioned grid component (list-style day/week/month/agenda views instead — `docs/26` §4/§5), so this dependency's premise no longer holds as originally stated; Phase D would need its own grid work if pursued.** |
-| Phase F (Recurring Phase 1) | Recurring Meetings Phase 2 | Phase 2 activates the schema Phase 1 built |
+| Phase F (Recurring Phase 1) | Recurring Meetings Phase 2 | Phase 2 activates the schema Phase 1 built — **satisfied; Phase 2 shipped. See `docs/28`.** |
 
 **No hard technical dependency (parallel-safe):**
 
@@ -513,7 +515,7 @@ Not assessed in detail — this phase is intentionally not being specified for i
 6. **Then, once tracks 1–5 are substantially done:** Phase F (Recurring + Drafts) — the largest single effort in this roadmap; not recommended to further parallelize internally given its risk profile (§12 above), though its own two patch files are naturally sequential (foundation, then RPCs).
 7. **Then:** Phase C (Calendar) — requires F and H both complete. **As shipped, Calendar went ahead after F alone, with H's leave data and F's bulk pre-booking mechanism both omitted from scope rather than waited on — see `docs/26`. The single-draft-meeting workflow has since shipped separately (`docs/27`) and required no further Calendar change.**
 8. **Then:** Phase D (Rooms grid view) — requires C complete. **Not started; Calendar shipped without the positioned grid component this phase was meant to reuse (`docs/26` §5), so Phase D's scope should be revisited before it begins.**
-9. **Later, not scheduled now:** Recurring Meetings Phase 2 — requires F complete and real-world usage history.
+9. **Recurring Meetings Phase 2 — SHIPPED.** Landed after F, ahead of the "not scheduled now" note this list originally carried; see `docs/28-recurring-meetings-phase2-implementation.md`.
 
 ---
 

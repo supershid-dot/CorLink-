@@ -136,6 +136,27 @@ WHERE table_name IN ('meeting_series', 'meetings') ORDER BY table_name, column_n
 --      pre-existing per-occurrence action='edited'/record_type=
 --      'meeting' rows that update_meeting() itself still wrote, one
 --      per updated occurrence, left completely intact).
+--   M) A genuinely completed occurrence: with the test session
+--      temporarily RESET to a role permitted to write meetings
+--      directly (meetings has no UPDATE policy for ordinary
+--      authenticated callers — a write attempted under that role
+--      silently matches zero rows rather than erroring), both
+--      start_at AND end_at were moved into the past together
+--      (preserving start_at < end_at, required by
+--      meetings_range_check — moving end_at alone would violate it),
+--      and the row was re-SELECTed to confirm the backdate actually
+--      took effect before the session was restored to the
+--      authenticated test role. update_entire_series() then reports
+--      that occurrence as outcome='skipped_completed'; a re-SELECT
+--      confirms its title/status/start_at/end_at are byte-for-byte
+--      unchanged from the backdated values — the RPC's own
+--      `end_at < now()` check, unmodified since this patch first
+--      shipped. (This scenario was originally absent from this
+--      patch's own validation — its task scope never required a
+--      completed-occurrence case — and was added during the Phase 2
+--      final integration review to close that gap; see
+--      docs/28-recurring-meetings-phase2-implementation.md §15 for the full
+--      historical note.)
 --   (Regression) update_meeting() called directly (outside this RPC)
 --      on an ordinary, non-series meeting: behaves identically to
 --      before this patch — title/time/location edits, notification

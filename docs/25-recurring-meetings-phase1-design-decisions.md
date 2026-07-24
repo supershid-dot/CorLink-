@@ -61,6 +61,8 @@ This document does not supersede `docs/22`/`docs/23` — it is the retrospective
 
 ## 5. Phase 2 readiness — confirmed, not just claimed
 
+**Update, 2026-07-24: Phase 2 has since shipped**, exactly on top of the schema this section confirms was already sufficient — no further migration against live Phase 1 data was required. See `docs/28-recurring-meetings-phase2-implementation.md` for the full Phase 2 architecture, RPC inventory, and validation record.
+
 Every column and table needed for the deferred Phase 2 operations (`update_series_this_and_future()`, `update_entire_series()`, `cancel_series_this_and_future()`, `cancel_entire_series()`, `create_series_exception()`, per `docs/23`'s own traceability list) already exists and requires no further schema change:
 
 - **Edit series / edit future** — `series_id` + `series_occurrence_date` on `meetings` directly support filtering "every occurrence of series X from date Y onward"; `series_detached` already flags which occurrences must be excluded from a bulk "edit all future" operation because they were individually customized.
