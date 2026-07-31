@@ -3,6 +3,12 @@
 // and whatever actions the current user/status allows. RLS is the
 // real gate; buttons here are UX only.
 
+// Supporting Tasks (supabase/patch-prisoner-letter-task-integration.sql)
+// — a separate global script/file from request-detail.js/entry-
+// detail.js, each with their own identically-named constant, so this
+// is declared again here rather than shared.
+const PRISONER_LETTER_SUPPORTING_TASKS_PAGE_SIZE = 5;
+
 const PrisonerLetterDetailView = {
   async render(container, params = {}) {
     const user = Auth.getCachedProfile();
@@ -64,12 +70,38 @@ const PrisonerLetterDetailView = {
       for (const rep of replies) {
         this._replyAttachments[rep.id] = await AttachmentsAPI.list('prisoner_reply', rep.id);
       }
+
+      // Supporting Tasks — isolated in its own try/catch so a failure
+      // here shows only this panel's own inline error, never blanks
+      // the whole letter page.
+      try {
+        const [taskCapabilities, supportingTasks] = await Promise.all([
+          PrisonerLettersAPI.getTaskCapabilities(this._letterId),
+          PrisonerLettersAPI.listSupportingTasks(this._letterId, { limit: PRISONER_LETTER_SUPPORTING_TASKS_PAGE_SIZE, offset: 0 }),
+        ]);
+        this._taskCapabilities = taskCapabilities;
+        this._supportingTasks = supportingTasks;
+        this._supportingTasksError = null;
+      } catch (err) {
+        console.error('CorLink: failed to load prisoner letter supporting tasks', err);
+        this._taskCapabilities = { canCreateTask: false, canLinkExisting: false, canUnlink: false, canViewTasks: false };
+        this._supportingTasksError = err.message || 'Failed to load supporting tasks.';
+      }
+
       main.innerHTML = this._renderContent();
       this._bindActions();
     } catch (err) {
       console.error('CorLink: failed to load prisoner letter', err);
       main.innerHTML = `<div class="alert alert-error"><i class="ti ti-alert-triangle"></i> Couldn't load this letter: ${err.message || 'unknown error'}.</div>`;
     }
+  },
+
+  // Re-renders from already-fetched state (no network round-trip) —
+  // needed for the Supporting Tasks panel's Load More button, same
+  // purpose as request-detail.js's/entry-detail.js's own _rerender().
+  _rerender() {
+    document.getElementById('letter-detail-main').innerHTML = this._renderContent();
+    this._bindActions();
   },
 
   _renderContent() {
@@ -131,10 +163,91 @@ const PrisonerLetterDetailView = {
         `).join('')}
       </div>
 
+      ${this._renderSupportingTasks(l)}
+
       <div id="detail-actions" class="detail-actions-panel">
         ${this._renderActions(l, { isFromOrgMember, isToOrgMember, isSubmitter, isAssignee, isSupervisor })}
       </div>
     `;
+  },
+
+  // ─── Supporting Tasks (supabase/patch-prisoner-letter-task-integration.sql) ──
+  // Same <details> disclosure shape and driven-by-real-server-state
+  // approach as R4/R5/R6/R7's own panels.
+  _renderSupportingTasks(l) {
+    const caps = this._taskCapabilities;
+    if (!caps || !caps.canViewTasks) return '';
+
+    if (this._supportingTasksError) {
+      return `
+        <details class="supporting-tasks-panel" open>
+          <summary><i class="ti ti-checklist"></i> Supporting Tasks</summary>
+          <div class="supporting-tasks-body">
+            <div class="alert alert-error">Couldn't load supporting tasks: ${this._escapeHtml(this._supportingTasksError)}</div>
+          </div>
+        </details>
+      `;
+    }
+
+    const page = this._supportingTasks || { items: [], totalCount: 0 };
+    const items = page.items || [];
+    const hasMore = page.totalCount > items.length;
+
+    return `
+      <details class="supporting-tasks-panel" ${items.length > 0 ? 'open' : ''}>
+        <summary>
+          <i class="ti ti-checklist"></i> Supporting Tasks
+          ${items.length > 0 ? `<span class="badge badge-outline">${page.totalCount}</span>` : ''}
+        </summary>
+        <div class="supporting-tasks-body" data-supporting-tasks-for="${l.id}">
+          <div class="supporting-tasks-actions">
+            ${caps.canCreateTask ? `<button class="btn btn-secondary btn-sm" data-create-supporting-task="${l.id}">Create Supporting Task</button>` : ''}
+            ${caps.canLinkExisting ? `<button class="btn btn-secondary btn-sm" data-link-existing-task="${l.id}">Link Existing Task</button>` : ''}
+          </div>
+          <div class="supporting-tasks-list">
+            ${items.map(t => this._renderTaskCard(t, caps)).join('') || '<p class="structure-empty">Nothing here yet.</p>'}
+          </div>
+          ${hasMore ? `
+            <button class="btn btn-secondary btn-sm supporting-tasks-load-more" data-load-more-tasks="${l.id}">
+              Load More (${items.length} of ${page.totalCount})
+            </button>
+          ` : ''}
+        </div>
+      </details>
+    `;
+  },
+
+  _taskStatusBadgeClass(status) {
+    return { draft: 'badge-muted', open: 'badge-primary', in_progress: 'badge-primary', waiting: 'badge-warning', completed: 'badge-success', cancelled: 'badge-muted' }[status] || 'badge-muted';
+  },
+
+  _taskPriorityBadgeClass(priority) {
+    return { low: 'badge-muted', normal: 'badge-outline', high: 'badge-warning', critical: 'badge-error' }[priority] || 'badge-outline';
+  },
+
+  _renderTaskCard(t, caps) {
+    const assignees = (t.assignees || []).map(a => this._escapeHtml(a.full_name)).join(', ') || 'Unassigned';
+    const canUnlinkThis = caps.canUnlink && t.status !== 'cancelled';
+    return `
+      <div class="task-card" data-task-id="${t.task_id}">
+        <div class="task-card-header">
+          <span class="task-card-number">${this._escapeHtml(t.task_number)}</span>
+          <span class="badge ${this._taskStatusBadgeClass(t.status)}">${this._capitalizeWords(t.status)}</span>
+          <span class="badge ${this._taskPriorityBadgeClass(t.priority)}">${this._capitalizeWords(t.priority)}</span>
+        </div>
+        <div class="task-card-title">${this._escapeHtml(t.title)}</div>
+        <div class="task-card-meta">
+          <span>${t.owning_section_name ? this._escapeHtml(t.owning_section_name) : 'No section'}</span>
+          <span>${assignees}</span>
+          ${t.due_date ? `<span>Due: ${RequestsView._deadlineCell(t.due_date, ['completed', 'cancelled'].includes(t.status) ? 'closed' : t.status)}</span>` : ''}
+        </div>
+        ${canUnlinkThis ? `<div class="task-card-actions"><button class="btn btn-secondary btn-xs" data-unlink-task="${t.link_id}">Unlink</button></div>` : ''}
+      </div>
+    `;
+  },
+
+  _capitalizeWords(value) {
+    return String(value || '').split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
   },
 
   _renderActions(l, ctx) {
@@ -249,6 +362,23 @@ const PrisonerLetterDetailView = {
     document.getElementById('print-slip-btn')?.addEventListener('click', () => this._printSlip());
 
     document.getElementById('mark-delivered-btn')?.addEventListener('click', () => this._runAction(() => PrisonerLettersAPI.markDelivered(this._letter.id)));
+
+    // Supporting Tasks
+    main.querySelectorAll('[data-create-supporting-task]').forEach(btn => {
+      btn.addEventListener('click', () => this._openCreateSupportingTaskModal(btn.dataset.createSupportingTask));
+    });
+    main.querySelectorAll('[data-link-existing-task]').forEach(btn => {
+      btn.addEventListener('click', () => this._openLinkExistingTaskModal(btn.dataset.linkExistingTask));
+    });
+    main.querySelectorAll('[data-unlink-task]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (!confirm('Unlink this task from the prisoner letter? The task itself is not changed or cancelled.')) return;
+        this._runAction(() => PrisonerLettersAPI.unlinkTask(btn.dataset.unlinkTask));
+      });
+    });
+    main.querySelectorAll('[data-load-more-tasks]').forEach(btn => {
+      btn.addEventListener('click', () => this._loadMoreSupportingTasks(btn.dataset.loadMoreTasks, btn));
+    });
 
     // Attachments — sequential uploads so one bad file's error doesn't
     // cancel the rest, and the alert can name exactly what failed.
@@ -446,6 +576,202 @@ const PrisonerLetterDetailView = {
         console.error('CorLink: failed to record slip generation', err);
       }
     }
+  },
+
+  // ─── Supporting Tasks ───────────────────────────────────────────
+  // Mirrors request-detail.js's/entry-detail.js's own equivalents.
+  // The letter's own two orgs (from_prison_id/to_org_id) mean
+  // "ownOrgId" is genuinely ambiguous the way it is for Requests — the
+  // actor could be flagged staff on either side — so this resolves it
+  // the same way request-detail.js's create-task modal does.
+  async _loadMoreSupportingTasks(letterId, btn) {
+    if (!this._supportingTasks) return;
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `Loading… <span class="spinner"></span>`;
+    try {
+      const nextPage = await PrisonerLettersAPI.listSupportingTasks(letterId, {
+        limit: PRISONER_LETTER_SUPPORTING_TASKS_PAGE_SIZE,
+        offset: this._supportingTasks.items.length,
+      });
+      this._supportingTasks = {
+        items: [...this._supportingTasks.items, ...nextPage.items],
+        totalCount: nextPage.totalCount,
+      };
+      this._rerender();
+    } catch (err) {
+      console.error('CorLink: failed to load more supporting tasks', err);
+      btn.disabled = false;
+      btn.innerHTML = original;
+      alert(err.message || 'Failed to load more tasks.');
+    }
+  },
+
+  async _openCreateSupportingTaskModal(letterId) {
+    const l = this._letter;
+    const ownOrgId = this._user.org_id === l.to_org_id ? l.to_org_id : l.from_prison_id;
+    let sections = [];
+    let staff = [];
+    try {
+      [sections, staff] = await Promise.all([
+        AdminAPI.listSectionsByOrg(ownOrgId),
+        AdminAPI.listUsersByOrg(ownOrgId),
+      ]);
+      sections = sections.filter(s => s.is_active);
+    } catch (err) {
+      console.error('CorLink: failed to load sections/staff', err);
+    }
+
+    this._openModal(`
+      <h3>Create Supporting Task</h3>
+      <form id="create-letter-task-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Title</label>
+          <input class="field-input-plain" name="title" required maxlength="200" />
+        </div>
+        <div class="field-group">
+          <label class="field-label">Description (optional)</label>
+          <textarea class="field-input-plain" name="description" rows="3"></textarea>
+        </div>
+        <div class="field-group-row">
+          <div class="field-group">
+            <label class="field-label">Priority</label>
+            <select class="field-select" name="priority">
+              <option value="low">Low</option>
+              <option value="normal" selected>Normal</option>
+              <option value="high">High</option>
+              <option value="critical">Critical</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Visibility</label>
+            <select class="field-select" name="visibility">
+              <option value="private">Private</option>
+              <option value="section" selected>Section</option>
+              <option value="organization">Organization</option>
+            </select>
+          </div>
+        </div>
+        <div class="field-group-row">
+          <div class="field-group">
+            <label class="field-label">Start date (optional)</label>
+            <input class="field-input-plain" type="date" name="startDate" />
+          </div>
+          <div class="field-group">
+            <label class="field-label">Due date (optional)</label>
+            <input class="field-input-plain" type="date" name="dueDate" />
+          </div>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Owning section (optional)</label>
+          <select class="field-select" name="owningSectionId">
+            <option value="">— None —</option>
+            ${sections.map(s => `<option value="${s.id}" ${s.id === l.to_section_id ? 'selected' : ''}>${this._escapeHtml(s.name)}</option>`).join('')}
+          </select>
+        </div>
+        ${staff.length > 0 ? `
+          <div class="field-group">
+            <label class="field-label">Assignees (optional)</label>
+            <div class="checkbox-list">
+              ${staff.map(u => `
+                <label class="checkbox-row">
+                  <input type="checkbox" name="assigneeIds" value="${u.id}" />
+                  ${this._escapeHtml(u.full_name)}
+                </label>
+              `).join('')}
+            </div>
+          </div>
+        ` : ''}
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Create Task</button>
+        </div>
+      </form>
+    `, { large: true });
+
+    const form = document.getElementById('create-letter-task-form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const errEl = form.querySelector('.modal-error');
+      const assigneeIds = fd.getAll('assigneeIds');
+      try {
+        await PrisonerLettersAPI.createSupportingTask(letterId, {
+          title: fd.get('title'),
+          description: fd.get('description') || null,
+          priority: fd.get('priority'),
+          visibility: fd.get('visibility'),
+          startDate: fd.get('startDate') || null,
+          dueDate: fd.get('dueDate') || null,
+          owningSectionId: fd.get('owningSectionId') || null,
+          assigneeIds,
+        });
+        this._closeModal();
+        await this._load();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
+  async _openLinkExistingTaskModal(letterId) {
+    const l = this._letter;
+    const ownOrgId = this._user.org_id === l.to_org_id ? l.to_org_id : l.from_prison_id;
+    const alreadyLinkedIds = new Set((this._supportingTasks?.items || []).map(t => t.task_id));
+
+    let candidates = [];
+    try {
+      candidates = (await TasksAPI.listTasks({ organizationId: ownOrgId, limit: 200 }))
+        .filter(t => !alreadyLinkedIds.has(t.id) && t.status !== 'cancelled');
+    } catch (err) {
+      console.error('CorLink: failed to load tasks to link', err);
+    }
+
+    this._openModal(`
+      <h3>Link Existing Task</h3>
+      <div class="field-group">
+        <label class="field-label">Search</label>
+        <input class="field-input-plain" id="link-letter-task-search" placeholder="Filter by title or task number…" />
+      </div>
+      <div class="modal-error alert alert-error hidden" id="link-letter-task-error"></div>
+      <div class="task-picker-list" id="link-letter-task-list">
+        ${candidates.length === 0 ? '<p class="structure-empty">No eligible tasks to link.</p>' : candidates.map(t => `
+          <button type="button" class="task-picker-item" data-pick-letter-task="${t.id}">
+            <span class="task-card-number">${this._escapeHtml(t.task_number)}</span>
+            <span>${this._escapeHtml(t.title)}</span>
+            <span class="badge ${this._taskStatusBadgeClass(t.status)}">${this._capitalizeWords(t.status)}</span>
+          </button>
+        `).join('')}
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+      </div>
+    `, { large: true });
+
+    const searchInput = document.getElementById('link-letter-task-search');
+    searchInput.addEventListener('input', () => {
+      const q = searchInput.value.trim().toLowerCase();
+      document.querySelectorAll('#link-letter-task-list [data-pick-letter-task]').forEach(el => {
+        const text = el.textContent.toLowerCase();
+        el.style.display = !q || text.includes(q) ? '' : 'none';
+      });
+    });
+
+    document.querySelectorAll('#link-letter-task-list [data-pick-letter-task]').forEach(el => {
+      el.addEventListener('click', async () => {
+        const errEl = document.getElementById('link-letter-task-error');
+        try {
+          await PrisonerLettersAPI.linkExistingTask(letterId, el.dataset.pickLetterTask);
+          this._closeModal();
+          await this._load();
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.classList.remove('hidden');
+        }
+      });
+    });
   },
 
   async _openRouteModal() {

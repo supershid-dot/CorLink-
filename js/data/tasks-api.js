@@ -153,12 +153,15 @@ const TasksAPI = (() => {
     // ── Module links (supabase/patch-request-task-integration.sql,
     // supabase/patch-meeting-task-integration.sql,
     // supabase/patch-internal-collaboration-task-integration.sql,
-    // supabase/patch-entry-task-integration.sql) ─────────────────────
+    // supabase/patch-entry-task-integration.sql,
+    // supabase/patch-prisoner-letter-task-integration.sql) ───────────
     // One method per module_key — 'request', 'meeting',
-    // 'internal_request', and now 'external_correspondence' — since
-    // each module's linked-record shape differs. No Task Detail page
-    // consumes any of these yet (that's a later milestone); all four
-    // exist now so that page can be built against a stable API.
+    // 'internal_request', 'external_correspondence', and now
+    // 'prisoner_letter' (the final module_key value in the Shared Task
+    // Foundation program) — since each module's linked-record shape
+    // differs. No Task Detail page consumes any of these yet (that's a
+    // later milestone); all five exist now so that page can be built
+    // against a stable API.
     async listRequestLinks(taskId, { limit, offset } = {}) {
       const db = getSupabase();
       const { data, error } = await db.rpc('list_task_request_links', {
@@ -197,6 +200,16 @@ const TasksAPI = (() => {
     async listEntryLinks(taskId, { limit, offset } = {}) {
       const db = getSupabase();
       const { data, error } = await db.rpc('list_task_entry_links', {
+        p_task_id: taskId, p_limit: limit || 50, p_offset: offset || 0,
+      });
+      if (error) throw error;
+      const items = data || [];
+      return { items, totalCount: items[0]?.total_count ?? items.length };
+    },
+
+    async listPrisonerLetterLinks(taskId, { limit, offset } = {}) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('list_task_prisoner_letter_links', {
         p_task_id: taskId, p_limit: limit || 50, p_offset: offset || 0,
       });
       if (error) throw error;
