@@ -608,5 +608,84 @@ const MeetingsAPI = (() => {
       if (error) throw error;
       return data || [];
     },
+
+    // ── Supporting Tasks (supabase/patch-meeting-task-integration.sql) ──
+    // Same shape as RequestsAPI's Supporting Tasks methods (R4) —
+    // task_links/meeting_decisions carry SELECT-only RLS, every write
+    // is an RPC. A Task links to a Meeting Decision, not the meeting
+    // row directly (zero/one/many Tasks per decision); create/link
+    // both resolve-or-create that decision atomically server-side.
+    async getMeetingTaskCapabilities(meetingId) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('get_meeting_task_capabilities', { p_meeting_id: meetingId });
+      if (error) throw error;
+      const row = (data && data[0]) || {};
+      return {
+        canCreateTask: !!row.can_create_task,
+        canLinkExisting: !!row.can_link_existing,
+        canUnlink: !!row.can_unlink,
+        canViewTasks: !!row.can_view_tasks,
+      };
+    },
+
+    async listMeetingTasks(meetingId, { status, assignedToMe, limit, offset } = {}) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('list_meeting_tasks', {
+        p_meeting_id: meetingId,
+        p_status: status || null,
+        p_assigned_to_me: !!assignedToMe,
+        p_limit: limit || 50,
+        p_offset: offset || 0,
+      });
+      if (error) throw error;
+      const items = data || [];
+      return { items, totalCount: items[0]?.total_count ?? items.length };
+    },
+
+    // decision is either { decisionId } (attach to an existing
+    // decision) or { decisionTitle, decisionDescription } (log a new
+    // one) — never both.
+    async createMeetingTask(meetingId, {
+      title, description, owningSectionId, priority, visibility, dueDate, startDate, assigneeIds,
+      decisionId, decisionTitle, decisionDescription,
+    }) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('create_meeting_task', {
+        p_meeting_id: meetingId,
+        p_title: title,
+        p_description: description || null,
+        p_owning_section_id: owningSectionId || null,
+        p_priority: priority || 'normal',
+        p_visibility: visibility || 'section',
+        p_due_date: dueDate || null,
+        p_start_date: startDate || null,
+        p_assignee_ids: assigneeIds && assigneeIds.length ? assigneeIds : null,
+        p_decision_id: decisionId || null,
+        p_decision_title: decisionTitle || null,
+        p_decision_description: decisionDescription || null,
+      });
+      if (error) throw error;
+      return (data && data[0]) || null;
+    },
+
+    async linkExistingTaskToMeeting(meetingId, taskId, { decisionId, decisionTitle, decisionDescription } = {}) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('link_existing_task_to_meeting', {
+        p_task_id: taskId, p_meeting_id: meetingId,
+        p_decision_id: decisionId || null,
+        p_decision_title: decisionTitle || null,
+        p_decision_description: decisionDescription || null,
+      });
+      if (error) throw error;
+      return data;
+    },
+
+    async unlinkTaskFromMeeting(linkId, reason = null) {
+      const db = getSupabase();
+      const { error } = await db.rpc('unlink_task_from_meeting', {
+        p_link_id: linkId, p_reason: reason || null,
+      });
+      if (error) throw error;
+    },
   };
 })();

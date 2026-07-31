@@ -15,6 +15,10 @@
 // exists in the database this view is built against, so none of it is
 // implemented here either.
 
+// First-page size for the Supporting Tasks panel's "Load More" — same
+// value and reasoning as request-detail.js's SUPPORTING_TASKS_PAGE_SIZE.
+const SUPPORTING_TASKS_PAGE_SIZE = 5;
+
 const MeetingsView = {
   _state: {
     tab: 'upcoming',
@@ -978,6 +982,26 @@ const MeetingsView = {
     } catch (err) {
       console.error('CorLink: failed to load meeting detail data', err);
     }
+
+    // Supporting Tasks (supabase/patch-meeting-task-integration.sql) —
+    // fetched alongside everything else above so the panel renders
+    // populated on first paint; isolated in its own try/catch so a
+    // failure here shows the panel's own error state instead of
+    // failing the whole modal (matching request-detail.js's R4 panel).
+    this._meetingTasksState = this._meetingTasksState || {};
+    try {
+      const [capabilities, page] = await Promise.all([
+        MeetingsAPI.getMeetingTaskCapabilities(meeting.id),
+        MeetingsAPI.listMeetingTasks(meeting.id, { limit: SUPPORTING_TASKS_PAGE_SIZE, offset: 0 }),
+      ]);
+      this._meetingTasksState[meeting.id] = { capabilities, items: page.items, totalCount: page.totalCount, error: null };
+    } catch (err) {
+      console.error('CorLink: failed to load meeting supporting tasks', err);
+      this._meetingTasksState[meeting.id] = {
+        capabilities: { canCreateTask: false, canLinkExisting: false, canUnlink: false, canViewTasks: false },
+        items: [], totalCount: 0, error: err.message || 'Failed to load supporting tasks.',
+      };
+    }
     // meeting_participant_list() returns no name for internal
     // participants (docs/13 §8's contract is plain columns, no join) —
     // resolve display names from the org roster, best-effort. A failed
@@ -1088,6 +1112,8 @@ const MeetingsView = {
       </div>
 
       ${this._renderMinutesPanel(meeting, canManage, canOverrideLock)}
+
+      ${this._renderSupportingTasksPanel(meeting)}
 
       ${meeting.series_id ? this._renderActivityPanel() : ''}
 
@@ -2054,6 +2080,340 @@ const MeetingsView = {
     });
   },
 
+  // ── Supporting Tasks (supabase/patch-meeting-task-integration.sql) ──
+  // Same <details> disclosure shape and CSS classes as request-detail.js's
+  // R4 panel (.supporting-tasks-panel/.task-card/etc, css/style.css) —
+  // driven by this._meetingTasksState[meeting.id], populated in
+  // _openMeetingDetailModal(). get_meeting_task_capabilities() is the
+  // single source of truth for what this panel may show; a hidden
+  // capability just means the corresponding button never renders.
+  _renderSupportingTasksPanel(meeting) {
+    const state = (this._meetingTasksState || {})[meeting.id];
+    if (!state || !state.capabilities.canViewTasks) return ''; // permission denied / not applicable — hidden entirely
+
+    if (state.error) {
+      return `
+        <details class="supporting-tasks-panel" id="supporting-tasks-panel-${meeting.id}" open style="margin-top:12px;">
+          <summary><i class="ti ti-checklist"></i> Supporting Tasks</summary>
+          <div class="supporting-tasks-body">
+            <div class="alert alert-error">Couldn't load supporting tasks: ${this._escapeHtml(state.error)}</div>
+          </div>
+        </details>
+      `;
+    }
+
+    const items = state.items || [];
+    const hasMore = state.totalCount > items.length;
+    const caps = state.capabilities;
+
+    return `
+      <details class="supporting-tasks-panel" id="supporting-tasks-panel-${meeting.id}" ${items.length > 0 ? 'open' : ''} style="margin-top:12px;">
+        <summary>
+          <i class="ti ti-checklist"></i> Supporting Tasks
+          ${items.length > 0 ? `<span class="badge badge-outline">${state.totalCount}</span>` : ''}
+        </summary>
+        <div class="supporting-tasks-body">
+          <div class="supporting-tasks-actions">
+            ${caps.canCreateTask ? `<button type="button" class="btn btn-secondary btn-sm" id="create-meeting-task-btn">Create Task</button>` : ''}
+            ${caps.canLinkExisting ? `<button type="button" class="btn btn-secondary btn-sm" id="link-existing-meeting-task-btn">Link Existing</button>` : ''}
+          </div>
+          <div class="supporting-tasks-list">
+            ${items.map(t => this._renderMeetingTaskCard(t, caps)).join('') || '<p class="structure-empty">Nothing here yet.</p>'}
+          </div>
+          ${hasMore ? `
+            <button type="button" class="btn btn-secondary btn-sm supporting-tasks-load-more" id="load-more-meeting-tasks-btn">
+              Load More (${items.length} of ${state.totalCount})
+            </button>
+          ` : ''}
+        </div>
+      </details>
+    `;
+  },
+
+  _taskStatusBadgeClass(status) {
+    return { draft: 'badge-muted', open: 'badge-primary', in_progress: 'badge-primary', waiting: 'badge-warning', completed: 'badge-success', cancelled: 'badge-muted' }[status] || 'badge-muted';
+  },
+
+  _taskPriorityBadgeClass(priority) {
+    return { low: 'badge-muted', normal: 'badge-outline', high: 'badge-warning', critical: 'badge-error' }[priority] || 'badge-outline';
+  },
+
+  _renderMeetingTaskCard(t, caps) {
+    const assignees = (t.assignees || []).map(a => this._escapeHtml(a.full_name)).join(', ') || 'Unassigned';
+    const canUnlinkThis = caps.canUnlink && t.status !== 'cancelled';
+    return `
+      <div class="task-card" data-task-id="${t.task_id}">
+        <div class="task-card-header">
+          <span class="task-card-number">${this._escapeHtml(t.task_number)}</span>
+          <span class="badge ${this._taskStatusBadgeClass(t.status)}">${this._capitalize(t.status)}</span>
+          <span class="badge ${this._taskPriorityBadgeClass(t.priority)}">${this._capitalize(t.priority)}</span>
+        </div>
+        <div class="task-card-title">${this._escapeHtml(t.title)}</div>
+        <div class="task-card-meta">
+          <span>Decision: ${this._escapeHtml(t.decision_title || '—')}</span>
+          <span>${t.owning_section_name ? this._escapeHtml(t.owning_section_name) : 'No section'}</span>
+          <span>${assignees}</span>
+          ${t.due_date ? `<span>Due: ${RequestsView._deadlineCell(t.due_date, ['completed', 'cancelled'].includes(t.status) ? 'closed' : t.status)}</span>` : ''}
+        </div>
+        ${canUnlinkThis ? `<div class="task-card-actions"><button type="button" class="btn btn-secondary btn-xs" data-unlink-meeting-task="${t.link_id}">Unlink</button></div>` : ''}
+      </div>
+    `;
+  },
+
+  // Panel-local pagination — appends the next page into
+  // this._meetingTasksState and re-renders just this panel's DOM node
+  // in place (no full-modal reopen/flicker), same technique request-
+  // detail.js's R4 panel uses via _rerender(), adapted to this file's
+  // modal-based (not full-page) detail view.
+  async _loadMoreMeetingTasks(meeting, btn) {
+    const state = this._meetingTasksState[meeting.id];
+    if (!state) return;
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `Loading… <span class="spinner"></span>`;
+    try {
+      const nextPage = await MeetingsAPI.listMeetingTasks(meeting.id, {
+        limit: SUPPORTING_TASKS_PAGE_SIZE, offset: state.items.length,
+      });
+      state.items = [...state.items, ...nextPage.items];
+      state.totalCount = nextPage.totalCount;
+      const panelEl = document.getElementById(`supporting-tasks-panel-${meeting.id}`);
+      if (panelEl) {
+        panelEl.outerHTML = this._renderSupportingTasksPanel(meeting);
+        this._bindSupportingTasksPanel(meeting);
+      }
+    } catch (err) {
+      console.error('CorLink: failed to load more meeting tasks', err);
+      btn.disabled = false;
+      btn.innerHTML = original;
+      alert(err.message || 'Failed to load more tasks.');
+    }
+  },
+
+  _bindSupportingTasksPanel(meeting) {
+    document.getElementById('create-meeting-task-btn')?.addEventListener('click', () => {
+      this._closeModal();
+      this._openCreateMeetingTaskModal(meeting);
+    });
+    document.getElementById('link-existing-meeting-task-btn')?.addEventListener('click', () => {
+      this._closeModal();
+      this._openLinkExistingMeetingTaskModal(meeting);
+    });
+    document.getElementById('load-more-meeting-tasks-btn')?.addEventListener('click', (e) => {
+      this._loadMoreMeetingTasks(meeting, e.currentTarget);
+    });
+    document.querySelectorAll('[data-unlink-meeting-task]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (!confirm('Unlink this task from the meeting? The task itself is not changed or cancelled.')) return;
+        this._runMeetingTaskAction(meeting, () => MeetingsAPI.unlinkTaskFromMeeting(btn.dataset.unlinkMeetingTask));
+      });
+    });
+  },
+
+  // Mirrors _runAction()'s shape elsewhere in this codebase (request-
+  // detail.js) — run the mutation, then reopen the detail modal fresh
+  // so every panel (not just Supporting Tasks) reflects the change.
+  async _runMeetingTaskAction(meeting, fn) {
+    try {
+      await fn();
+      this._closeModal();
+      await this._openMeetingDetailModal(meeting);
+    } catch (err) {
+      alert(err.message || 'Something went wrong.');
+    }
+  },
+
+  async _openCreateMeetingTaskModal(meeting) {
+    let orgUsers = [];
+    try {
+      orgUsers = (await AdminAPI.listUsersByOrg(meeting.organization_id)).filter(u => u.is_active);
+    } catch (err) {
+      console.error('CorLink: failed to load org staff for task assignees', err);
+    }
+    let sections = [];
+    try {
+      sections = (await AdminAPI.listSectionsByOrg(meeting.organization_id)).filter(s => s.is_active);
+    } catch (err) {
+      console.error('CorLink: failed to load sections', err);
+    }
+
+    this._openModal(`
+      <h3>Create Task</h3>
+      <form id="create-meeting-task-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Decision</label>
+          <input class="field-input-plain" name="decisionTitle" required maxlength="200" placeholder="What was decided?" />
+          <div class="field-hint">A short record of the decision this task supports — not the meeting notes.</div>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Task title</label>
+          <input class="field-input-plain" name="title" required maxlength="200" />
+        </div>
+        <div class="field-group">
+          <label class="field-label">Description (optional)</label>
+          <textarea class="field-input-plain" name="description" rows="3"></textarea>
+        </div>
+        <div class="field-group-row">
+          <div class="field-group">
+            <label class="field-label">Priority</label>
+            <select class="field-select" name="priority">
+              <option value="low">Low</option>
+              <option value="normal" selected>Normal</option>
+              <option value="high">High</option>
+              <option value="critical">Critical</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Visibility</label>
+            <select class="field-select" name="visibility">
+              <option value="private">Private</option>
+              <option value="section" selected>Section</option>
+              <option value="organization">Organization</option>
+            </select>
+          </div>
+        </div>
+        <div class="field-group-row">
+          <div class="field-group">
+            <label class="field-label">Start date (optional)</label>
+            <input class="field-input-plain" type="date" name="startDate" />
+          </div>
+          <div class="field-group">
+            <label class="field-label">Due date (optional)</label>
+            <input class="field-input-plain" type="date" name="dueDate" />
+          </div>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Owning section (optional)</label>
+          <select class="field-select" name="owningSectionId">
+            <option value="">— None —</option>
+            ${sections.map(s => `<option value="${s.id}">${this._escapeHtml(s.name)}</option>`).join('')}
+          </select>
+        </div>
+        ${orgUsers.length > 0 ? `
+          <div class="field-group">
+            <label class="field-label">Assignees (optional)</label>
+            <div class="checkbox-list">
+              ${orgUsers.map(u => `
+                <label class="checkbox-row">
+                  <input type="checkbox" name="assigneeIds" value="${u.id}" />
+                  ${this._escapeHtml(u.full_name)}
+                </label>
+              `).join('')}
+            </div>
+          </div>
+        ` : ''}
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Create Task</button>
+        </div>
+      </form>
+    `, { large: true });
+
+    const form = document.getElementById('create-meeting-task-form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const errEl = form.querySelector('.modal-error');
+      const assigneeIds = fd.getAll('assigneeIds');
+      try {
+        await MeetingsAPI.createMeetingTask(meeting.id, {
+          title: fd.get('title'),
+          description: fd.get('description') || null,
+          priority: fd.get('priority'),
+          visibility: fd.get('visibility'),
+          startDate: fd.get('startDate') || null,
+          dueDate: fd.get('dueDate') || null,
+          owningSectionId: fd.get('owningSectionId') || null,
+          assigneeIds,
+          decisionTitle: fd.get('decisionTitle'),
+        });
+        this._closeModal();
+        await this._openMeetingDetailModal(meeting);
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
+  // Excludes tasks already linked to this meeting, tasks outside the
+  // meeting's own organization, and cancelled tasks — same scope
+  // choices as request-detail.js's R4 Link Existing Task modal. Every
+  // linked task attaches to a freshly-logged decision here (no
+  // "attach to an existing decision" picker in this milestone's UI —
+  // the RPC supports it via decisionId, but a decision picker is out
+  // of scope for the smallest-possible-model this milestone asked for).
+  async _openLinkExistingMeetingTaskModal(meeting) {
+    const state = this._meetingTasksState[meeting.id] || { items: [] };
+    const alreadyLinkedIds = new Set(state.items.map(t => t.task_id));
+
+    let candidates = [];
+    try {
+      candidates = (await TasksAPI.listTasks({ organizationId: meeting.organization_id, limit: 200 }))
+        .filter(t => !alreadyLinkedIds.has(t.id) && t.status !== 'cancelled');
+    } catch (err) {
+      console.error('CorLink: failed to load tasks to link', err);
+    }
+
+    this._openModal(`
+      <h3>Link Existing Task</h3>
+      <form id="link-meeting-task-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Decision</label>
+          <input class="field-input-plain" name="decisionTitle" required maxlength="200" placeholder="What was decided?" />
+          <div class="field-hint">A short record of the decision this task supports.</div>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Search</label>
+          <input class="field-input-plain" id="link-meeting-task-search" placeholder="Filter by title or task number…" />
+        </div>
+        <input type="hidden" name="taskId" required />
+        <div class="task-picker-list" id="link-meeting-task-list">
+          ${candidates.length === 0 ? '<p class="structure-empty">No eligible tasks to link.</p>' : candidates.map(t => `
+            <button type="button" class="task-picker-item" data-pick-task="${t.id}">
+              <span class="task-card-number">${this._escapeHtml(t.task_number)}</span>
+              <span>${this._escapeHtml(t.title)}</span>
+              <span class="badge ${this._taskStatusBadgeClass(t.status)}">${this._capitalize(t.status)}</span>
+            </button>
+          `).join('')}
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+        </div>
+      </form>
+    `, { large: true });
+
+    const form = document.getElementById('link-meeting-task-form');
+    const searchInput = document.getElementById('link-meeting-task-search');
+    searchInput.addEventListener('input', () => {
+      const q = searchInput.value.trim().toLowerCase();
+      document.querySelectorAll('#link-meeting-task-list [data-pick-task]').forEach(el => {
+        el.style.display = !q || el.textContent.toLowerCase().includes(q) ? '' : 'none';
+      });
+    });
+    document.querySelectorAll('#link-meeting-task-list [data-pick-task]').forEach(el => {
+      el.addEventListener('click', async () => {
+        const decisionTitle = (new FormData(form).get('decisionTitle') || '').trim();
+        const errEl = form.querySelector('.modal-error');
+        if (!decisionTitle) {
+          errEl.textContent = 'A decision is required.';
+          errEl.classList.remove('hidden');
+          return;
+        }
+        try {
+          await MeetingsAPI.linkExistingTaskToMeeting(meeting.id, el.dataset.pickTask, { decisionTitle });
+          this._closeModal();
+          await this._openMeetingDetailModal(meeting);
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.classList.remove('hidden');
+        }
+      });
+    });
+  },
+
   // ── Personal notes (docs/22/23 Phase B) ──────────────────────────
   // Private to the viewing participant — fetched via a dedicated
   // own-row RPC (get_my_notes), never via meeting_participant_list()
@@ -2247,6 +2607,7 @@ const MeetingsView = {
       });
     });
     this._bindAttachmentEvents(document.getElementById('modal-root'), () => this._openMeetingDetailModal(meeting));
+    this._bindSupportingTasksPanel(meeting);
     document.getElementById('edit-minutes-btn')?.addEventListener('click', () => {
       this._closeModal();
       this._openEditMinutesModal(meeting);

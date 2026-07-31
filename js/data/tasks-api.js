@@ -150,14 +150,26 @@ const TasksAPI = (() => {
       return data || [];
     },
 
-    // ── Module links (supabase/patch-request-task-integration.sql) ──
-    // Generic across future module_key values — today only 'request'
-    // links exist, so this is the only list*Links method needed. No
-    // Task Detail page consumes this yet (that's a later milestone);
-    // it exists now so that page can be built against a stable API.
+    // ── Module links (supabase/patch-request-task-integration.sql,
+    // supabase/patch-meeting-task-integration.sql) ──────────────────
+    // One method per module_key — 'request' and now 'meeting' — since
+    // each module's linked-record shape differs (a request vs. a
+    // meeting decision). No Task Detail page consumes either yet
+    // (that's a later milestone); both exist now so that page can be
+    // built against a stable API.
     async listRequestLinks(taskId, { limit, offset } = {}) {
       const db = getSupabase();
       const { data, error } = await db.rpc('list_task_request_links', {
+        p_task_id: taskId, p_limit: limit || 50, p_offset: offset || 0,
+      });
+      if (error) throw error;
+      const items = data || [];
+      return { items, totalCount: items[0]?.total_count ?? items.length };
+    },
+
+    async listMeetingLinks(taskId, { limit, offset } = {}) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('list_task_meeting_links', {
         p_task_id: taskId, p_limit: limit || 50, p_offset: offset || 0,
       });
       if (error) throw error;
