@@ -376,6 +376,74 @@ const EntryAPI = (() => {
     // entry (plus any looped-in internal_requests) into two queries
     // instead of one per record, and only fetches the action set
     // entry-detail.js actually renders.
+    // ── Supporting Tasks (supabase/patch-entry-task-integration.sql) ──
+    // Tasks attach directly to the Entry record itself (not to any
+    // Internal Collaboration thread it may also have — that's R6's own
+    // feature, with its own capabilities/list methods on
+    // InternalRequestsAPI). Same shape as RequestsAPI's R4 methods.
+    async getTaskCapabilities(entryId) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('get_entry_task_capabilities', { p_entry_id: entryId });
+      if (error) throw error;
+      const row = (data && data[0]) || {};
+      return {
+        canCreateTask: !!row.can_create_task,
+        canLinkExisting: !!row.can_link_existing,
+        canUnlink: !!row.can_unlink,
+        canViewTasks: !!row.can_view_tasks,
+      };
+    },
+
+    async listSupportingTasks(entryId, { status, assignedToMe, limit, offset } = {}) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('list_entry_tasks', {
+        p_entry_id: entryId,
+        p_status: status || null,
+        p_assigned_to_me: !!assignedToMe,
+        p_limit: limit || 50,
+        p_offset: offset || 0,
+      });
+      if (error) throw error;
+      const items = data || [];
+      return { items, totalCount: items[0]?.total_count ?? items.length };
+    },
+
+    async createSupportingTask(entryId, {
+      title, description, owningSectionId, priority, visibility, dueDate, startDate, assigneeIds,
+    }) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('create_entry_supporting_task', {
+        p_entry_id: entryId,
+        p_title: title,
+        p_description: description || null,
+        p_owning_section_id: owningSectionId || null,
+        p_priority: priority || 'normal',
+        p_visibility: visibility || 'section',
+        p_due_date: dueDate || null,
+        p_start_date: startDate || null,
+        p_assignee_ids: assigneeIds && assigneeIds.length ? assigneeIds : null,
+      });
+      if (error) throw error;
+      return (data && data[0]) || null;
+    },
+
+    async linkExistingTask(entryId, taskId) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('link_existing_task_to_entry', {
+        p_task_id: taskId, p_entry_id: entryId,
+      });
+      if (error) throw error;
+      return data;
+    },
+
+    async unlinkTask(linkId, reason = null) {
+      const db = getSupabase();
+      const { error } = await db.rpc('unlink_task_from_entry', {
+        p_link_id: linkId, p_reason: reason || null,
+      });
+      if (error) throw error;
+    },
+
     async listCaseAuditTrail(entryIds, internalRequestIds = []) {
       const db = getSupabase();
       const queries = [];

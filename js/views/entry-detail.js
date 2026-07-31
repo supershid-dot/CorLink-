@@ -137,6 +137,25 @@ const EntryDetailView = {
         }
       }));
 
+      // Entry Supporting Tasks (supabase/patch-entry-task-integration.sql)
+      // — tasks attach to the Entry record itself, distinct from the
+      // per-thread Internal Collaboration tasks fetched just above.
+      // Isolated in its own try/catch so a failure here shows only this
+      // panel's own inline error, never blanks the whole page.
+      try {
+        const [entryTaskCapabilities, entrySupportingTasks] = await Promise.all([
+          EntryAPI.getTaskCapabilities(this._entryId),
+          EntryAPI.listSupportingTasks(this._entryId, { limit: ENTRY_SUPPORTING_TASKS_PAGE_SIZE, offset: 0 }),
+        ]);
+        this._entryTaskCapabilities = entryTaskCapabilities;
+        this._entrySupportingTasks = entrySupportingTasks;
+        this._entrySupportingTasksError = null;
+      } catch (err) {
+        console.error('CorLink: failed to load entry supporting tasks', err);
+        this._entryTaskCapabilities = { canCreateTask: false, canLinkExisting: false, canUnlink: false, canViewTasks: false };
+        this._entrySupportingTasksError = err.message || 'Failed to load supporting tasks.';
+      }
+
       this._auditTrail = await EntryAPI.listCaseAuditTrail([this._entryId], irIds);
 
       main.innerHTML = this._renderContent();
@@ -207,6 +226,8 @@ const EntryDetailView = {
       </div>
 
       ${this._renderInternalCollab(e, { inToSection, canManage, canSupervise })}
+
+      ${this._renderSupportingTasks(e)}
 
       <div id="detail-actions" class="detail-actions-panel">
         ${this._renderActions(e, { inToSection, canManage, canSupervise })}
@@ -608,6 +629,54 @@ const EntryDetailView = {
   // information while keeping ownership of the entry itself — same
   // mechanism as request-detail.js's own panel, anchored via
   // internal_requests.parent_entry_id instead of parent_request_id.
+  // ─── Entry Supporting Tasks (supabase/patch-entry-task-integration.sql) ──
+  // Same <details> disclosure shape and driven-by-real-server-state
+  // approach as R4/R5/R6's own panels — attaches directly to the Entry
+  // record itself, distinct from the per-thread Internal Collaboration
+  // panels rendered inside _renderInternalRequestRow below.
+  _renderSupportingTasks(e) {
+    const caps = this._entryTaskCapabilities;
+    if (!caps || !caps.canViewTasks) return '';
+
+    if (this._entrySupportingTasksError) {
+      return `
+        <details class="supporting-tasks-panel" open>
+          <summary><i class="ti ti-checklist"></i> Supporting Tasks</summary>
+          <div class="supporting-tasks-body">
+            <div class="alert alert-error">Couldn't load supporting tasks: ${this._escapeHtml(this._entrySupportingTasksError)}</div>
+          </div>
+        </details>
+      `;
+    }
+
+    const page = this._entrySupportingTasks || { items: [], totalCount: 0 };
+    const items = page.items || [];
+    const hasMore = page.totalCount > items.length;
+
+    return `
+      <details class="supporting-tasks-panel" ${items.length > 0 ? 'open' : ''}>
+        <summary>
+          <i class="ti ti-checklist"></i> Supporting Tasks
+          ${items.length > 0 ? `<span class="badge badge-outline">${page.totalCount}</span>` : ''}
+        </summary>
+        <div class="supporting-tasks-body" data-supporting-tasks-for="${e.id}">
+          <div class="supporting-tasks-actions">
+            ${caps.canCreateTask ? `<button class="btn btn-secondary btn-sm" data-create-supporting-task="${e.id}">Create Supporting Task</button>` : ''}
+            ${caps.canLinkExisting ? `<button class="btn btn-secondary btn-sm" data-link-existing-task="${e.id}">Link Existing Task</button>` : ''}
+          </div>
+          <div class="supporting-tasks-list">
+            ${items.map(t => this._renderTaskCard(t, caps, 'data-unlink-task')).join('') || '<p class="structure-empty">Nothing here yet.</p>'}
+          </div>
+          ${hasMore ? `
+            <button class="btn btn-secondary btn-sm supporting-tasks-load-more" data-load-more-tasks="${e.id}">
+              Load More (${items.length} of ${page.totalCount})
+            </button>
+          ` : ''}
+        </div>
+      </details>
+    `;
+  },
+
   _renderInternalCollab(e, ctx) {
     if (!e.to_section_id) return '';
     const items = this._internalRequests || [];
@@ -802,7 +871,11 @@ const EntryDetailView = {
     return { low: 'badge-muted', normal: 'badge-outline', high: 'badge-warning', critical: 'badge-error' }[priority] || 'badge-outline';
   },
 
-  _renderTaskCard(t, caps) {
+  // unlinkAttr lets the entry-level Supporting Tasks panel (R7) and
+  // the per-thread Internal Collaboration panels (R6), both on this
+  // same page, route their Unlink buttons through distinct data-
+  // attributes/bind handlers without duplicating this card template.
+  _renderTaskCard(t, caps, unlinkAttr = 'data-unlink-internal-task') {
     const assignees = (t.assignees || []).map(a => this._escapeHtml(a.full_name)).join(', ') || 'Unassigned';
     const canUnlinkThis = caps.canUnlink && t.status !== 'cancelled';
     return `
@@ -818,7 +891,7 @@ const EntryDetailView = {
           <span>${assignees}</span>
           ${t.due_date ? `<span>Due: ${RequestsView._deadlineCell(t.due_date, ['completed', 'cancelled'].includes(t.status) ? 'closed' : t.status)}</span>` : ''}
         </div>
-        ${canUnlinkThis ? `<div class="task-card-actions"><button class="btn btn-secondary btn-xs" data-unlink-internal-task="${t.link_id}">Unlink</button></div>` : ''}
+        ${canUnlinkThis ? `<div class="task-card-actions"><button class="btn btn-secondary btn-xs" ${unlinkAttr}="${t.link_id}">Unlink</button></div>` : ''}
       </div>
     `;
   },
@@ -899,6 +972,199 @@ const EntryDetailView = {
         </div>
       </div>
     `;
+  },
+
+  // ─── Entry Supporting Tasks ─────────────────────────────────────
+  // Mirrors request-detail.js's own request-level equivalents (R4),
+  // scoped to the Entry record itself rather than a request round.
+  async _loadMoreSupportingTasks(entryId, btn) {
+    if (!this._entrySupportingTasks) return;
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `Loading… <span class="spinner"></span>`;
+    try {
+      const nextPage = await EntryAPI.listSupportingTasks(entryId, {
+        limit: ENTRY_SUPPORTING_TASKS_PAGE_SIZE,
+        offset: this._entrySupportingTasks.items.length,
+      });
+      this._entrySupportingTasks = {
+        items: [...this._entrySupportingTasks.items, ...nextPage.items],
+        totalCount: nextPage.totalCount,
+      };
+      this._rerender();
+    } catch (err) {
+      console.error('CorLink: failed to load more supporting tasks', err);
+      btn.disabled = false;
+      btn.innerHTML = original;
+      alert(err.message || 'Failed to load more tasks.');
+    }
+  },
+
+  async _openCreateSupportingTaskModal(entryId) {
+    const e = this._entry;
+    const ownOrgId = e.org_id;
+    let sections = [];
+    let staff = [];
+    try {
+      [sections, staff] = await Promise.all([
+        AdminAPI.listSectionsByOrg(ownOrgId),
+        AdminAPI.listUsersByOrg(ownOrgId),
+      ]);
+      sections = sections.filter(s => s.is_active);
+    } catch (err) {
+      console.error('CorLink: failed to load sections/staff', err);
+    }
+
+    this._openModal(`
+      <h3>Create Supporting Task</h3>
+      <form id="create-entry-task-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Title</label>
+          <input class="field-input-plain" name="title" required maxlength="200" />
+        </div>
+        <div class="field-group">
+          <label class="field-label">Description (optional)</label>
+          <textarea class="field-input-plain" name="description" rows="3"></textarea>
+        </div>
+        <div class="field-group-row">
+          <div class="field-group">
+            <label class="field-label">Priority</label>
+            <select class="field-select" name="priority">
+              <option value="low">Low</option>
+              <option value="normal" selected>Normal</option>
+              <option value="high">High</option>
+              <option value="critical">Critical</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Visibility</label>
+            <select class="field-select" name="visibility">
+              <option value="private">Private</option>
+              <option value="section" selected>Section</option>
+              <option value="organization">Organization</option>
+            </select>
+          </div>
+        </div>
+        <div class="field-group-row">
+          <div class="field-group">
+            <label class="field-label">Start date (optional)</label>
+            <input class="field-input-plain" type="date" name="startDate" />
+          </div>
+          <div class="field-group">
+            <label class="field-label">Due date (optional)</label>
+            <input class="field-input-plain" type="date" name="dueDate" />
+          </div>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Owning section (optional)</label>
+          <select class="field-select" name="owningSectionId">
+            <option value="">— None —</option>
+            ${sections.map(s => `<option value="${s.id}" ${s.id === e.to_section_id ? 'selected' : ''}>${this._escapeHtml(s.name)}</option>`).join('')}
+          </select>
+        </div>
+        ${staff.length > 0 ? `
+          <div class="field-group">
+            <label class="field-label">Assignees (optional)</label>
+            <div class="checkbox-list">
+              ${staff.map(u => `
+                <label class="checkbox-row">
+                  <input type="checkbox" name="assigneeIds" value="${u.id}" />
+                  ${this._escapeHtml(u.full_name)}
+                </label>
+              `).join('')}
+            </div>
+          </div>
+        ` : ''}
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Create Task</button>
+        </div>
+      </form>
+    `, { large: true });
+
+    const form = document.getElementById('create-entry-task-form');
+    form.addEventListener('submit', async (e2) => {
+      e2.preventDefault();
+      const fd = new FormData(form);
+      const errEl = form.querySelector('.modal-error');
+      const assigneeIds = fd.getAll('assigneeIds');
+      try {
+        await EntryAPI.createSupportingTask(entryId, {
+          title: fd.get('title'),
+          description: fd.get('description') || null,
+          priority: fd.get('priority'),
+          visibility: fd.get('visibility'),
+          startDate: fd.get('startDate') || null,
+          dueDate: fd.get('dueDate') || null,
+          owningSectionId: fd.get('owningSectionId') || null,
+          assigneeIds,
+        });
+        this._closeModal();
+        await this._load();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
+  async _openLinkExistingTaskModal(entryId) {
+    const e = this._entry;
+    const ownOrgId = e.org_id;
+    const alreadyLinkedIds = new Set((this._entrySupportingTasks?.items || []).map(t => t.task_id));
+
+    let candidates = [];
+    try {
+      candidates = (await TasksAPI.listTasks({ organizationId: ownOrgId, limit: 200 }))
+        .filter(t => !alreadyLinkedIds.has(t.id) && t.status !== 'cancelled');
+    } catch (err) {
+      console.error('CorLink: failed to load tasks to link', err);
+    }
+
+    this._openModal(`
+      <h3>Link Existing Task</h3>
+      <div class="field-group">
+        <label class="field-label">Search</label>
+        <input class="field-input-plain" id="link-entry-task-search" placeholder="Filter by title or task number…" />
+      </div>
+      <div class="modal-error alert alert-error hidden" id="link-entry-task-error"></div>
+      <div class="task-picker-list" id="link-entry-task-list">
+        ${candidates.length === 0 ? '<p class="structure-empty">No eligible tasks to link.</p>' : candidates.map(t => `
+          <button type="button" class="task-picker-item" data-pick-entry-task="${t.id}">
+            <span class="task-card-number">${this._escapeHtml(t.task_number)}</span>
+            <span>${this._escapeHtml(t.title)}</span>
+            <span class="badge ${this._taskStatusBadgeClass(t.status)}">${this._capitalizeWords(t.status)}</span>
+          </button>
+        `).join('')}
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+      </div>
+    `, { large: true });
+
+    const searchInput = document.getElementById('link-entry-task-search');
+    searchInput.addEventListener('input', () => {
+      const q = searchInput.value.trim().toLowerCase();
+      document.querySelectorAll('#link-entry-task-list [data-pick-entry-task]').forEach(el => {
+        const text = el.textContent.toLowerCase();
+        el.style.display = !q || text.includes(q) ? '' : 'none';
+      });
+    });
+
+    document.querySelectorAll('#link-entry-task-list [data-pick-entry-task]').forEach(el => {
+      el.addEventListener('click', async () => {
+        const errEl = document.getElementById('link-entry-task-error');
+        try {
+          await EntryAPI.linkExistingTask(entryId, el.dataset.pickEntryTask);
+          this._closeModal();
+          await this._load();
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.classList.remove('hidden');
+        }
+      });
+    });
   },
 
   // ─── Internal Collaboration Supporting Tasks ───────────────────
@@ -1646,6 +1912,23 @@ const EntryDetailView = {
     });
     main.querySelectorAll('[data-jump-to-quote]').forEach(el => {
       el.addEventListener('click', () => this._highlightQuote(el.dataset.jumpToQuote, el.dataset.quoteText));
+    });
+
+    // Entry Supporting Tasks
+    main.querySelectorAll('[data-create-supporting-task]').forEach(btn => {
+      btn.addEventListener('click', () => this._openCreateSupportingTaskModal(btn.dataset.createSupportingTask));
+    });
+    main.querySelectorAll('[data-link-existing-task]').forEach(btn => {
+      btn.addEventListener('click', () => this._openLinkExistingTaskModal(btn.dataset.linkExistingTask));
+    });
+    main.querySelectorAll('[data-unlink-task]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (!confirm('Unlink this task from the entry? The task itself is not changed or cancelled.')) return;
+        this._runAction(() => EntryAPI.unlinkTask(btn.dataset.unlinkTask));
+      });
+    });
+    main.querySelectorAll('[data-load-more-tasks]').forEach(btn => {
+      btn.addEventListener('click', () => this._loadMoreSupportingTasks(btn.dataset.loadMoreTasks, btn));
     });
 
     // Internal Collaboration
