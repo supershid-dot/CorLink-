@@ -151,12 +151,15 @@ const TasksAPI = (() => {
     },
 
     // ── Module links (supabase/patch-request-task-integration.sql,
-    // supabase/patch-meeting-task-integration.sql) ──────────────────
-    // One method per module_key — 'request' and now 'meeting' — since
-    // each module's linked-record shape differs (a request vs. a
-    // meeting decision). No Task Detail page consumes either yet
-    // (that's a later milestone); both exist now so that page can be
-    // built against a stable API.
+    // supabase/patch-meeting-task-integration.sql,
+    // supabase/patch-internal-collaboration-task-integration.sql) ────
+    // One method per module_key — 'request', 'meeting', and now
+    // 'internal_request' — since each module's linked-record shape
+    // differs (a request vs. a meeting decision vs. an internal
+    // collaboration thread, the last of which also carries safe
+    // parent-navigation metadata). No Task Detail page consumes any of
+    // these yet (that's a later milestone); all three exist now so
+    // that page can be built against a stable API.
     async listRequestLinks(taskId, { limit, offset } = {}) {
       const db = getSupabase();
       const { data, error } = await db.rpc('list_task_request_links', {
@@ -170,6 +173,21 @@ const TasksAPI = (() => {
     async listMeetingLinks(taskId, { limit, offset } = {}) {
       const db = getSupabase();
       const { data, error } = await db.rpc('list_task_meeting_links', {
+        p_task_id: taskId, p_limit: limit || 50, p_offset: offset || 0,
+      });
+      if (error) throw error;
+      const items = data || [];
+      return { items, totalCount: items[0]?.total_count ?? items.length };
+    },
+
+    // parent_type/parent_id are only populated server-side when the
+    // actor can independently view the parent Request/Entry too (see
+    // list_task_internal_collaboration_links()'s own comment) — this
+    // method passes both through as-is, never re-deriving or assuming
+    // navigability itself.
+    async listInternalCollabLinks(taskId, { limit, offset } = {}) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('list_task_internal_collaboration_links', {
         p_task_id: taskId, p_limit: limit || 50, p_offset: offset || 0,
       });
       if (error) throw error;

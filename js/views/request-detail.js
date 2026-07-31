@@ -251,6 +251,9 @@ const RequestDetailView = {
             reviewComments: replyReviewCommentsById[reply.id] || [],
           })),
           attachments: internalRequestAttachmentsById[ir.id] || [],
+          taskCapabilities: null,
+          supportingTasks: null,
+          supportingTasksError: null,
         }));
         return {
           request,
@@ -287,6 +290,30 @@ const RequestDetailView = {
           console.error('CorLink: failed to load supporting tasks', err);
           entry.taskCapabilities = { canCreateTask: false, canLinkExisting: false, canUnlink: false, canViewTasks: false };
           entry.supportingTasksError = err.message || 'Failed to load supporting tasks.';
+        }
+      }));
+
+      // Internal Collaboration Supporting Tasks (supabase/patch-
+      // internal-collaboration-task-integration.sql) — one fetch per
+      // THREAD (internal_requests row), not per round, since tasks
+      // attach to the specific thread, not its parent request. A case
+      // normally has few loop-ins per round, so this stays a handful
+      // of calls. Isolated in its own try/catch per thread — a
+      // failure on one thread shows only that thread's panel error,
+      // never blanks the page or breaks sibling threads.
+      const allInternalRequestDetails = this._conversation.flatMap(entry => entry.internalRequestDetails);
+      await Promise.all(allInternalRequestDetails.map(async (ird) => {
+        try {
+          const [capabilities, page] = await Promise.all([
+            InternalRequestsAPI.getTaskCapabilities(ird.internalRequest.id),
+            InternalRequestsAPI.listSupportingTasks(ird.internalRequest.id, { limit: SUPPORTING_TASKS_PAGE_SIZE, offset: 0 }),
+          ]);
+          ird.taskCapabilities = capabilities;
+          ird.supportingTasks = page;
+        } catch (err) {
+          console.error('CorLink: failed to load internal collaboration supporting tasks', err);
+          ird.taskCapabilities = { canCreateTask: false, canLinkExisting: false, canUnlink: false, canViewTasks: false };
+          ird.supportingTasksError = err.message || 'Failed to load supporting tasks.';
         }
       }));
 
@@ -1188,6 +1215,7 @@ const RequestDetailView = {
           ird.attachments.length === 0 && ir.created_by !== this._user.id)}
         ${ird.replyDetails.map(rd => this._renderInternalReply(ir, rd.reply, rd.attachments, rd.reviewComments, inToSection, canApproveReturn)).join('')}
         ${replyComposeOpen && canReplyNow ? this._composeInternalReplyHtml(ir) : ''}
+        ${this._renderInternalCollabSupportingTasks(ird)}
         <div class="detail-actions">
           ${canReceiveNow ? `<button class="btn ${primaryAction === 'receive' ? 'btn-primary' : 'btn-secondary'} btn-xs" data-mark-internal-received="${ir.id}">Mark Received</button>` : ''}
           ${canAssignNow ? `<button class="btn ${primaryAction === 'assign' ? 'btn-primary' : 'btn-secondary'} btn-xs" data-assign-internal="${ir.id}">${ir.assigned_to ? 'Reassign' : 'Assign to Staff'}</button>` : ''}
@@ -1261,7 +1289,12 @@ const RequestDetailView = {
     return { low: 'badge-muted', normal: 'badge-outline', high: 'badge-warning', critical: 'badge-error' }[priority] || 'badge-outline';
   },
 
-  _renderTaskCard(t, caps) {
+  // unlinkAttr lets a second panel on the same page (Internal
+  // Collaboration's own Supporting Tasks, below) route its Unlink
+  // button through a distinct data-attribute/bind handler than this
+  // one's own request-level panel, without duplicating this whole
+  // card template a second time.
+  _renderTaskCard(t, caps, unlinkAttr = 'data-unlink-task') {
     const assignees = (t.assignees || []).map(a => this._escapeHtml(a.full_name)).join(', ') || 'Unassigned';
     const canUnlinkThis = caps.canUnlink && t.status !== 'cancelled';
     return `
@@ -1277,8 +1310,60 @@ const RequestDetailView = {
           <span>${assignees}</span>
           ${t.due_date ? `<span>Due: ${RequestsView._deadlineCell(t.due_date, ['completed', 'cancelled'].includes(t.status) ? 'closed' : t.status)}</span>` : ''}
         </div>
-        ${canUnlinkThis ? `<div class="task-card-actions"><button class="btn btn-secondary btn-xs" data-unlink-task="${t.link_id}">Unlink</button></div>` : ''}
+        ${canUnlinkThis ? `<div class="task-card-actions"><button class="btn btn-secondary btn-xs" ${unlinkAttr}="${t.link_id}">Unlink</button></div>` : ''}
       </div>
+    `;
+  },
+
+  // ─── Internal Collaboration Supporting Tasks (supabase/patch-
+  // internal-collaboration-task-integration.sql) ──────────────────
+  // Same <details> disclosure shape and same driven-by-real-server-
+  // state approach as _renderSupportingTasks above, scoped to one
+  // exact thread (ird.internalRequest.id) rather than the whole
+  // request round — a case with three loop-in threads renders three
+  // independent panels, each showing only its own thread's tasks.
+  _renderInternalCollabSupportingTasks(ird) {
+    const caps = ird.taskCapabilities;
+    if (!caps || !caps.canViewTasks) return '';
+
+    const ir = ird.internalRequest;
+
+    if (ird.supportingTasksError) {
+      return `
+        <details class="supporting-tasks-panel" open>
+          <summary><i class="ti ti-checklist"></i> Supporting Tasks</summary>
+          <div class="supporting-tasks-body">
+            <div class="alert alert-error">Couldn't load supporting tasks: ${this._escapeHtml(ird.supportingTasksError)}</div>
+          </div>
+        </details>
+      `;
+    }
+
+    const page = ird.supportingTasks || { items: [], totalCount: 0 };
+    const items = page.items || [];
+    const hasMore = page.totalCount > items.length;
+
+    return `
+      <details class="supporting-tasks-panel" ${items.length > 0 ? 'open' : ''}>
+        <summary>
+          <i class="ti ti-checklist"></i> Supporting Tasks
+          ${items.length > 0 ? `<span class="badge badge-outline">${page.totalCount}</span>` : ''}
+        </summary>
+        <div class="supporting-tasks-body" data-internal-supporting-tasks-for="${ir.id}">
+          <div class="supporting-tasks-actions">
+            ${caps.canCreateTask ? `<button class="btn btn-secondary btn-sm" data-create-internal-task="${ir.id}">Create Supporting Task</button>` : ''}
+            ${caps.canLinkExisting ? `<button class="btn btn-secondary btn-sm" data-link-internal-task="${ir.id}">Link Existing Task</button>` : ''}
+          </div>
+          <div class="supporting-tasks-list">
+            ${items.map(t => this._renderTaskCard(t, caps, 'data-unlink-internal-task')).join('') || '<p class="structure-empty">Nothing here yet.</p>'}
+          </div>
+          ${hasMore ? `
+            <button class="btn btn-secondary btn-sm supporting-tasks-load-more" data-load-more-internal-tasks="${ir.id}">
+              Load More (${items.length} of ${page.totalCount})
+            </button>
+          ` : ''}
+        </div>
+      </details>
     `;
   },
 
@@ -1684,6 +1769,21 @@ const RequestDetailView = {
     });
     main.querySelectorAll('[data-load-more-tasks]').forEach(btn => {
       btn.addEventListener('click', () => this._loadMoreSupportingTasks(btn.dataset.loadMoreTasks, btn));
+    });
+    main.querySelectorAll('[data-create-internal-task]').forEach(btn => {
+      btn.addEventListener('click', () => this._openCreateInternalTaskModal(btn.dataset.createInternalTask));
+    });
+    main.querySelectorAll('[data-link-internal-task]').forEach(btn => {
+      btn.addEventListener('click', () => this._openLinkExistingInternalTaskModal(btn.dataset.linkInternalTask));
+    });
+    main.querySelectorAll('[data-unlink-internal-task]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (!confirm('Unlink this task from the internal collaboration thread? The task itself is not changed or cancelled.')) return;
+        this._runAction(() => InternalRequestsAPI.unlinkTask(btn.dataset.unlinkInternalTask));
+      });
+    });
+    main.querySelectorAll('[data-load-more-internal-tasks]').forEach(btn => {
+      btn.addEventListener('click', () => this._loadMoreInternalSupportingTasks(btn.dataset.loadMoreInternalTasks, btn));
     });
     main.querySelectorAll('[data-mark-internal-received]').forEach(btn => {
       btn.addEventListener('click', () => this._runAction(() => InternalRequestsAPI.markReceived(btn.dataset.markInternalReceived)));
@@ -2689,6 +2789,210 @@ const RequestDetailView = {
     });
   },
 
+  // ─── Internal Collaboration Supporting Tasks ───────────────────
+  // Mirrors _loadMoreSupportingTasks/_openCreateSupportingTaskModal/
+  // _openLinkExistingTaskModal above exactly, scoped to one thread
+  // (internalRequestId) instead of a request round. Internal
+  // collaboration threads are always single-org (from_section_id/
+  // to_section_id both resolve to the same org — see schema.sql), so
+  // there is no from/to org ambiguity to resolve the way the request-
+  // level modal above needs to: this._user.org_id is always correct
+  // here, since only members of that org can ever pass
+  // can_manage_internal_collab_task_link() in the first place.
+  async _loadMoreInternalSupportingTasks(internalRequestId, btn) {
+    const ird = this._findInternalRequestDetail(internalRequestId);
+    if (!ird || !ird.supportingTasks) return;
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `Loading… <span class="spinner"></span>`;
+    try {
+      const nextPage = await InternalRequestsAPI.listSupportingTasks(internalRequestId, {
+        limit: SUPPORTING_TASKS_PAGE_SIZE,
+        offset: ird.supportingTasks.items.length,
+      });
+      ird.supportingTasks = {
+        items: [...ird.supportingTasks.items, ...nextPage.items],
+        totalCount: nextPage.totalCount,
+      };
+      this._rerender();
+    } catch (err) {
+      console.error('CorLink: failed to load more supporting tasks', err);
+      btn.disabled = false;
+      btn.innerHTML = original;
+      alert(err.message || 'Failed to load more tasks.');
+    }
+  },
+
+  async _openCreateInternalTaskModal(internalRequestId) {
+    const ird = this._findInternalRequestDetail(internalRequestId);
+    if (!ird) return;
+    const ir = ird.internalRequest;
+    const ownOrgId = this._user.org_id;
+    let sections = [];
+    let staff = [];
+    try {
+      [sections, staff] = await Promise.all([
+        AdminAPI.listSectionsByOrg(ownOrgId),
+        AdminAPI.listUsersByOrg(ownOrgId),
+      ]);
+      sections = sections.filter(s => s.is_active);
+    } catch (err) {
+      console.error('CorLink: failed to load sections/staff', err);
+    }
+
+    this._openModal(`
+      <h3>Create Supporting Task</h3>
+      <form id="create-internal-task-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Title</label>
+          <input class="field-input-plain" name="title" required maxlength="200" />
+        </div>
+        <div class="field-group">
+          <label class="field-label">Description (optional)</label>
+          <textarea class="field-input-plain" name="description" rows="3"></textarea>
+        </div>
+        <div class="field-group-row">
+          <div class="field-group">
+            <label class="field-label">Priority</label>
+            <select class="field-select" name="priority">
+              <option value="low">Low</option>
+              <option value="normal" selected>Normal</option>
+              <option value="high">High</option>
+              <option value="critical">Critical</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label">Visibility</label>
+            <select class="field-select" name="visibility">
+              <option value="private">Private</option>
+              <option value="section" selected>Section</option>
+              <option value="organization">Organization</option>
+            </select>
+          </div>
+        </div>
+        <div class="field-group-row">
+          <div class="field-group">
+            <label class="field-label">Start date (optional)</label>
+            <input class="field-input-plain" type="date" name="startDate" />
+          </div>
+          <div class="field-group">
+            <label class="field-label">Due date (optional)</label>
+            <input class="field-input-plain" type="date" name="dueDate" />
+          </div>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Owning section (optional)</label>
+          <select class="field-select" name="owningSectionId">
+            <option value="">— None —</option>
+            ${sections.map(s => `<option value="${s.id}" ${s.id === ir.to_section_id || s.id === ir.from_section_id ? 'selected' : ''}>${this._escapeHtml(s.name)}</option>`).join('')}
+          </select>
+        </div>
+        ${staff.length > 0 ? `
+          <div class="field-group">
+            <label class="field-label">Assignees (optional)</label>
+            <div class="checkbox-list">
+              ${staff.map(u => `
+                <label class="checkbox-row">
+                  <input type="checkbox" name="assigneeIds" value="${u.id}" />
+                  ${this._escapeHtml(u.full_name)}
+                </label>
+              `).join('')}
+            </div>
+          </div>
+        ` : ''}
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Create Task</button>
+        </div>
+      </form>
+    `, { large: true });
+
+    const form = document.getElementById('create-internal-task-form');
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const errEl = form.querySelector('.modal-error');
+      const assigneeIds = fd.getAll('assigneeIds');
+      try {
+        await InternalRequestsAPI.createSupportingTask(internalRequestId, {
+          title: fd.get('title'),
+          description: fd.get('description') || null,
+          priority: fd.get('priority'),
+          visibility: fd.get('visibility'),
+          startDate: fd.get('startDate') || null,
+          dueDate: fd.get('dueDate') || null,
+          owningSectionId: fd.get('owningSectionId') || null,
+          assigneeIds,
+        });
+        this._closeModal();
+        await this._load();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
+  async _openLinkExistingInternalTaskModal(internalRequestId) {
+    const ird = this._findInternalRequestDetail(internalRequestId);
+    if (!ird) return;
+    const ownOrgId = this._user.org_id;
+    const alreadyLinkedIds = new Set((ird.supportingTasks?.items || []).map(t => t.task_id));
+
+    let candidates = [];
+    try {
+      candidates = (await TasksAPI.listTasks({ organizationId: ownOrgId, limit: 200 }))
+        .filter(t => !alreadyLinkedIds.has(t.id) && t.status !== 'cancelled');
+    } catch (err) {
+      console.error('CorLink: failed to load tasks to link', err);
+    }
+
+    this._openModal(`
+      <h3>Link Existing Task</h3>
+      <div class="field-group">
+        <label class="field-label">Search</label>
+        <input class="field-input-plain" id="link-internal-task-search" placeholder="Filter by title or task number…" />
+      </div>
+      <div class="modal-error alert alert-error hidden" id="link-internal-task-error"></div>
+      <div class="task-picker-list" id="link-internal-task-list">
+        ${candidates.length === 0 ? '<p class="structure-empty">No eligible tasks to link.</p>' : candidates.map(t => `
+          <button type="button" class="task-picker-item" data-pick-internal-task="${t.id}">
+            <span class="task-card-number">${this._escapeHtml(t.task_number)}</span>
+            <span>${this._escapeHtml(t.title)}</span>
+            <span class="badge ${this._taskStatusBadgeClass(t.status)}">${this._capitalizeWords(t.status)}</span>
+          </button>
+        `).join('')}
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+      </div>
+    `, { large: true });
+
+    const searchInput = document.getElementById('link-internal-task-search');
+    searchInput.addEventListener('input', () => {
+      const q = searchInput.value.trim().toLowerCase();
+      document.querySelectorAll('#link-internal-task-list [data-pick-internal-task]').forEach(el => {
+        const text = el.textContent.toLowerCase();
+        el.style.display = !q || text.includes(q) ? '' : 'none';
+      });
+    });
+
+    document.querySelectorAll('#link-internal-task-list [data-pick-internal-task]').forEach(el => {
+      el.addEventListener('click', async () => {
+        const errEl = document.getElementById('link-internal-task-error');
+        try {
+          await InternalRequestsAPI.linkExistingTask(internalRequestId, el.dataset.pickInternalTask);
+          this._closeModal();
+          await this._load();
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.classList.remove('hidden');
+        }
+      });
+    });
+  },
+
   async _openInternalRequestModal(parentRequestId) {
     const entry = this._conversation.find(e => e.request.id === parentRequestId);
     // Prefilled with the ORIGINAL request's own subject (and its actual
@@ -2801,6 +3105,18 @@ const RequestDetailView = {
     for (const entry of this._conversation) {
       const hit = entry.internalRequestDetails.find(ird => ird.internalRequest.id === id);
       if (hit) return hit.internalRequest;
+    }
+    return null;
+  },
+
+  // Same lookup as _findInternalRequest() above but returns the whole
+  // ird wrapper (including its mutable taskCapabilities/supportingTasks/
+  // supportingTasksError state) — the Internal Collaboration Supporting
+  // Tasks handlers below need to read AND mutate that state in place.
+  _findInternalRequestDetail(id) {
+    for (const entry of this._conversation) {
+      const hit = entry.internalRequestDetails.find(ird => ird.internalRequest.id === id);
+      if (hit) return hit;
     }
     return null;
   },
