@@ -893,5 +893,72 @@ const RequestsAPI = (() => {
       if (error) throw wrapRowError(error);
       return data;
     },
+
+    // ── Supporting Tasks (supabase/patch-request-task-integration.sql) ──
+    // Every call here is an RPC — task_links carries SELECT-only RLS,
+    // same as tasks itself, so there is no direct-.insert()/.update()
+    // path. Actor identity always comes from auth.uid() server-side.
+    async getRequestTaskCapabilities(requestId) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('get_request_task_capabilities', { p_request_id: requestId });
+      if (error) throw error;
+      const row = (data && data[0]) || {};
+      return {
+        canCreateTask: !!row.can_create_task,
+        canLinkExisting: !!row.can_link_existing,
+        canUnlink: !!row.can_unlink,
+        canViewTasks: !!row.can_view_tasks,
+      };
+    },
+
+    async listSupportingTasks(requestId, { status, assignedToMe, limit, offset } = {}) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('list_request_supporting_tasks', {
+        p_request_id: requestId,
+        p_status: status || null,
+        p_assigned_to_me: !!assignedToMe,
+        p_limit: limit || 50,
+        p_offset: offset || 0,
+      });
+      if (error) throw error;
+      const items = data || [];
+      return { items, totalCount: items[0]?.total_count ?? items.length };
+    },
+
+    async createSupportingTask(requestId, {
+      title, description, owningSectionId, priority, visibility, dueDate, startDate, assigneeIds,
+    }) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('create_request_supporting_task', {
+        p_request_id: requestId,
+        p_title: title,
+        p_description: description || null,
+        p_owning_section_id: owningSectionId || null,
+        p_priority: priority || 'normal',
+        p_visibility: visibility || 'section',
+        p_due_date: dueDate || null,
+        p_start_date: startDate || null,
+        p_assignee_ids: assigneeIds && assigneeIds.length ? assigneeIds : null,
+      });
+      if (error) throw error;
+      return (data && data[0]) || null;
+    },
+
+    async linkExistingTask(requestId, taskId) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('link_existing_task_to_request', {
+        p_task_id: taskId, p_request_id: requestId,
+      });
+      if (error) throw error;
+      return data;
+    },
+
+    async unlinkTask(linkId, reason = null) {
+      const db = getSupabase();
+      const { error } = await db.rpc('unlink_task_from_request', {
+        p_link_id: linkId, p_reason: reason || null,
+      });
+      if (error) throw error;
+    },
   };
 })();
