@@ -27,6 +27,7 @@ const TasksView = {
     priorityFilter: '',  // client-side quick filter over the loaded page
     originFilter: '',    // client-side quick filter over the loaded page
     dueFilter: '',        // client-side quick filter: overdue | today | week | none
+    completedFilter: '',  // client-side quick filter: today | week | month (T3B, docs/46)
     search: '',
     limit: TASKS_PAGE_SIZE_DESKTOP,
   },
@@ -70,6 +71,22 @@ const TasksView = {
     if (['low', 'normal', 'high', 'critical'].includes(params.priorityFilter)) this._state.priorityFilter = params.priorityFilter;
     if (['overdue', 'today', 'week', 'none'].includes(params.dueFilter)) this._state.dueFilter = params.dueFilter;
     if (['standalone', 'request', 'meeting', 'internal_request', 'external_correspondence', 'prisoner_letter'].includes(params.originFilter)) this._state.originFilter = params.originFilter;
+    // T3B (js/views/task-dashboard.js's Completion Summary card) — same
+    // fail-closed enum validation as every other quick-filter param above.
+    if (['today', 'week', 'month'].includes(params.completedFilter)) this._state.completedFilter = params.completedFilter;
+    // T3B's Team Workload Summary card links straight to one specific
+    // section within 'team' or 'organization' scope — not itself a new
+    // capability (list_tasks() already accepts p_owning_section_id
+    // together with p_organization_id), just a deep-link entry point for
+    // it. Not checked against a client-held allowlist the way scope/
+    // status/etc. are above: the value only ever narrows a real,
+    // RLS-governed list_tasks() call (§_fetchArgs below), so an
+    // unrecognized or unauthorized id simply yields zero rows server-side
+    // — the same fail-closed guarantee every task read in this app
+    // already has, not a new trust decision made here.
+    if (params.teamSectionId && ['team', 'organization'].includes(this._state.scope)) {
+      this._state.teamSectionId = params.teamSectionId;
+    }
 
     this._state.limit = this._pageSize();
     this._resetLoadedData();
@@ -174,6 +191,12 @@ const TasksView = {
       if (sectionId) args.owningSectionId = sectionId;
     } else if (this._state.scope === 'organization') {
       args.organizationId = this._user.org_id;
+      // T3B: lets the Team Workload Summary card's org-wide-fallback rows
+      // (a section no one currently supervises, but an admin can still
+      // see under their own org-wide authority) deep-link to exactly one
+      // section within Organization Tasks — list_tasks() already accepts
+      // both parameters together, this just wires the UI to pass both.
+      if (this._state.teamSectionId) args.owningSectionId = this._state.teamSectionId;
     }
     // 'assigned_by_me' has no server-side creator filter available on
     // list_tasks() today (see docs/40 §Known Limitations) — fetched the
@@ -282,6 +305,29 @@ const TasksView = {
         return true;
       });
     }
+    if (this._state.completedFilter) {
+      const now = new Date();
+      const today = now.toISOString().slice(0, 10);
+      const daysAgo = (n) => new Date(now.getTime() - n * 86400000).toISOString().slice(0, 10);
+      items = items.filter(t => {
+        // Only ever matches tasks that ARE completed — setting this
+        // filter alone (without also picking Status = Completed) still
+        // reads as "show me what was completed in this window", not a
+        // no-op over every status, per docs/46's Completion Summary.
+        if (t.status !== 'completed' || !t.completed_at) return false;
+        const completedDate = t.completed_at.slice(0, 10);
+        if (this._state.completedFilter === 'today') return completedDate === today;
+        // "Week"/"month" are rolling windows ending today (last 7 / 30
+        // days), not calendar-week/month boundaries — same rolling-
+        // window choice as "Due This Week" above, and nested/cumulative
+        // by design (a task completed today also counts within both),
+        // matching how Completion Summary's own three rows are
+        // documented in docs/46 as nested, not mutually exclusive.
+        if (this._state.completedFilter === 'week') return completedDate >= daysAgo(6);
+        if (this._state.completedFilter === 'month') return completedDate >= daysAgo(29);
+        return true;
+      });
+    }
     const q = (this._state.search || '').trim().toLowerCase();
     if (q) {
       items = items.filter(t =>
@@ -293,7 +339,7 @@ const TasksView = {
   _renderList(content) {
     const raw = this._items || [];
     const visible = this._visibleItems();
-    const filtersActive = !!(this._state.priorityFilter || this._state.originFilter || this._state.dueFilter || this._state.search
+    const filtersActive = !!(this._state.priorityFilter || this._state.originFilter || this._state.dueFilter || this._state.completedFilter || this._state.search
       || (this._state.scope === 'assigned_by_me' && raw.length !== visible.length));
 
     content.innerHTML = `
@@ -348,6 +394,12 @@ const TasksView = {
           <option value="week" ${this._state.dueFilter === 'week' ? 'selected' : ''}>Due This Week</option>
           <option value="none" ${this._state.dueFilter === 'none' ? 'selected' : ''}>No Due Date</option>
         </select>
+        <select class="field-select" id="tasks-completed-filter" style="max-width:180px;">
+          <option value="">Any Completion</option>
+          <option value="today" ${this._state.completedFilter === 'today' ? 'selected' : ''}>Completed Today</option>
+          <option value="week" ${this._state.completedFilter === 'week' ? 'selected' : ''}>Completed This Week</option>
+          <option value="month" ${this._state.completedFilter === 'month' ? 'selected' : ''}>Completed This Month</option>
+        </select>
         ${teamSectionSelect}
       </div>
     `;
@@ -393,6 +445,10 @@ const TasksView = {
     });
     content.querySelector('#tasks-due-filter')?.addEventListener('change', (e) => {
       this._state.dueFilter = e.target.value;
+      this._renderList(content);
+    });
+    content.querySelector('#tasks-completed-filter')?.addEventListener('change', (e) => {
+      this._state.completedFilter = e.target.value;
       this._renderList(content);
     });
     content.querySelector('#tasks-team-section')?.addEventListener('change', async (e) => {

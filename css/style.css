@@ -952,6 +952,31 @@ p  { line-height: 1.6; }
 .task-widget-empty { padding: 16px 4px; text-align: center; color: var(--color-text-muted); font-size: 0.875rem; }
 .task-widget-footer { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--color-border); text-align: right; }
 
+/* ── Task Dashboard Analytics (js/views/task-dashboard.js, T3B) ────
+   KPI summary cards (Task Status / Priority / Due Date / Completion)
+   and the supervisor-only Team Workload Summary card. Simple stat rows
+   with a mini progress bar — no chart/graph library, per spec. Shares
+   .task-dashboard-grid/.task-widget-card/.panel-header/.task-widget-
+   empty above as-is; only the row/progress-bar/section-group styles
+   below are new. */
+.task-kpi-rows { display: flex; flex-direction: column; gap: 10px; }
+.task-kpi-row { display: block; text-decoration: none; color: inherit; }
+.task-kpi-row-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.task-kpi-row-label { font-size: 0.875rem; color: var(--color-text-muted); }
+.task-kpi-row-count { font-weight: 700; font-size: 1rem; }
+.task-kpi-progress { height: 6px; border-radius: 3px; background: var(--color-primary-light); overflow: hidden; }
+.task-kpi-progress-fill { height: 100%; background: var(--color-primary); border-radius: 3px; transition: width var(--transition); }
+.task-kpi-row:hover .task-kpi-row-label { color: var(--color-primary-dark); }
+
+.task-team-summary-groups { display: flex; flex-direction: column; gap: 14px; }
+.task-team-summary-group:not(:last-child) { padding-bottom: 14px; border-bottom: 1px solid var(--color-border); }
+.task-team-summary-section-name { font-weight: 600; font-size: 0.875rem; margin-bottom: 8px; }
+.task-team-summary-stats { display: flex; flex-wrap: wrap; gap: 14px; }
+.task-team-summary-stat { display: flex; flex-direction: column; align-items: center; min-width: 56px; text-decoration: none; color: inherit; }
+.task-team-summary-stat-count { font-weight: 700; font-size: 1rem; }
+.task-team-summary-stat-label { font-size: 0.75rem; color: var(--color-text-muted); }
+.task-team-summary-stat:hover .task-team-summary-stat-label { color: var(--color-primary-dark); }
+
 .notif-wrap { position: relative; }
 .notif-btn { position: relative; }
 .notif-badge {
