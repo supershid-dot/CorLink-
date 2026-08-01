@@ -158,12 +158,32 @@ const TaskDetailView = {
     return data;
   },
 
+  // Module display metadata — icon/label/route per module_key, used by
+  // both the fetch below and the card renderer. Kept in one place so
+  // the two never drift.
+  _LINK_MODULES: {
+    request:                  { icon: 'ti-inbox',         label: 'Request',               route: 'request-detail' },
+    meeting:                  { icon: 'ti-calendar-event', label: 'Meeting',               route: 'meetings' },
+    internal_request:         { icon: 'ti-messages',       label: 'Internal Collaboration', route: null },
+    external_correspondence:  { icon: 'ti-mailbox',        label: 'Entry',                  route: 'entry-detail' },
+    prisoner_letter:          { icon: 'ti-mail',            label: 'Prisoner Letter',        route: 'prisoner-letter-detail' },
+  },
+
   // Reuses the five existing reverse-link RPCs directly (one task, so
   // no bulk-batching concern the way the Task List had across many
   // rows) — this sidesteps the module_key='meeting' record_id-is-a-
   // meeting_decisions-id subtlety entirely, since these RPCs already
   // resolve it server-side (see the fix note in js/data/tasks-api.js's
   // ORIGIN_MODULES.meeting, found while building this exact screen).
+  //
+  // Each RPC's own return shape doesn't include Organization/Section/
+  // Direction/Letter-type — T2E's card layout asks for these, so one
+  // ADDITIONAL batched read per module actually present enriches the
+  // RPC's rows with those fields, straight from that module's own
+  // table (still RLS-protected, no new RPC — the same discipline
+  // js/data/tasks-api.js's fetchOriginRecords() already established
+  // for the Task List's origin resolution: at most one extra query per
+  // module type present, never one per row). See docs/44 §Performance.
   async _fetchLinkedRecords(taskId) {
     const [req, mtg, ic, entry, letter] = await Promise.all([
       TasksAPI.listRequestLinks(taskId, { limit: 10 }),
@@ -172,26 +192,129 @@ const TaskDetailView = {
       TasksAPI.listEntryLinks(taskId, { limit: 10 }),
       TasksAPI.listPrisonerLetterLinks(taskId, { limit: 10 }),
     ]);
+    const myOrgId = this._task.organization_id;
+    const db = getSupabase();
+
+    const [reqExtra, mtgExtra, entryExtra, letterExtra] = await Promise.all([
+      this._fetchRequestExtras(db, req.items.map(r => r.request_id)),
+      this._fetchMeetingExtras(db, mtg.items.map(m => m.meeting_id)),
+      this._fetchEntryExtras(db, entry.items.map(e => e.entry_id)),
+      this._fetchLetterExtras(db, letter.items.map(l => l.letter_id)),
+    ]);
+    // Internal Collaboration threads have no reference_number of their
+    // own — this app identifies them via their PARENT's reference
+    // everywhere else it shows them (e.g. entry.js's Info Requests
+    // tab: `ir.parent_entry?.reference_number`), so "Thread reference"
+    // here reuses that exact, already-established convention rather
+    // than inventing a new one. Grouped by parent_type so at most 2
+    // extra queries run regardless of how many threads are linked.
+    const icRequestParentIds = ic.items.filter(i => i.parent_type === 'request').map(i => i.parent_id);
+    const icEntryParentIds = ic.items.filter(i => i.parent_type === 'external_correspondence').map(i => i.parent_id);
+    const [icParentReqRefs, icParentEntryRefs] = await Promise.all([
+      this._fetchRequestExtras(db, icRequestParentIds),
+      this._fetchEntryExtras(db, icEntryParentIds),
+    ]);
+
     const links = [];
     for (const r of req.items) {
-      links.push({ moduleKey: 'request', moduleLabel: 'Request', number: r.reference_number, title: r.subject, status: r.status, route: 'request-detail', routeParams: { id: r.request_id } });
+      const ext = reqExtra.get(r.request_id) || {};
+      const outgoing = ext.from_org_id === myOrgId;
+      links.push({
+        moduleKey: 'request', number: r.reference_number, title: r.subject, status: r.status,
+        organization: (outgoing ? ext.to_org?.name : ext.from_org?.name) || null,
+        section: (outgoing ? ext.to_section?.name : ext.from_section?.name) || null,
+        linkedAt: r.linked_at,
+        extraLabel: 'Direction', extraValue: ext.from_org_id ? (outgoing ? 'Outgoing' : 'Incoming') : null,
+        route: 'request-detail', routeParams: { id: r.request_id },
+      });
     }
     for (const m of mtg.items) {
-      links.push({ moduleKey: 'meeting', moduleLabel: 'Meeting', number: m.decision_title, title: m.meeting_title, status: null, route: 'meetings', routeParams: { meetingId: m.meeting_id } });
+      const ext = mtgExtra.get(m.meeting_id) || {};
+      links.push({
+        moduleKey: 'meeting', number: m.meeting_title, title: m.decision_title, status: ext.status || null,
+        organization: ext.organizations?.name || null, section: null, linkedAt: m.linked_at,
+        extraLabel: null, extraValue: null,
+        route: 'meetings', routeParams: { meetingId: m.meeting_id },
+      });
     }
     for (const i of ic.items) {
-      let route = null, routeParams = null;
-      if (i.parent_type === 'request') { route = 'request-detail'; routeParams = { id: i.parent_id }; }
-      else if (i.parent_type === 'external_correspondence') { route = 'entry-detail'; routeParams = { id: i.parent_id }; }
-      links.push({ moduleKey: 'internal_request', moduleLabel: 'Internal Collaboration', number: null, title: i.subject, status: i.status, route, routeParams });
+      let route = null, routeParams = null, parentRef = null;
+      if (i.parent_type === 'request') {
+        route = 'request-detail'; routeParams = { id: i.parent_id };
+        parentRef = icParentReqRefs.get(i.parent_id)?.reference_number || null;
+      } else if (i.parent_type === 'external_correspondence') {
+        route = 'entry-detail'; routeParams = { id: i.parent_id };
+        parentRef = icParentEntryRefs.get(i.parent_id)?.reference_number || null;
+      }
+      links.push({
+        moduleKey: 'internal_request', number: parentRef, title: i.subject, status: i.status,
+        organization: this._org?.name || null, section: null, linkedAt: i.linked_at,
+        extraLabel: 'Parent Type', extraValue: i.parent_type ? (i.parent_type === 'request' ? 'Request' : 'Entry') : null,
+        route, routeParams,
+      });
     }
     for (const e of entry.items) {
-      links.push({ moduleKey: 'external_correspondence', moduleLabel: 'Entry', number: e.reference_number, title: e.subject, status: e.status, route: 'entry-detail', routeParams: { id: e.entry_id } });
+      const ext = entryExtra.get(e.entry_id) || {};
+      links.push({
+        moduleKey: 'external_correspondence', number: e.reference_number, title: e.subject, status: e.status,
+        organization: ext.organizations?.name || null, section: ext.sections?.name || null, linkedAt: e.linked_at,
+        extraLabel: null, extraValue: null,
+        route: 'entry-detail', routeParams: { id: e.entry_id },
+      });
     }
     for (const l of letter.items) {
-      links.push({ moduleKey: 'prisoner_letter', moduleLabel: 'Prisoner Letter', number: l.reference_number, title: l.prisoner_name, status: l.status, route: 'prisoner-letter-detail', routeParams: { id: l.letter_id } });
+      const ext = letterExtra.get(l.letter_id) || {};
+      links.push({
+        moduleKey: 'prisoner_letter', number: l.reference_number, title: l.prisoner_name, status: l.status,
+        organization: ext.to_org?.name || null, section: ext.sections?.name || null, linkedAt: l.linked_at,
+        // No "letter type"/classification column exists on prisoner_letters
+        // — shown as not available rather than fabricated. See docs/44
+        // §Known Limitations.
+        extraLabel: 'Letter Type', extraValue: null,
+        route: 'prisoner-letter-detail', routeParams: { id: l.letter_id },
+      });
     }
     return links;
+  },
+
+  async _fetchRequestExtras(db, ids) {
+    if (ids.length === 0) return new Map();
+    const { data, error } = await db.from('requests')
+      .select(`id, from_org_id, to_org_id, reference_number,
+        from_org:organizations!requests_from_org_id_fkey(name),
+        to_org:organizations!requests_to_org_id_fkey(name),
+        from_section:sections!requests_from_section_id_fkey(name),
+        to_section:sections!requests_to_section_id_fkey(name)`)
+      .in('id', ids);
+    if (error) throw error;
+    return new Map((data || []).map(r => [r.id, r]));
+  },
+
+  async _fetchMeetingExtras(db, ids) {
+    if (ids.length === 0) return new Map();
+    const { data, error } = await db.from('meetings')
+      .select('id, status, organization_id, organizations(name)')
+      .in('id', ids);
+    if (error) throw error;
+    return new Map((data || []).map(m => [m.id, m]));
+  },
+
+  async _fetchEntryExtras(db, ids) {
+    if (ids.length === 0) return new Map();
+    const { data, error } = await db.from('external_correspondence')
+      .select('id, org_id, reference_number, organizations(name), sections(name)')
+      .in('id', ids);
+    if (error) throw error;
+    return new Map((data || []).map(e => [e.id, e]));
+  },
+
+  async _fetchLetterExtras(db, ids) {
+    if (ids.length === 0) return new Map();
+    const { data, error } = await db.from('prisoner_letters')
+      .select('id, to_org_id, to_org:organizations!prisoner_letters_to_org_id_fkey(name), sections(name)')
+      .in('id', ids);
+    if (error) throw error;
+    return new Map((data || []).map(l => [l.id, l]));
   },
 
   _userName(id) {
@@ -309,29 +432,81 @@ const TaskDetailView = {
     `;
   },
 
+  // Grouped-by-module, collapsible card layout (T2E). Every row in
+  // `links` already passed can_view_task_link() (the 5 RPCs are plain
+  // SECURITY INVOKER functions — see the comment on _fetchLinkedRecords
+  // — RLS on the joined module table filters their output the same way
+  // get_task()/list_tasks() already do), so a genuinely hidden linked
+  // record never reaches this renderer at all: there is no extra
+  // "hide this one" check to perform here, and none was added — that
+  // principle is enforced entirely at the SQL layer, not the UI layer.
+  // The one narrower case this DOES render specially is an Internal
+  // Collaboration thread whose own PARENT isn't independently
+  // navigable (`route` null) — that thread itself is fully visible,
+  // only its parent-navigation target isn't, so it gets a disabled
+  // Open control rather than being omitted or shown as a broken link.
   _linkedRecordsHtml() {
     const links = this._linkedRecords || [];
     if (links.length === 0) {
       return `<div class="empty-state"><i class="ti ti-link-off"></i><p class="empty-state-title">Not linked to any record</p><p class="empty-state-subtitle">This is a standalone task.</p></div>`;
     }
+    // Group while preserving each RPC's own ordering within its group
+    // (already ordered created_at DESC server-side) — grouping never
+    // re-sorts within a module.
+    const order = ['request', 'meeting', 'internal_request', 'external_correspondence', 'prisoner_letter'];
+    const groups = order.map(key => ({ key, items: links.filter(l => l.moduleKey === key) })).filter(g => g.items.length > 0);
+
+    return groups.map(g => {
+      const meta = this._LINK_MODULES[g.key];
+      return `
+        <details class="supporting-tasks-panel linked-records-group" open>
+          <summary><i class="ti ${meta.icon}"></i> ${meta.label} <span class="filter-chip-count">${g.items.length}</span></summary>
+          <div class="supporting-tasks-body">
+            <div class="linked-records-card-grid">
+              ${g.items.map(l => this._linkedRecordCardHtml(l, meta)).join('')}
+            </div>
+          </div>
+        </details>
+      `;
+    }).join('');
+  },
+
+  _linkedRecordCardHtml(l, meta) {
+    const openControl = l.route
+      ? `<a class="btn btn-secondary btn-xs" href="#${l.route}${l.routeParams ? '?' + new URLSearchParams(l.routeParams).toString() : ''}">Open</a>`
+      : `<button class="btn btn-secondary btn-xs" disabled title="This record's own parent isn't something you have independent access to">Open</button>`;
     return `
-      <table class="data-table">
-        <thead><tr><th>Module</th><th>Record</th><th>Number</th><th>Status</th><th></th></tr></thead>
-        <tbody>
-          ${links.map(l => `
-            <tr>
-              <td data-label="Module"><span class="badge badge-primary">${this._escapeHtml(l.moduleLabel)}</span></td>
-              <td data-label="Record">${this._escapeHtml(l.title || '—')}</td>
-              <td data-label="Number">${l.number ? this._escapeHtml(l.number) : '<span class="structure-empty">—</span>'}</td>
-              <td data-label="Status">${l.status ? this._escapeHtml(l.status.replace(/_/g, ' ')) : '<span class="structure-empty">—</span>'}</td>
-              <td data-label="Actions">${l.route
-                ? `<a class="btn btn-secondary btn-xs" href="#${l.route}${l.routeParams ? '?' + new URLSearchParams(l.routeParams).toString() : ''}">Open</a>`
-                : '<span class="structure-empty" title="You can see this link exists, but not the record itself">Not viewable</span>'}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
+      <div class="task-card linked-record-card">
+        <div class="task-card-header">
+          <i class="ti ${meta.icon}"></i>
+          <span class="task-card-title">${this._escapeHtml(l.title || meta.label)}</span>
+        </div>
+        <div class="task-card-number">${l.number ? this._escapeHtml(l.number) : '<span class="structure-empty">No reference</span>'}</div>
+        <div class="task-card-meta">
+          ${l.status ? `<span>${this._statusLikeBadge(l.status)}</span>` : ''}
+          ${l.extraLabel ? `<span>${this._escapeHtml(l.extraLabel)}: ${l.extraValue ? this._escapeHtml(l.extraValue) : '<span class="structure-empty">Not available</span>'}</span>` : ''}
+          <span>Org: ${l.organization ? this._escapeHtml(l.organization) : '<span class="structure-empty">—</span>'}</span>
+          <span>Section: ${l.section ? this._escapeHtml(l.section) : '<span class="structure-empty">—</span>'}</span>
+          <span>Linked ${new Date(l.linkedAt).toLocaleDateString()}</span>
+        </div>
+        <div class="task-card-actions">${openControl}</div>
+      </div>
     `;
+  },
+
+  // Reuses the same badge-tone convention every status badge in this
+  // file already uses, generically for whatever status string a
+  // linked module actually returns (each module's own status enum is
+  // different — this doesn't try to special-case every value, just
+  // picks a reasonable tone by common keyword).
+  _statusLikeBadge(status) {
+    const s = (status || '').toLowerCase();
+    let cls = 'badge-outline';
+    if (['completed', 'responded', 'sent', 'delivered', 'closed'].includes(s)) cls = 'badge-success';
+    else if (['cancelled', 'draft'].includes(s)) cls = 'badge-muted';
+    else if (['overdue'].includes(s)) cls = 'badge-error';
+    else if (['pending_approval', 'submitted', 'in_progress', 'logged'].includes(s)) cls = 'badge-warning';
+    return `<span class="badge ${cls}">${this._escapeHtml(status.replace(/_/g, ' '))}</span>`;
   },
 
   // ── Activity (T2C): task_comments merged with audit_logs-derived

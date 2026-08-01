@@ -912,6 +912,23 @@ p  { line-height: 1.6; }
 .user-picker-option-info span { font-size: 0.75rem; color: var(--color-text-muted); }
 .user-picker-empty { padding: 14px 10px; text-align: center; color: var(--color-text-muted); font-size: 0.875rem; }
 
+/* ── Linked Records card grid (js/views/task-detail.js, T2E) ────────
+   Each module group reuses .supporting-tasks-panel's own <details>
+   disclosure shape (already proven for the forward-direction
+   Supporting Tasks panels on the other 5 detail pages) and each card
+   reuses .task-card as-is — only the grid wrapper below is new.
+   Desktop: 3-col, Tablet: 2-col, Mobile: 1-col, same 900px/640px
+   breakpoints already used throughout this app. */
+.linked-records-group + .linked-records-group { margin-top: 12px; }
+.linked-records-card-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+@media (max-width: 900px) {
+  .linked-records-card-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+  .linked-records-card-grid { grid-template-columns: 1fr; }
+}
+.linked-record-card .task-card-header i { color: var(--color-text-muted); }
+
 .notif-wrap { position: relative; }
 .notif-btn { position: relative; }
 .notif-badge {
