@@ -132,7 +132,7 @@ const AppShell = {
         </div>
         <nav class="sidebar-nav">
           ${item('dashboard', 'Dashboard', 'ti-layout-dashboard')}
-          ${item('tasks', 'Tasks', 'ti-checklist')}
+          ${item('task-dashboard', 'Tasks', 'ti-checklist')}
           ${showRequests ? item('requests', 'Requests', 'ti-inbox', true) : ''}
           ${showEntry ? item('entry', 'Entry', 'ti-mailbox') : ''}
           ${showRooms ? item('rooms', 'Rooms', 'ti-door') : ''}
@@ -173,7 +173,7 @@ const AppShell = {
         </div>
         <nav class="topbar-nav" id="topbar-nav">
           ${link('dashboard', 'Dashboard')}
-          ${link('tasks', 'Tasks')}
+          ${link('task-dashboard', 'Tasks')}
           ${showRequests ? link('requests', 'Requests', true) : ''}
           ${showEntry ? link('entry', 'Entry') : ''}
           ${showRooms ? link('rooms', 'Rooms') : ''}
@@ -260,7 +260,7 @@ const AppShell = {
     return `
       <nav class="bottom-nav">
         ${item('dashboard', 'Home', 'ti-home')}
-        ${item('tasks', 'Tasks', 'ti-checklist')}
+        ${item('task-dashboard', 'Tasks', 'ti-checklist')}
         ${showRequests ? item('requests', 'Requests', 'ti-inbox', true) : ''}
         ${showEntry ? item('entry', 'Entry', 'ti-mailbox') : ''}
         ${showRooms ? item('rooms', 'Rooms', 'ti-door') : ''}

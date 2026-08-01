@@ -929,6 +929,29 @@ p  { line-height: 1.6; }
 }
 .linked-record-card .task-card-header i { color: var(--color-text-muted); }
 
+/* ── Task Dashboard (js/views/task-dashboard.js, T3A) ──────────────
+   Desktop: 4-col, Tablet: 2-col, Mobile: 1-col — same 900px/640px
+   breakpoints already used throughout this app (sidebar-nav split,
+   .data-table card-transform, T2E's linked-records-card-grid). Each
+   widget reuses .panel/.panel-header and .task-card as-is (a widget's
+   task row IS a .task-card, same shape T2E's linked-record cards and
+   the Supporting Tasks panels already use) — only the grid wrapper,
+   count badge, and footer link below are new. */
+.task-dashboard-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 900px) {
+  .task-dashboard-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 640px) {
+  .task-dashboard-grid { grid-template-columns: 1fr; }
+}
+.task-widget-card { display: flex; flex-direction: column; }
+.task-widget-count { font-weight: 700; font-size: 1.125rem; color: var(--color-primary-dark); }
+.task-widget-list { display: flex; flex-direction: column; gap: 8px; }
+.task-widget-row { display: block; text-decoration: none; color: inherit; transition: border-color var(--transition); }
+.task-widget-row:hover { border-color: var(--color-primary); }
+.task-widget-empty { padding: 16px 4px; text-align: center; color: var(--color-text-muted); font-size: 0.875rem; }
+.task-widget-footer { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--color-border); text-align: right; }
+
 .notif-wrap { position: relative; }
 .notif-btn { position: relative; }
 .notif-badge {

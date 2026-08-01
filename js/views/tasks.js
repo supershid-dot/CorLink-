@@ -63,6 +63,13 @@ const TasksView = {
       this._state.scope = availableScopes[0]?.key || 'my';
     }
     if (params.status) this._state.status = params.status;
+    // The Dashboard's own quick-filter deep-link params (T3A,
+    // js/views/task-dashboard.js's "View All" links) — validated
+    // against the exact same value sets the toolbar dropdowns
+    // themselves offer, same fail-closed posture as scope/status above.
+    if (['low', 'normal', 'high', 'critical'].includes(params.priorityFilter)) this._state.priorityFilter = params.priorityFilter;
+    if (['overdue', 'today', 'week', 'none'].includes(params.dueFilter)) this._state.dueFilter = params.dueFilter;
+    if (['standalone', 'request', 'meeting', 'internal_request', 'external_correspondence', 'prisoner_letter'].includes(params.originFilter)) this._state.originFilter = params.originFilter;
 
     this._state.limit = this._pageSize();
     this._resetLoadedData();
@@ -109,7 +116,7 @@ const TasksView = {
   _shell() {
     return `
       <div class="app-layout">
-        ${AppShell.topbarHtml(this._user, 'tasks')}
+        ${AppShell.topbarHtml(this._user, 'task-dashboard')}
         <main class="main-content">
           <div class="page-header page-header-row">
             <div>
@@ -124,7 +131,7 @@ const TasksView = {
 
           <div id="tasks-list-content"></div>
         </main>
-        ${AppShell.bottomNavHtml(this._user, 'tasks')}
+        ${AppShell.bottomNavHtml(this._user, 'task-dashboard')}
       </div>
       <div id="modal-root"></div>
     `;

@@ -66,14 +66,14 @@ const TaskDetailView = {
   _renderShell(container, user) {
     container.innerHTML = `
       <div class="app-layout">
-        ${AppShell.topbarHtml(user, 'tasks')}
+        ${AppShell.topbarHtml(user, 'task-dashboard')}
         <main class="main-content">
           <div class="page-header">
             <a href="#tasks" class="menu-item-link"><i class="ti ti-arrow-left"></i> Back to Tasks</a>
           </div>
           <div id="task-detail-content"></div>
         </main>
-        ${AppShell.bottomNavHtml(user, 'tasks')}
+        ${AppShell.bottomNavHtml(user, 'task-dashboard')}
       </div>
       <div id="modal-root"></div>
     `;
