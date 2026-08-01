@@ -1,17 +1,20 @@
-// ─── Task Detail Foundation View (T2B) ──────────────────────────
-// See docs/41-task-detail-foundation.md for full scope. This is
-// deliberately a FOUNDATION: header, details, linked-record display,
+// ─── Task Detail Foundation View (T2B) + Comments & Timeline (T2C) ──
+// See docs/41-task-detail-foundation.md and docs/42-task-comments-and-
+// timeline.md. T2B is header, details, linked-record display,
 // assignees/watchers display, and permission-aware (but non-mutating)
-// action buttons only. Comments, Timeline, Watchers/Assignment
+// action buttons. T2C adds the Activity panel: task_comments (full
+// content) merged with audit_logs-derived lifecycle events into ONE
+// chronological feed, plus a comment composer. Watchers/Assignment
 // management, Attachments, Related Tasks, and Dashboard are all later
 // milestones — see docs/39's own roadmap.
 //
-// Reuses get_task() and the five existing list_task_<module>_links()
-// RPCs exactly as R3-R8 shipped them, plus plain SELECT-RLS reads
-// against users/organizations/sections for display names (the same
-// "let RLS decide what comes back" posture js/data/tasks-api.js's
-// Task List bulk reads already established). No SQL, RPC, index, or
-// policy was added for this milestone.
+// Reuses get_task(), add_task_comment(), and the five existing
+// list_task_<module>_links() RPCs exactly as R3-R8 shipped them, plus
+// plain SELECT-RLS reads against users/organizations/sections/
+// audit_logs for display names and activity history (the same "let
+// RLS decide what comes back" posture js/data/tasks-api.js's Task
+// List bulk reads already established). No SQL, RPC, index, or policy
+// was added for either milestone.
 
 const TaskDetailView = {
   async render(container, params = {}) {
@@ -102,6 +105,12 @@ const TaskDetailView = {
 
       content.innerHTML = this._contentHtml();
       this._bindContent(content);
+      // Loaded independently of the rest of the page (own loading/
+      // retry state, same "a slow/failing panel doesn't block the rest
+      // of the page" pattern already used by the Supporting Tasks
+      // panels on request-detail.js/entry-detail.js/meetings.js/
+      // prisoner-letter-detail.js) rather than blocking _load() above.
+      this._loadActivity();
     } catch (err) {
       console.error('CorLink: failed to load task', err);
       content.innerHTML = `
@@ -202,6 +211,7 @@ const TaskDetailView = {
         <div class="task-detail-main">
           ${this._panel('Details', this._detailsHtml(t))}
           ${this._panel('Linked Records', this._linkedRecordsHtml())}
+          ${this._panel('Activity', `<div id="task-activity-panel">${this._activityLoadingHtml()}</div>`)}
         </div>
         <div class="task-detail-sidebar">
           ${this._panel('Assignees', this._assigneesHtml(t))}
@@ -281,6 +291,166 @@ const TaskDetailView = {
         </tbody>
       </table>
     `;
+  },
+
+  // ── Activity (T2C): task_comments merged with audit_logs-derived
+  // lifecycle events into one chronological feed. Loaded independently
+  // of the rest of the page — see the call site in _load() above. ────
+  _activityLoadingHtml() {
+    return `<div class="tab-loading"><span class="spinner spinner--dark"></span> Loading activity…</div>`;
+  },
+
+  async _loadActivity() {
+    const panel = document.getElementById('task-activity-panel');
+    if (!panel) return;
+    panel.innerHTML = this._activityLoadingHtml();
+    try {
+      const [comments, auditRows] = await Promise.all([
+        TasksAPI.fetchTaskComments(this._taskId),
+        TasksAPI.fetchTaskAuditTrail(this._taskId),
+      ]);
+      const events = [];
+      for (const c of comments) events.push(this._commentEvent(c));
+      for (const a of auditRows) {
+        // 'commented' audit rows carry no comment body (add_task_comment()
+        // writes them with no `notes`) — the real task_comments row above
+        // already represents this same event with its full content, so
+        // rendering both would show the same comment twice. See docs/42
+        // §Ordering rules.
+        if (a.action === 'commented') continue;
+        const evt = this._auditEvent(a);
+        if (evt) events.push(evt);
+      }
+      // Chronological (oldest first) — matches every existing timeline/
+      // audit-trail read in this codebase (RequestsAPI.getConversation,
+      // MeetingsAPI.fetchSeriesAuditTrail, TasksAPI.fetchTaskComments
+      // itself), not a new convention invented for this panel. See
+      // docs/42 §Ordering rules for the explicit precedent.
+      events.sort((x, y) => x.sortKey - y.sortKey);
+      this._activityEvents = events;
+      panel.innerHTML = this._activityHtml(events);
+      this._bindActivityPanel(panel);
+    } catch (err) {
+      console.error('CorLink: failed to load task activity', err);
+      panel.innerHTML = `
+        <div class="alert alert-error">
+          <i class="ti ti-alert-triangle"></i> Couldn't load activity: ${this._escapeHtml(err.message || 'unknown error')}.
+          <button class="btn btn-secondary btn-xs" id="task-activity-retry-btn" style="margin-left:8px;">Retry</button>
+        </div>`;
+      document.getElementById('task-activity-retry-btn')?.addEventListener('click', () => this._loadActivity());
+    }
+  },
+
+  _commentEvent(c) {
+    const createdAt = new Date(c.created_at);
+    return {
+      icon: 'ti-message-circle',
+      actorName: c.author?.full_name || 'Unknown user',
+      // task_comments.body is plain TEXT — add_task_comment() takes no
+      // language parameter and never runs it through RichEditor.sanitize()
+      // (unlike Requests/Entry bodies), so it is rendered as escaped
+      // plain text (white-space preserved), never as innerHTML. See
+      // docs/42 §Known Limitations for why "rich text" / "language" are
+      // not shown per-comment: neither exists in this table today.
+      bodyText: c.body,
+      dateLabel: createdAt.toLocaleString(),
+      sortKey: createdAt.getTime(),
+    };
+  },
+
+  // Converts one audit_logs row into a normalized timeline event, or
+  // null for an action this timeline doesn't render (safely ignored,
+  // same "return null for an unrecognized row" convention as
+  // js/views/meetings.js's own _seriesAuditEvent()). update_task()'s
+  // 'edited' audit row carries no `notes` describing WHAT changed
+  // (title vs. priority vs. due date vs. a non-terminal status move
+  // are all indistinguishable) — shown as a single honest, generic
+  // label rather than a fabricated specific one. See docs/42 §Known
+  // Limitations.
+  _auditEvent(a) {
+    const map = {
+      created:    { icon: 'ti-plus',        title: 'Created this task' },
+      edited:     { icon: 'ti-edit',        title: 'Updated task details' },
+      assigned:   { icon: 'ti-user-plus',   title: 'Updated task assignments' },
+      unassigned: { icon: 'ti-user-minus',  title: 'Updated task assignments' },
+      completed:  { icon: 'ti-check',       title: 'Marked this task complete' },
+      cancelled:  { icon: 'ti-ban',         title: 'Cancelled this task' },
+    };
+    const meta = map[a.action];
+    if (!meta) return null;
+    const createdAt = new Date(a.created_at);
+    return {
+      icon: meta.icon,
+      actorName: a.user?.full_name || 'Unknown user',
+      title: meta.title,
+      dateLabel: createdAt.toLocaleString(),
+      sortKey: createdAt.getTime(),
+    };
+  },
+
+  _activityHtml(events) {
+    return `
+      ${events.length === 0
+        ? `<div class="empty-state"><i class="ti ti-history"></i><p class="empty-state-title">No activity yet</p><p class="empty-state-subtitle">Comments and updates on this task will appear here.</p></div>`
+        : `<div class="task-activity-feed">${events.map(e => this._activityEventHtml(e)).join('')}</div>`}
+      ${this._commentFormHtml()}
+    `;
+  },
+
+  _activityEventHtml(e) {
+    // A comment event has bodyText; a lifecycle event has title —
+    // distinguished by which field is present, not a type tag, same
+    // shape the two _*Event() builders above already produce.
+    return `
+      <div class="task-activity-item">
+        <i class="ti ${e.icon}"></i>
+        <div class="task-activity-item-body">
+          <div class="task-activity-item-meta"><strong>${this._escapeHtml(e.actorName)}</strong> ${e.title ? this._escapeHtml(e.title) : 'commented'} <span class="structure-empty">· ${e.dateLabel}</span></div>
+          ${e.bodyText ? `<div class="task-activity-comment-body">${this._escapeHtml(e.bodyText)}</div>` : ''}
+        </div>
+      </div>
+    `;
+  },
+
+  _commentFormHtml() {
+    return `
+      <form id="task-comment-form" class="task-activity-comment-form">
+        <textarea class="field-input-plain" id="task-comment-input" placeholder="Add a comment…" rows="3" required></textarea>
+        <div class="task-comment-form-error alert alert-error hidden" id="task-comment-error"></div>
+        <div class="modal-actions" style="justify-content:flex-end;">
+          <button type="submit" class="btn btn-primary btn-sm">Comment</button>
+        </div>
+      </form>
+    `;
+  },
+
+  _bindActivityPanel(panel) {
+    const form = panel.querySelector('#task-comment-form');
+    form?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const input = document.getElementById('task-comment-input');
+      const errEl = document.getElementById('task-comment-error');
+      errEl.classList.add('hidden');
+      const body = (input.value || '').trim();
+      if (!body) return;
+      try {
+        await TasksAPI.addTaskComment(this._taskId, body);
+        input.value = '';
+        await this._loadActivity();
+      } catch (err) {
+        console.error('CorLink: failed to add task comment', err);
+        // add_task_comment()'s only gate is can_view_task() — already
+        // true since this page loaded at all, so this is a genuine,
+        // if rare, race (e.g. visibility changed mid-session) rather
+        // than a normal expected path. Distinguished from a generic
+        // failure only by wording, not by any new authorization logic.
+        const isPermission = /not authorized/i.test(err.message || '');
+        errEl.textContent = isPermission
+          ? "You no longer have permission to comment on this task."
+          : (err.message || 'Could not post this comment. Try again.');
+        errEl.classList.remove('hidden');
+      }
+    });
   },
 
   _assigneesHtml(t) {

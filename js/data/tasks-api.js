@@ -346,5 +346,31 @@ const TasksAPI = (() => {
       if (error) throw error;
       return data || null;
     },
+
+    // ── Timeline support (js/views/task-detail.js, T2C) ─────────────
+    // audit_logs' real columns (supabase/schema.sql): id, user_id,
+    // action, record_type, record_id, notes, ip_address, created_at —
+    // same shape/embed MeetingsAPI.fetchSeriesAuditTrail() and
+    // RequestsAPI's own case-audit read already use, reused verbatim
+    // here (no RPC, no RLS change). RLS (audit_select_own_records /
+    // audit_select) is what actually decides which rows come back —
+    // see docs/42 §Known Limitations for a real, disclosed gap this
+    // exposed: can_view_case_audit_record() (supabase/rls.sql) has no
+    // branch for record_type='task', so an ordinary (non-admin) task
+    // viewer's read here comes back empty even when task-related audit
+    // rows genuinely exist. Not fixed here — touching that shared,
+    // cross-module function is out of proportion for this milestone,
+    // same call R9 (docs/38) already made for the identical gap on
+    // 'meeting'/'prisoner_letter'.
+    async fetchTaskAuditTrail(taskId) {
+      const db = getSupabase();
+      const { data, error } = await db.from('audit_logs')
+        .select('*, user:users(full_name, designations(name))')
+        .eq('record_type', 'task')
+        .eq('record_id', taskId)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      return data || [];
+    },
   };
 })();
