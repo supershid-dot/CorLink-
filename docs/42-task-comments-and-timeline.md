@@ -232,13 +232,61 @@ What was run:
    visibility.md` for the rollback verification detail.
 4. **Not independently re-verified**: real Supabase-backed auth/session
    flow against staging or production (requires credentials this
-   environment does not have and must not use), and the full R2
-   `supabase/validate-security-definer-search-path.sql` regression pass
-   surfaced one unrelated, pre-existing finding (`update_org_workflow_
-   settings()`, a function this milestone never touches, in an
-   unrelated legacy feature area) — confirmed identical whether or not
-   `patch-task-audit-visibility.sql` is applied, so not a regression
-   introduced here; out of this milestone's scope to fix.
+   environment does not have and must not use).
+
+### T2C.2 addendum — the R2 finding above was a test-artifact, not a real gap
+
+The item above (an apparent `update_org_workflow_settings()` search-path
+finding from the R2 validator) was investigated further in a dedicated
+follow-up pass (T2C.2) and **retracted**: it was caused entirely by an
+incorrect file order in this session's own disposable reference
+database, not by anything in the actual repository or any real
+deployment.
+
+`update_org_workflow_settings()` has been redefined four times as the
+Admin > Organization Settings feature grew
+(`patch-default-section-reference-numbers.sql` → 3 params,
+`patch-prisoner-registry-section.sql` → 4 params,
+`patch-entry-module.sql` → 5 params (`p_entry_section_id UUID`),
+`patch-entry-multi-section.sql` → 5 params
+(`p_entry_section_ids UUID[]`)). Each of the three later files opens
+with an explicit `DROP FUNCTION IF EXISTS <previous exact signature>`
+before its own `CREATE OR REPLACE FUNCTION` — an unambiguous,
+self-documenting dependency chain requiring no inference. The
+reference database built for T2C.1's own verification applied
+`patch-entry-multi-section.sql` *before*
+`patch-default-section-reference-numbers.sql` and
+`patch-prisoner-registry-section.sql` (an ordering mistake in
+constructing that one-off disposable database, not a property of the
+real chain). Because `CREATE OR REPLACE FUNCTION` only replaces a
+function whose argument type list matches exactly, running the 3-
+and 4-parameter definitions *after* the 5-parameter one created two
+independent overloads instead of one — the 4-parameter straggler is
+what `patch-security-definer-search-path-hardening.sql` (which only
+targets the 5-parameter signature) never touched, since it never
+learned that stray overload existed.
+
+Rebuilding the reference database with these four files in their
+true, `DROP FUNCTION`-verified order (`default-section-reference-
+numbers` → `prisoner-registry-section` → `entry-module` →
+`entry-multi-section`, with `patch-security-definer-search-path-
+hardening.sql` applied afterward as always) produces **exactly one**
+overload of `update_org_workflow_settings()` —
+`(uuid,uuid,text,uuid,uuid[])` — `SECURITY DEFINER` with
+`search_path` pinned. `supabase/validate-security-definer-search-
+path.sql` passes with **0 unprotected functions out of 127** against
+this correctly-ordered chain. A behavioral check (real `authenticated`-
+role calls via `request.jwt.claims` impersonation) confirmed an
+authorized org admin's call still succeeds and correctly populates
+`entry_sections`, and an unauthorized staff member's call is still
+denied with `Not authorized to update this organization` — unchanged
+by anything in this investigation, because nothing in the actual
+repository was changed.
+
+**No code, SQL, patch, or migration file was modified as a result of
+this investigation** — there was no genuine defect to fix, and per
+this program's standing constraint, nothing is created without one.
+The only artifact of T2C.2 is this correction to the record.
 
 ## Known Limitations
 
