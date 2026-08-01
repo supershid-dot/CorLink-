@@ -216,5 +216,128 @@ const TasksAPI = (() => {
       const items = data || [];
       return { items, totalCount: items[0]?.total_count ?? items.length };
     },
+
+    // ── Task List support (js/views/tasks.js, T2A) ──────────────────
+    // list_tasks() returns bare task rows only — no assignee names, no
+    // module_key/origin info. Rather than one extra round trip per row
+    // (an N+1 shape this codebase has already flagged as a known,
+    // disclosed tradeoff elsewhere — see docs/38 §Technical Debt item
+    // 3 — but never introduced for a whole page of rows at once), the
+    // three helpers below each do ONE bulk read for the whole visible
+    // page. Every read here is a plain SELECT against a table that
+    // already carries its own RLS (task_links/task_assignments/
+    // task_watchers: can_view_task(); requests/meetings/
+    // external_correspondence/prisoner_letters/internal_requests: each
+    // module's own existing SELECT policy) — a row this viewer isn't
+    // allowed to see simply never comes back, same fail-closed
+    // guarantee already verified for every other read in this app.
+    // Nothing here decides visibility itself.
+    async fetchTaskLinksBulk(taskIds) {
+      if (!taskIds || taskIds.length === 0) return [];
+      const db = getSupabase();
+      const { data, error } = await db.from('task_links')
+        .select('task_id, module_key, record_id, created_at')
+        .in('task_id', taskIds)
+        .is('removed_at', null);
+      if (error) throw error;
+      return data || [];
+    },
+
+    async fetchTaskAssignmentsBulk(taskIds) {
+      if (!taskIds || taskIds.length === 0) return [];
+      const db = getSupabase();
+      const { data, error } = await db.from('task_assignments')
+        .select('task_id, user_id, user:users!task_assignments_user_id_fkey(id, full_name)')
+        .in('task_id', taskIds)
+        .eq('is_active', true);
+      if (error) throw error;
+      return data || [];
+    },
+
+    async fetchMyWatchedTaskIds(taskIds, userId) {
+      if (!taskIds || taskIds.length === 0 || !userId) return [];
+      const db = getSupabase();
+      const { data, error } = await db.from('task_watchers')
+        .select('task_id')
+        .in('task_id', taskIds)
+        .eq('user_id', userId);
+      if (error) throw error;
+      return (data || []).map(r => r.task_id);
+    },
+
+    // Module → {table, select, route, param, label} used only to build
+    // a human-readable, possibly-clickable Origin chip on the Task
+    // List. Never a visibility decision by itself — the SELECT below
+    // against each module's own table is what actually determines
+    // whether a row comes back at all; a link this viewer can see but
+    // whose target record they can't independently view (the same
+    // "visible link, not necessarily navigable" contract every module
+    // integration (R4-R8) already implements) simply yields no row
+    // here, same fail-closed shape as everywhere else.
+    //
+    // internal_request has no page of its own — it's only ever viewed
+    // embedded in its parent Request/Entry's Info Requests tab (see
+    // js/views/request-detail.js / entry-detail.js), so its origin
+    // chip routes to whichever parent id is present instead of a
+    // dedicated internal-request-detail route that doesn't exist.
+    ORIGIN_MODULES: {
+      request: {
+        table: 'requests', select: 'id, reference_number, subject',
+        route: 'request-detail', param: 'id',
+        label: (r) => r.reference_number || r.subject || 'Request',
+      },
+      meeting: {
+        table: 'meetings', select: 'id, title',
+        route: 'meetings', param: 'meetingId',
+        label: (r) => r.title || 'Meeting',
+      },
+      external_correspondence: {
+        table: 'external_correspondence', select: 'id, reference_number, subject',
+        route: 'entry-detail', param: 'id',
+        label: (r) => r.reference_number || r.subject || 'Entry',
+      },
+      prisoner_letter: {
+        table: 'prisoner_letters', select: 'id, reference_number, prisoner_name',
+        route: 'prisoner-letter-detail', param: 'id',
+        label: (r) => r.reference_number || r.prisoner_name || 'Prisoner Letter',
+      },
+      internal_request: {
+        table: 'internal_requests', select: 'id, subject, parent_request_id, parent_entry_id',
+        route: null, param: null,
+        label: (r) => r.subject || 'Internal Collaboration',
+      },
+    },
+
+    async fetchOriginRecords(taskLinks) {
+      const byModule = {};
+      for (const link of (taskLinks || [])) {
+        (byModule[link.module_key] ||= []).push(link.record_id);
+      }
+      const db = getSupabase();
+      const records = {}; // `${module_key}:${record_id}` -> row
+      for (const [moduleKey, ids] of Object.entries(byModule)) {
+        const cfg = this.ORIGIN_MODULES[moduleKey];
+        if (!cfg) continue;
+        const { data, error } = await db.from(cfg.table).select(cfg.select).in('id', ids);
+        if (error) throw error;
+        for (const row of (data || [])) {
+          records[`${moduleKey}:${row.id}`] = row;
+        }
+      }
+      return records;
+    },
+
+    // Exact task_number lookup (global search / deep link) — a single
+    // indexed-equality read against the same SELECT-RLS every other
+    // task read uses, not a new capability.
+    async findTaskByNumber(taskNumber) {
+      const db = getSupabase();
+      const { data, error } = await db.from('tasks')
+        .select('id, task_number')
+        .eq('task_number', taskNumber)
+        .maybeSingle();
+      if (error) throw error;
+      return data || null;
+    },
   };
 })();
