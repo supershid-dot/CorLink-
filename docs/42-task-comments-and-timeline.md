@@ -69,7 +69,24 @@ newest-first exception.
 both would render the same comment event twice with no added
 information from the audit copy. `action = 'commented'` audit rows are
 therefore explicitly skipped when building the merged feed — the real
-`task_comments` row is what represents that event.
+`task_comments` row is what represents that event. Verified in
+`supabase/test-task-audit-visibility.sql` TEST 8 (both rows genuinely
+exist after a real `add_task_comment()` call) and independently in the
+T2A/T2B/T2C headless frontend harness (only one rendered event, not
+two).
+
+**Deterministic tie-ordering (added T2C.1).** Two events sharing an
+identical `created_at` (two rows written in the same transaction/
+millisecond) no longer rely on `Array.prototype.sort`'s stability
+alone. `js/views/task-detail.js`'s sort comparator breaks ties in a
+fixed order: `created_at ASC`, then a fixed item-type/action rank
+(`_AUDIT_TYPE_RANKS`: created < edited < assigned < unassigned <
+completed < cancelled; comments always rank after any audit event at
+the same instant), then the row's own `id ASC` as the final,
+always-unique tie-break. This guarantees the same rendered order on
+every load, in every browser/JS engine — verified with a dedicated
+fixture (two audit rows at an identical timestamp, deliberately
+inserted array-side in reverse-`id` order) in the headless harness.
 
 ## Permission behavior
 
@@ -88,40 +105,65 @@ genuine, if rare, race (e.g. visibility changed mid-session) rather
 than a normal expected path — handled with a distinct, friendlier
 message, not new logic deciding who gets to comment.
 
-### A real, disclosed backend limitation found while building this
+### Task audit visibility — corrected in T2C.1
 
-`can_view_case_audit_record()` (`supabase/rls.sql`) — the function
-`audit_logs`' `audit_select_own_records` policy calls to decide whether
-an *ordinary* (non-admin) user can see a given audit row — has branches
-for `record_type IN ('request', 'response', 'internal_request',
-'external_correspondence')` only. **There is no branch for
-`record_type = 'task'`.** This means an ordinary task viewer (creator,
-assignee, watcher, section member, org-visibility) reading
-`audit_logs WHERE record_type = 'task'` gets **zero rows back**,
-regardless of how much genuine task history exists — only an org admin
-or super admin (via the separate `audit_select` policy) can currently
-see it.
+T2C's original release found and disclosed (but deliberately did not
+fix) a real gap: `can_view_case_audit_record()` (`supabase/rls.sql`) —
+the function `audit_logs`' `audit_select_own_records` policy calls to
+decide whether an *ordinary* (non-admin) user can see a given audit
+row — had branches for `record_type IN ('request', 'response',
+'internal_request', 'external_correspondence', 'meeting_series')` only,
+with **no branch for `record_type = 'task'`**. An ordinary task viewer
+(creator, assignee, watcher, section member, org-visibility) reading
+`audit_logs WHERE record_type = 'task'` got zero rows back regardless
+of how much genuine task history existed — only an org admin or super
+admin (via the separate `audit_select` policy) could see it. This made
+the Timeline show comment events correctly but no lifecycle events at
+all for most real users.
 
-Practical consequence: for the large majority of real users, this
-milestone's Timeline will show comment events (always correct —
-`task_comments` has its own, correct RLS) but **no lifecycle events at
-all** (no "created," "assigned," "completed," etc.) unless they happen
-to be an admin. The panel handles this gracefully — a `0`-row audit
-read looks identical to a genuinely-quiet task, so "No activity yet"
-still renders correctly and honestly rather than as an error — but it
-is a real, meaningful gap in what this feature can show today.
+**A dedicated follow-up milestone (T2C.1,
+`supabase/patch-task-audit-visibility.sql`) has since closed this gap**
+for `record_type = 'task'` specifically. The new branch does not
+reimplement task visibility rules — it delegates directly:
 
-**Not fixed here.** This is the exact same category of gap R9
-(docs/38) already found and explicitly declined to fix for
-`record_type IN ('meeting', 'prisoner_letter')` — reasoning that applies
-identically to `'task'`: `can_view_case_audit_record()` is a single
-shared function used by every module in the system, and widening it is
-its own proportionate, separately-scoped, separately-tested change, not
-something to fold into a milestone whose brief is "reuse existing
-permissions... do not redesign the backend." Flagged here as a Future
-Enhancement, consistent with how R9 flagged the other two.
+```sql
+OR (p_record_type = 'task' AND can_view_task(p_record_id));
+```
 
-A second, smaller limitation in the same area: `update_task()`'s
+`can_view_task()` (`supabase/patch-shared-task-foundation.sql`) is
+already the single source of truth for task visibility — the same
+function that gates `tasks_select`, every task child-table policy, and
+every task-mutating RPC's own authorization check. Delegating rather
+than re-deriving means any future change to who can see a task only
+ever needs to happen in that one place, never here too.
+
+All five prior branches (`request`/`response`/`internal_request`/
+`external_correspondence`/`meeting_series`) are preserved byte-for-byte
+— verified via `pg_get_functiondef()` diff before/after, and via a
+rollback→reapply cycle (`docs/rollback/011-task-audit-visibility.md`)
+that confirmed the rollback SQL genuinely reproduces the original
+zero-rows behavior and reapplication genuinely restores the fix.
+`supabase/test-task-audit-visibility.sql` covers creator, active
+assignee, active watcher, an authorized section-scoped supervisor
+(all see it), unrelated same-org staff and a cross-org user (neither
+sees it, and an unauthorized `SELECT *` returns zero rows with no error
+and no leakage of existence), the comment/audit dual-write from TEST 8
+above, and confirms Request/Internal Collaboration audit visibility is
+unchanged and Prisoner Letter confidentiality remains exactly as
+restrictive as before — 11/11 scenarios, run under a real
+`authenticated` role via `request.jwt.claims` impersonation, not
+superuser-only assertions.
+
+**`record_type IN ('meeting', 'prisoner_letter')` remain separately,
+deliberately deferred** — this milestone's explicit scope was `'task'`
+only. R9 (docs/38) already found and declined to fix `'meeting'`
+(for the same reasoning: proportionate, separately-scoped change), and
+Prisoner Letter's confidentiality model is deliberately the strictest
+in this codebase (R8) — `supabase/test-task-audit-visibility.sql` TEST
+11 explicitly confirms this patch left it untouched, not just that it
+happens to still be restrictive.
+
+A second, smaller limitation in the same area remains open: `update_task()`'s
 `'edited'` audit row carries no `notes` describing *what* changed —
 title, description, priority, due/start date, and a non-terminal status
 move (e.g. `open → in_progress`) are all indistinguishable in the audit
@@ -175,22 +217,37 @@ What was run:
      from T2B), filtering, pagination, and the not-found/no-access
      states are all unchanged.
    - Zero JavaScript errors across every scenario.
-3. **Not independently re-verified**: real Supabase-backed auth/session
-   flow and the actual behavior of `can_view_case_audit_record()`
-   against a live database (both require staging credentials this
-   environment does not have and must not use) — the audit-visibility
-   gap described above is documented from direct source-code
-   inspection of `supabase/rls.sql`, not from an observed runtime
-   failure, though R9 already independently confirmed the identical
-   pattern for `'meeting'`/`'prisoner_letter'` via live testing.
+3. **T2C.1 addendum — the audit-visibility gap described above WAS
+   independently verified against a live database**, unlike the rest of
+   this milestone's testing. A disposable local Postgres replayed the
+   real, correctly-ordered migration chain (base schema through every
+   module integration), confirmed `can_view_case_audit_record()`'s
+   pre-fix definition really did lack a `'task'` branch (not just by
+   reading `supabase/rls.sql` — the live, current function body, via
+   `pg_get_functiondef()`), applied `supabase/patch-task-audit-
+   visibility.sql`, and ran `supabase/test-task-audit-visibility.sql`'s
+   11 scenarios under a real `authenticated` role with `request.jwt.claims`
+   impersonation — all passing, idempotently, and confirmed via a full
+   rollback→reapply cycle. See `docs/rollback/011-task-audit-
+   visibility.md` for the rollback verification detail.
+4. **Not independently re-verified**: real Supabase-backed auth/session
+   flow against staging or production (requires credentials this
+   environment does not have and must not use), and the full R2
+   `supabase/validate-security-definer-search-path.sql` regression pass
+   surfaced one unrelated, pre-existing finding (`update_org_workflow_
+   settings()`, a function this milestone never touches, in an
+   unrelated legacy feature area) — confirmed identical whether or not
+   `patch-task-audit-visibility.sql` is applied, so not a regression
+   introduced here; out of this milestone's scope to fix.
 
 ## Known Limitations
 
-1. **Ordinary (non-admin) users see no lifecycle events, only
-   comments**, due to the pre-existing `can_view_case_audit_record()`
-   gap described above. Not fixed in this milestone.
+1. ~~Ordinary (non-admin) users see no lifecycle events, only
+   comments~~ — **fixed in T2C.1** (see §Permission behavior above).
 2. **`'edited'` events are generic**, since `update_task()`'s audit row
-   doesn't record which field changed.
+   doesn't record which field changed. Still open — out of T2C.1's
+   scope (it corrected *who* can see task audit rows, not *what detail*
+   they contain).
 3. **Linked-record changes (`task_linked`/`task_unlinked`) never appear
    in a task's own Timeline.** Each module integration (R4–R8) writes
    those audit rows with `record_type` set to the *linked module's*
@@ -213,9 +270,11 @@ What was run:
 
 ## Future Enhancements
 
-- Extend `can_view_case_audit_record()` to cover `'task'` (and, while
-  at it, the still-open `'meeting'`/`'prisoner_letter'` gaps from
-  docs/38) — its own explicitly-scoped, separately-tested milestone.
+- ~~Extend `can_view_case_audit_record()` to cover `'task'`~~ — **done,
+  T2C.1**. The still-open `'meeting'`/`'prisoner_letter'` gaps from
+  docs/38 remain deliberately deferred, each its own explicitly-scoped,
+  separately-tested milestone if ever undertaken — T2C.1 intentionally
+  did not fold them in (see §Permission behavior above).
 - Have `update_task()` write a structured diff into its audit row's
   `notes` so "Status changed to X" / "Priority changed to Y" can be
   shown specifically instead of a generic "Updated task details."

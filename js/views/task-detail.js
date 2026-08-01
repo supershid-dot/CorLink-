@@ -326,7 +326,15 @@ const TaskDetailView = {
       // MeetingsAPI.fetchSeriesAuditTrail, TasksAPI.fetchTaskComments
       // itself), not a new convention invented for this panel. See
       // docs/42 §Ordering rules for the explicit precedent.
-      events.sort((x, y) => x.sortKey - y.sortKey);
+      //
+      // Tie-break deterministically on identical created_at (two rows
+      // written in the same transaction/millisecond) rather than
+      // relying on Array.prototype.sort's stability alone: first by a
+      // fixed item-type/action rank, then by the row's own id — the
+      // same output on every load, every browser, every JS engine,
+      // not just "whatever order the two API responses happened to
+      // arrive in this time."
+      events.sort((x, y) => x.sortKey - y.sortKey || x.typeRank - y.typeRank || (x.id < y.id ? -1 : x.id > y.id ? 1 : 0));
       this._activityEvents = events;
       panel.innerHTML = this._activityHtml(events);
       this._bindActivityPanel(panel);
@@ -341,9 +349,19 @@ const TaskDetailView = {
     }
   },
 
+  // typeRank is the "stable item type/order" tie-break key: audit
+  // lifecycle events sort by a fixed reading order (created before
+  // edited before assigned...), comments always sort after any audit
+  // event with the exact same timestamp. Only reached when two rows
+  // share an identical created_at — see the sort call in
+  // _loadActivity() above.
+  _COMMENT_TYPE_RANK: 100,
+  _AUDIT_TYPE_RANKS: { created: 0, edited: 1, assigned: 2, unassigned: 3, completed: 4, cancelled: 5 },
+
   _commentEvent(c) {
     const createdAt = new Date(c.created_at);
     return {
+      id: c.id,
       icon: 'ti-message-circle',
       actorName: c.author?.full_name || 'Unknown user',
       // task_comments.body is plain TEXT — add_task_comment() takes no
@@ -355,6 +373,7 @@ const TaskDetailView = {
       bodyText: c.body,
       dateLabel: createdAt.toLocaleString(),
       sortKey: createdAt.getTime(),
+      typeRank: this._COMMENT_TYPE_RANK,
     };
   },
 
@@ -380,11 +399,13 @@ const TaskDetailView = {
     if (!meta) return null;
     const createdAt = new Date(a.created_at);
     return {
+      id: a.id,
       icon: meta.icon,
       actorName: a.user?.full_name || 'Unknown user',
       title: meta.title,
       dateLabel: createdAt.toLocaleString(),
       sortKey: createdAt.getTime(),
+      typeRank: this._AUDIT_TYPE_RANKS[a.action],
     };
   },
 
