@@ -67,19 +67,21 @@ CREATE POLICY "attachments_storage_select" ON storage.objects
 -- there; this allowlist has to be kept in sync by hand since it isn't
 -- part of that (or any) historical DROP+CREATE patch chain.
 --
--- KNOWN, STILL-UNFIXED GAP found while making the 'task' change above:
--- 'meeting' is missing from this list too — meeting attachments
--- shipped via patch-meetings-foundation.sql (2026-07-22), which added
--- a 'meeting' branch to the table-level policies but never touched
--- this file, so every meeting attachment upload has likely been
--- silently rejected by Storage since. NOT fixed here — out of
--- T3D's own scope (Task Attachments) — see docs/48 §Known limitations.
+-- 'meeting' added by patch-task-attachments's follow-up corrective
+-- milestone (T3D.1, docs/49). Meeting attachments shipped via
+-- patch-meetings-foundation.sql (2026-07-22), which added a 'meeting'
+-- branch to the table-level attachments_select/_insert/_delete
+-- policies but never touched this file, so every meeting attachment
+-- upload had been silently rejected by Storage ever since — the
+-- table-level RLS was never the problem; this allowlist was.
+-- See docs/49-meeting-attachment-storage-fix.md for the full
+-- investigation and root-cause analysis.
 DROP POLICY IF EXISTS "attachments_storage_insert" ON storage.objects;
 CREATE POLICY "attachments_storage_insert" ON storage.objects
   FOR INSERT WITH CHECK (
     bucket_id = 'attachments'
     AND owner = auth.uid()
-    AND (storage.foldername(name))[1] IN ('request', 'response', 'internal_request', 'prisoner_letter', 'prisoner_reply', 'internal_reply', 'external_correspondence', 'external_correspondence_reply', 'task')
+    AND (storage.foldername(name))[1] IN ('request', 'response', 'internal_request', 'prisoner_letter', 'prisoner_reply', 'internal_reply', 'external_correspondence', 'external_correspondence_reply', 'task', 'meeting')
   );
 
 DROP POLICY IF EXISTS "attachments_storage_delete" ON storage.objects;
