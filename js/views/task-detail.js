@@ -1,20 +1,33 @@
-// ─── Task Detail Foundation View (T2B) + Comments & Timeline (T2C) ──
-// See docs/41-task-detail-foundation.md and docs/42-task-comments-and-
-// timeline.md. T2B is header, details, linked-record display,
-// assignees/watchers display, and permission-aware (but non-mutating)
-// action buttons. T2C adds the Activity panel: task_comments (full
-// content) merged with audit_logs-derived lifecycle events into ONE
-// chronological feed, plus a comment composer. Watchers/Assignment
-// management, Attachments, Related Tasks, and Dashboard are all later
-// milestones — see docs/39's own roadmap.
+// ─── Task Detail: Foundation (T2B) + Comments & Timeline (T2C) +
+// Assignee/Watcher Management (T2D) ──────────────────────────────
+// See docs/41, docs/42, docs/43-task-assignee-and-watcher-management.md.
+// T2B is header, details, linked-record display, and the Actions panel
+// (Complete/Cancel — still non-mutating placeholders, out of T2D's
+// scope). T2C adds the Activity panel. T2D makes Assignees/Watchers
+// interactive: add/remove assignee (arbitrary org users, permission-
+// gated), assign/unassign self, and watch/unwatch self — the
+// self-service Assign-to-Me/Unassign-Me/Watch/Unwatch controls that
+// used to live in the Actions panel as placeholders have moved into
+// the Assignees/Watchers panels themselves, now that those panels are
+// each the real, working home for that action (see docs/43 for why).
+// Attachments, Related Tasks, and Dashboard remain later milestones.
 //
-// Reuses get_task(), add_task_comment(), and the five existing
-// list_task_<module>_links() RPCs exactly as R3-R8 shipped them, plus
-// plain SELECT-RLS reads against users/organizations/sections/
-// audit_logs for display names and activity history (the same "let
-// RLS decide what comes back" posture js/data/tasks-api.js's Task
-// List bulk reads already established). No SQL, RPC, index, or policy
-// was added for either milestone.
+// Reuses get_task(), add_task_comment(), assign_task()/unassign_task()/
+// watch_task()/unwatch_task(), the five existing
+// list_task_<module>_links() RPCs, and AdminAPI.listUsersByOrg()/
+// listSectionsByOrg() (already used by entry.js's own routing modal
+// for the identical "pick an org member" need) exactly as they already
+// existed. No SQL, RPC, index, or policy was added for any of these
+// three milestones.
+//
+// watch_task()/unwatch_task() take ONLY p_task_id — no p_user_id
+// parameter exists, so only self-watch/self-unwatch are backend-
+// supported; there is no RPC to add or remove an ARBITRARY OTHER user
+// as a watcher. This is treated as intentional (a "watch" is a
+// personal notification subscription, not something imposed on
+// someone else — the same shape as GitHub's own "Watch" button), not
+// a gap to fix — see docs/43 §Known Limitations for the full
+// reasoning.
 
 const TaskDetailView = {
   async render(container, params = {}) {
@@ -87,17 +100,25 @@ const TaskDetailView = {
       }
       this._task = task;
 
-      const userIds = new Set([task.created_by, task.completed_by,
-        ...(task.assignees || []).map(a => a.user_id),
-        ...(task.watchers || []).map(w => w.user_id)].filter(Boolean));
-
-      const [usersRows, org, section, linkedRecords] = await Promise.all([
-        this._fetchUsers(Array.from(userIds)),
+      // Org member list is fetched ONCE, in full, and serves three
+      // needs at once: resolving names for creator/completed_by (as
+      // before), resolving role+section for the Assignees/Watchers
+      // panels (new in T2D), and the Add Assignee picker's candidate
+      // pool (new in T2D) — exactly the same AdminAPI.listUsersByOrg()
+      // call entry.js's own routing modal already makes for the
+      // identical "pick an org member" need, not a new data-fetching
+      // pattern. Bounded by org size, same as every other caller of
+      // this API.
+      const [orgUsers, orgSections, org, section, linkedRecords] = await Promise.all([
+        AdminAPI.listUsersByOrg(task.organization_id),
+        AdminAPI.listSectionsByOrg(task.organization_id),
         this._fetchOrganization(task.organization_id),
         task.owning_section_id ? this._fetchSection(task.owning_section_id) : Promise.resolve(null),
         this._fetchLinkedRecords(this._taskId),
       ]);
-      this._usersById = new Map(usersRows.map(u => [u.id, u]));
+      this._usersById = new Map(orgUsers.map(u => [u.id, u]));
+      this._orgUsers = orgUsers;
+      this._sectionsById = new Map(orgSections.map(s => [s.id, s]));
       this._org = org;
       this._section = section;
       this._linkedRecords = linkedRecords;
@@ -120,14 +141,6 @@ const TaskDetailView = {
         </div>`;
       document.getElementById('task-detail-retry-btn')?.addEventListener('click', () => this._load());
     }
-  },
-
-  async _fetchUsers(ids) {
-    if (ids.length === 0) return [];
-    const db = getSupabase();
-    const { data, error } = await db.from('users').select('id, full_name, service_number').in('id', ids);
-    if (error) throw error;
-    return data || [];
   },
 
   async _fetchOrganization(orgId) {
@@ -186,6 +199,34 @@ const TaskDetailView = {
     return this._usersById.get(id)?.full_name || 'Unknown user';
   },
 
+  // Same role-label map AppShell.roleSummary() (js/views/shell.js)
+  // already uses — copied, not shared, per this codebase's established
+  // per-view-copy convention (see the comment above _canManage below).
+  // AdminAPI.listUsersByOrg()'s embedded user_assignments has no
+  // resolved scope_name, so section resolution here is deliberately
+  // narrower than shell.js's own roleSummary(): only a section-scoped
+  // assignment resolves to a section name (via this._sectionsById,
+  // fetched alongside the user list); any other scope_type shows a
+  // plain, honest label instead of a fabricated one.
+  _ROLE_LABELS: {
+    mcs_admin: 'MCS Administrator', authority_admin: 'Authority Administrator',
+    supervisor: 'Supervisor', assigned_receiver: 'Assigned Receiver', staff: 'Staff',
+  },
+  _roleAndSectionLabel(userId) {
+    const user = this._usersById.get(userId);
+    if (!user) return { role: 'Unknown role', section: '—' };
+    if (user.is_super_admin) return { role: 'Super Administrator', section: '—' };
+    const assignments = (user.user_assignments || []).filter(a => a.is_active);
+    if (assignments.length === 0) return { role: 'No role assigned', section: '—' };
+    const primary = assignments.find(a => a.is_primary) || assignments[0];
+    const role = this._ROLE_LABELS[primary.role] || primary.role;
+    let section = '—';
+    if (primary.scope_type === 'section') section = this._sectionsById.get(primary.scope_id)?.name || 'Unknown section';
+    else if (primary.scope_type === 'organization') section = 'Organization-wide';
+    else if (primary.scope_type) section = primary.scope_type.charAt(0).toUpperCase() + primary.scope_type.slice(1) + '-level';
+    return { role, section };
+  },
+
   // ── Permission mirror — same predicates as js/views/tasks.js's own
   // (copied, not shared, per this codebase's established convention of
   // per-view copies of small UI helpers — see entry.js's own comment
@@ -214,8 +255,8 @@ const TaskDetailView = {
           ${this._panel('Activity', `<div id="task-activity-panel">${this._activityLoadingHtml()}</div>`)}
         </div>
         <div class="task-detail-sidebar">
-          ${this._panel('Assignees', this._assigneesHtml(t))}
-          ${this._panel('Watchers', this._watchersHtml(t))}
+          ${this._panel('Assignees', `<div id="task-assignees-panel">${this._assigneesHtml(t)}</div>`)}
+          ${this._panel('Watchers', `<div id="task-watchers-panel">${this._watchersHtml(t)}</div>`)}
           ${this._panel('Actions', this._actionsHtml(t))}
         </div>
       </div>
@@ -474,37 +515,96 @@ const TaskDetailView = {
     });
   },
 
+  _avatarHtml(name) {
+    return `<div class="avatar">${this._escapeHtml(AppShell.initials(name || '?'))}</div>`;
+  },
+
+  // ── Assignees (T2D) — arbitrary add/remove for canManage(), plus
+  // self-service assign/unassign for anyone (assign_task()/
+  // unassign_task() both allow p_user_id = auth.uid() unconditionally
+  // for unassign; assign-self is still gated by canManage() since
+  // assign_task()'s own authorization has no special self-assign
+  // bypass — matching js/views/tasks.js's T2A permission mirror
+  // exactly). ───────────────────────────────────────────────────────
   _assigneesHtml(t) {
     const assignees = t.assignees || [];
-    if (assignees.length === 0) return `<p class="structure-empty">Unassigned</p>`;
-    return `<div class="badge-list">${assignees.map(a => `<span class="badge badge-outline">${this._escapeHtml(this._userName(a.user_id))}</span>`).join('')}</div>`;
+    const canManage = this._canManage();
+    const iAmAssigned = this._isActiveAssignee();
+    const rows = assignees.map(a => {
+      const name = this._userName(a.user_id);
+      const { role, section } = this._roleAndSectionLabel(a.user_id);
+      const canRemove = canManage || a.user_id === this._user.id;
+      return `
+        <div class="task-people-row" data-assignee-row="${a.user_id}">
+          ${this._avatarHtml(name)}
+          <div class="task-people-row-info">
+            <div class="task-people-row-name">${this._escapeHtml(name)}</div>
+            <div class="task-people-row-meta">${this._escapeHtml(role)} · ${this._escapeHtml(section)}</div>
+          </div>
+          ${canRemove ? `<button class="icon-btn" data-remove-assignee="${a.user_id}" title="Remove"><i class="ti ti-x"></i></button>` : ''}
+        </div>
+      `;
+    }).join('');
+    const empty = assignees.length === 0 ? `<p class="structure-empty">Unassigned</p>` : '';
+    const actions = [];
+    if (canManage) actions.push(`<button class="btn btn-secondary btn-sm" data-open-assignee-picker><i class="ti ti-user-plus"></i> Add Assignee</button>`);
+    if (!iAmAssigned && canManage) actions.push(`<button class="btn btn-secondary btn-sm" data-assign-self><i class="ti ti-user-check"></i> Assign to Me</button>`);
+    if (iAmAssigned) actions.push(`<button class="btn btn-secondary btn-sm" data-unassign-self><i class="ti ti-user-minus"></i> Unassign Me</button>`);
+    return `
+      <div class="task-people-list">${rows || empty}</div>
+      ${actions.length ? `<div class="task-detail-actions" style="margin-top:10px;">${actions.join('')}</div>` : ''}
+      <div class="task-people-error alert alert-error hidden" data-assignees-error></div>
+    `;
   },
 
+  // ── Watchers (T2D) — self-service only. watch_task()/unwatch_task()
+  // take no p_user_id parameter, so there is no way to add or remove
+  // an arbitrary OTHER user as a watcher — see the file header comment
+  // and docs/43 §Known Limitations for why this is treated as an
+  // intentional backend design, not a gap to fix with a new RPC. ─────
   _watchersHtml(t) {
     const watchers = t.watchers || [];
-    if (watchers.length === 0) return `<p class="structure-empty">No watchers</p>`;
-    return `<div class="badge-list">${watchers.map(w => `<span class="badge badge-outline">${this._escapeHtml(this._userName(w.user_id))}</span>`).join('')}</div>`;
+    const rows = watchers.map(w => {
+      const name = this._userName(w.user_id);
+      const { role, section } = this._roleAndSectionLabel(w.user_id);
+      return `
+        <div class="task-people-row">
+          ${this._avatarHtml(name)}
+          <div class="task-people-row-info">
+            <div class="task-people-row-name">${this._escapeHtml(name)}</div>
+            <div class="task-people-row-meta">${this._escapeHtml(role)} · ${this._escapeHtml(section)}</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+    const empty = watchers.length === 0 ? `<p class="structure-empty">No watchers</p>` : '';
+    return `
+      <div class="task-people-list">${rows || empty}</div>
+      <div class="task-detail-actions" style="margin-top:10px;">
+        <button class="btn btn-secondary btn-sm" data-toggle-watch-self>
+          <i class="ti ${this._iAmWatching ? 'ti-eye-off' : 'ti-eye'}"></i> ${this._iAmWatching ? 'Unwatch' : 'Watch this task'}
+        </button>
+      </div>
+      <p class="field-hint" style="margin-top:8px;">Only you can add or remove yourself as a watcher — there's no way for someone else to do that on your behalf.</p>
+      <div class="task-people-error alert alert-error hidden" data-watchers-error></div>
+    `;
   },
 
-  // Display-only per the T2B brief — permission-aware visibility, no
-  // mutation wired up yet (a click acknowledges rather than pretends
-  // to succeed). Wiring these to the real RPCs is a small, ready-to-go
-  // follow-up: js/views/tasks.js already has working, tested calls to
-  // every one of these RPCs with this exact same permission mirror.
+  // Complete/Cancel remain non-mutating placeholders — out of T2D's
+  // scope (assignee/watcher management only). Assign-to-Me/Unassign-
+  // Me/Watch/Unwatch, previously placeholders here (T2B), now live as
+  // real, working controls in the Assignees/Watchers panels above —
+  // removed from here rather than duplicated, so there is exactly one
+  // place each action can be taken from. See docs/43 §Architecture.
   _actionsHtml(t) {
     const canManage = this._canManage();
     const canComplete = ['in_progress', 'waiting'].includes(t.status) && (canManage || this._isActiveAssignee());
     const canCancel = ['draft', 'open', 'in_progress', 'waiting'].includes(t.status) && canManage;
-    const iAmAssigned = this._isActiveAssignee();
-    const canAssignSelf = canManage && !iAmAssigned;
 
     const btn = (label, icon, action) => `<button class="btn btn-secondary btn-sm" data-task-detail-action="${action}"><i class="ti ${icon}"></i> ${label}</button>`;
     const items = [];
     if (canComplete) items.push(btn('Complete', 'ti-check', 'complete'));
     if (canCancel) items.push(btn('Cancel', 'ti-x', 'cancel'));
-    if (canAssignSelf) items.push(btn('Assign to Me', 'ti-user-plus', 'assign-me'));
-    if (iAmAssigned) items.push(btn('Unassign Me', 'ti-user-minus', 'unassign-me'));
-    items.push(btn(this._iAmWatching ? 'Unwatch' : 'Watch', this._iAmWatching ? 'ti-eye-off' : 'ti-eye', this._iAmWatching ? 'unwatch' : 'watch'));
 
     if (items.length === 0) return `<p class="structure-empty">No actions available.</p>`;
     return `<div class="task-detail-actions">${items.join('')}</div>`;
@@ -516,6 +616,169 @@ const TaskDetailView = {
         alert('This action is coming in a later milestone — see docs/41-task-detail-foundation.md.');
       });
     });
+    this._bindAssigneesPanel(document.getElementById('task-assignees-panel'));
+    this._bindWatchersPanel(document.getElementById('task-watchers-panel'));
+  },
+
+  // ── Mutation handling — a small shared helper so every assignee/
+  // watcher mutation shows the same "disable the button, show a
+  // spinner, re-render the whole panel from a fresh get_task() on
+  // success, restore + show an inline error on failure" behavior
+  // (the "mutation progress" state the T2D brief asks for), without
+  // duplicating that sequence five times. ─────────────────────────
+  async _runPeopleMutation(btn, errorSelector, fn) {
+    const panel = btn.closest('[id]');
+    const errEl = panel?.querySelector(errorSelector);
+    if (errEl) errEl.classList.add('hidden');
+    const originalHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner spinner--dark" style="width:14px;height:14px;"></span>`;
+    try {
+      await fn();
+      // Re-fetch the task (assignees/watchers arrays live on get_task()'s
+      // own response) rather than hand-patching local state — the same
+      // "reload from the source of truth" choice _loadActivity() already
+      // makes after posting a comment.
+      const task = await TasksAPI.getTask(this._taskId);
+      if (task) {
+        this._task = task;
+        this._iAmWatching = (task.watchers || []).some(w => w.user_id === this._user.id);
+        document.getElementById('task-assignees-panel').innerHTML = this._assigneesHtml(task);
+        document.getElementById('task-watchers-panel').innerHTML = this._watchersHtml(task);
+        this._bindAssigneesPanel(document.getElementById('task-assignees-panel'));
+        this._bindWatchersPanel(document.getElementById('task-watchers-panel'));
+      }
+    } catch (err) {
+      console.error('CorLink: task people mutation failed', err);
+      btn.disabled = false;
+      btn.innerHTML = originalHtml;
+      if (errEl) {
+        errEl.textContent = err.message || 'That action failed. Try again.';
+        errEl.classList.remove('hidden');
+      }
+    }
+  },
+
+  _bindAssigneesPanel(panel) {
+    if (!panel) return;
+    panel.querySelectorAll('[data-remove-assignee]').forEach(btn => {
+      btn.addEventListener('click', () => this._runPeopleMutation(btn, '[data-assignees-error]',
+        () => TasksAPI.unassignTask(this._taskId, btn.dataset.removeAssignee)));
+    });
+    panel.querySelector('[data-assign-self]')?.addEventListener('click', (e) => this._runPeopleMutation(e.currentTarget, '[data-assignees-error]',
+      () => TasksAPI.assignTask(this._taskId, this._user.id)));
+    panel.querySelector('[data-unassign-self]')?.addEventListener('click', (e) => this._runPeopleMutation(e.currentTarget, '[data-assignees-error]',
+      () => TasksAPI.unassignTask(this._taskId, this._user.id)));
+    panel.querySelector('[data-open-assignee-picker]')?.addEventListener('click', () => this._openAssigneePickerModal());
+  },
+
+  _bindWatchersPanel(panel) {
+    if (!panel) return;
+    panel.querySelector('[data-toggle-watch-self]')?.addEventListener('click', (e) => this._runPeopleMutation(e.currentTarget, '[data-watchers-error]',
+      () => this._iAmWatching ? TasksAPI.unwatchTask(this._taskId) : TasksAPI.watchTask(this._taskId)));
+  },
+
+  // ── User picker (T2D) — reusable search-and-select over the task's
+  // own organization's member list (AdminAPI.listUsersByOrg(), already
+  // fetched once in _load() and reused here — no second query). Built
+  // generically enough to serve a future watcher-add flow if
+  // watch_task() ever grows a p_user_id parameter; only wired to the
+  // Assignees "Add" button today, the only mutation that genuinely
+  // supports an arbitrary target user. ───────────────────────────────
+  _openAssigneePickerModal() {
+    const assignedIds = new Set((this._task.assignees || []).map(a => a.user_id));
+    const candidates = (this._orgUsers || []).filter(u => u.is_active && !assignedIds.has(u.id));
+
+    this._openModal(`
+      <h3>Add Assignee</h3>
+      <div class="user-picker">
+        <input class="field-input-plain" id="assignee-picker-search" placeholder="Search by name or staff number…" autocomplete="off" />
+        <div class="user-picker-list" id="assignee-picker-list"></div>
+      </div>
+      <div class="modal-actions"><button type="button" class="btn btn-secondary" data-close-modal>Cancel</button></div>
+    `);
+
+    const searchInput = document.getElementById('assignee-picker-search');
+    const listEl = document.getElementById('assignee-picker-list');
+    const renderMatches = () => {
+      const q = (searchInput.value || '').trim().toLowerCase();
+      // Search by name or staff number (service_number) — this app has
+      // no separate "username" field; service_number doubles as the
+      // login identifier, so it is what "username" maps to here.
+      const matches = candidates.filter(u =>
+        !q || u.full_name.toLowerCase().includes(q) || u.service_number.toLowerCase().includes(q)
+      ).slice(0, 20);
+      if (matches.length === 0) {
+        listEl.innerHTML = `<div class="user-picker-empty">${q ? 'No matching org members.' : 'No eligible org members to add.'}</div>`;
+        return;
+      }
+      listEl.innerHTML = matches.map(u => {
+        const { role, section } = this._roleAndSectionLabel(u.id);
+        return `
+          <button type="button" class="user-picker-option" data-pick-user="${u.id}">
+            ${this._avatarHtml(u.full_name)}
+            <span class="user-picker-option-info">
+              <strong>${this._escapeHtml(u.full_name)}</strong>
+              <span>${this._escapeHtml(this._org?.name || '')} · ${this._escapeHtml(role)} · ${this._escapeHtml(section)} · ${this._escapeHtml(u.service_number)}</span>
+            </span>
+          </button>
+        `;
+      }).join('');
+      listEl.querySelectorAll('[data-pick-user]').forEach(optBtn => {
+        // Selecting a candidate closes the picker immediately (a
+        // single-select flow, same shape as prisoner-letters.js's own
+        // prisoner picker) — the candidate list itself already
+        // excludes anyone currently assigned, so a duplicate pick is
+        // structurally impossible, not just discouraged.
+        optBtn.addEventListener('click', async () => {
+          optBtn.disabled = true;
+          try {
+            await TasksAPI.assignTask(this._taskId, optBtn.dataset.pickUser);
+            this._closeModal();
+            const task = await TasksAPI.getTask(this._taskId);
+            if (task) {
+              this._task = task;
+              document.getElementById('task-assignees-panel').innerHTML = this._assigneesHtml(task);
+              this._bindAssigneesPanel(document.getElementById('task-assignees-panel'));
+            }
+          } catch (err) {
+            console.error('CorLink: failed to assign task', err);
+            listEl.insertAdjacentHTML('afterbegin', `<div class="alert alert-error">${this._escapeHtml(err.message || 'Could not assign this user.')}</div>`);
+            optBtn.disabled = false;
+          }
+        });
+      });
+    };
+    let searchTimer;
+    searchInput.addEventListener('input', () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(renderMatches, 150);
+    });
+    renderMatches();
+    searchInput.focus();
+  },
+
+  // ── Generic modal helpers — own copy, same shape as entry.js's/
+  // prisoner-letters.js's own _openModal/_closeModal (this codebase's
+  // established per-view-copy convention). Task Detail had no modal
+  // until T2D's picker needed one. ────────────────────────────────
+  _openModal(innerHtml) {
+    const root = document.getElementById('modal-root');
+    root.innerHTML = `
+      <div class="modal-overlay" id="modal-overlay">
+        <div class="modal-box">${innerHtml}</div>
+      </div>
+    `;
+    document.getElementById('modal-overlay').addEventListener('click', (e) => {
+      if (e.target.id === 'modal-overlay') this._closeModal();
+    });
+    root.querySelectorAll('[data-close-modal]').forEach(btn => {
+      btn.addEventListener('click', () => this._closeModal());
+    });
+  },
+
+  _closeModal() {
+    document.getElementById('modal-root').innerHTML = '';
   },
 
   _renderNotFound(content) {

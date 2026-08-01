@@ -878,6 +878,40 @@ p  { line-height: 1.6; }
 }
 .task-activity-comment-form { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--color-border); padding-top: 14px; }
 
+/* ── Assignee/Watcher management (js/views/task-detail.js, T2D) ───── */
+.task-people-list { display: flex; flex-direction: column; gap: 10px; }
+.task-people-row { display: flex; align-items: center; gap: 10px; }
+.task-people-row-info { flex: 1; min-width: 0; }
+.task-people-row-name { font-size: 0.875rem; font-weight: 500; }
+.task-people-row-meta { font-size: 0.75rem; color: var(--color-text-muted); }
+.task-people-error { margin-top: 10px; }
+
+/* Reusable user picker (Add Assignee modal) — same visual shape as
+   .prisoner-picker-list/.prisoner-option (prisoner-letters.js) but its
+   own copy under a feature-neutral name, since this one searches org
+   staff, not the prisoner registry. */
+.user-picker { display: flex; flex-direction: column; gap: 8px; }
+.user-picker-list { max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.user-picker-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: pointer;
+  transition: background var(--transition);
+}
+.user-picker-option:hover { background: var(--color-bg); }
+.user-picker-option:disabled { opacity: .5; cursor: not-allowed; }
+.user-picker-option-info { display: flex; flex-direction: column; min-width: 0; }
+.user-picker-option-info strong { font-size: 0.875rem; }
+.user-picker-option-info span { font-size: 0.75rem; color: var(--color-text-muted); }
+.user-picker-empty { padding: 14px 10px; text-align: center; color: var(--color-text-muted); font-size: 0.875rem; }
+
 .notif-wrap { position: relative; }
 .notif-btn { position: relative; }
 .notif-badge {
