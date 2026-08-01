@@ -879,6 +879,9 @@ p  { line-height: 1.6; }
 .task-activity-comment-form { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--color-border); padding-top: 14px; }
 
 /* ── Assignee/Watcher management (js/views/task-detail.js, T2D) ───── */
+/* ── Task Editing (js/views/task-detail.js, T3C) ────────────────── */
+.task-edit-form { display: flex; flex-direction: column; gap: 14px; }
+
 .task-people-list { display: flex; flex-direction: column; gap: 10px; }
 .task-people-row { display: flex; align-items: center; gap: 10px; }
 .task-people-row-info { flex: 1; min-width: 0; }

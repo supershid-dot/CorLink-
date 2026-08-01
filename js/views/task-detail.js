@@ -1,24 +1,22 @@
 // ─── Task Detail: Foundation (T2B) + Comments & Timeline (T2C) +
-// Assignee/Watcher Management (T2D) ──────────────────────────────
-// See docs/41, docs/42, docs/43-task-assignee-and-watcher-management.md.
-// T2B is header, details, linked-record display, and the Actions panel
-// (Complete/Cancel — still non-mutating placeholders, out of T2D's
-// scope). T2C adds the Activity panel. T2D makes Assignees/Watchers
-// interactive: add/remove assignee (arbitrary org users, permission-
-// gated), assign/unassign self, and watch/unwatch self — the
-// self-service Assign-to-Me/Unassign-Me/Watch/Unwatch controls that
-// used to live in the Actions panel as placeholders have moved into
-// the Assignees/Watchers panels themselves, now that those panels are
-// each the real, working home for that action (see docs/43 for why).
-// Attachments, Related Tasks, and Dashboard remain later milestones.
+// Assignee/Watcher Management (T2D) + Editing & Lifecycle (T3C) ────
+// See docs/41, docs/42, docs/43-task-assignee-and-watcher-management.md,
+// docs/47-task-editing-and-lifecycle.md. T2B is header, details,
+// linked-record display, and the Actions panel (Complete/Cancel — were
+// non-mutating placeholders until T3C). T2C adds the Activity panel.
+// T2D makes Assignees/Watchers interactive. T3C makes the Details
+// panel genuinely editable (Title/Description/Priority/Due Date/
+// Visibility) and wires Complete/Cancel to the real RPCs, each behind
+// a confirmation step. Attachments, Related Tasks, and Dashboard
+// changes remain out of scope (see docs/47).
 //
-// Reuses get_task(), add_task_comment(), assign_task()/unassign_task()/
-// watch_task()/unwatch_task(), the five existing
-// list_task_<module>_links() RPCs, and AdminAPI.listUsersByOrg()/
-// listSectionsByOrg() (already used by entry.js's own routing modal
-// for the identical "pick an org member" need) exactly as they already
-// existed. No SQL, RPC, index, or policy was added for any of these
-// three milestones.
+// Reuses get_task(), update_task(), complete_task(), cancel_task(),
+// add_task_comment(), assign_task()/unassign_task()/watch_task()/
+// unwatch_task(), the five existing list_task_<module>_links() RPCs,
+// and AdminAPI.listUsersByOrg()/listSectionsByOrg() (already used by
+// entry.js's own routing modal for the identical "pick an org member"
+// need) exactly as they already existed. No SQL, RPC, index, or policy
+// was added for any of these four milestones.
 //
 // watch_task()/unwatch_task() take ONLY p_task_id — no p_user_id
 // parameter exists, so only self-watch/self-unwatch are backend-
@@ -28,6 +26,17 @@
 // someone else — the same shape as GitHub's own "Watch" button), not
 // a gap to fix — see docs/43 §Known Limitations for the full
 // reasoning.
+//
+// update_task() has no Classification/Language column to write to at
+// all (see the comment above _detailsHtml below, unchanged from T2B) —
+// not offered as an edit field, per docs/47's honest-limitation
+// requirement. It DOES support Visibility, so that field is editable
+// here even though it wasn't in T2B's original read-only set.
+// update_task()'s own SQL uses COALESCE(p_x, x) for every column,
+// meaning passing NULL always means "leave unchanged," never "clear" —
+// there is no way to blank an already-set due date via this RPC. The
+// edit form below blocks that specific attempt with an honest message
+// rather than silently no-op'ing it (see docs/47 §Known limitations).
 
 const TaskDetailView = {
   async render(container, params = {}) {
@@ -366,6 +375,17 @@ const TaskDetailView = {
   _isActiveAssignee() {
     return (this._task.assignees || []).some(a => a.user_id === this._user.id);
   },
+  // update_task()'s own authorization (supabase/patch-shared-task-
+  // foundation.sql) is is_super_admin() OR creator OR ACTIVE ASSIGNEE
+  // OR supervisor-in-scope — the exact same shape complete_task() uses
+  // (see the canComplete mirror in _actionsHtml below), NOT the
+  // narrower creator/supervisor-only shape cancel_task()/assign_task()
+  // use. _canManage() alone (no assignee branch) would under-mirror
+  // this RPC and hide Edit from someone the backend would actually let
+  // edit — this is the corrected predicate T3C needs.
+  _canEdit() {
+    return this._canManage() || this._isActiveAssignee();
+  },
 
   _contentHtml() {
     const t = this._task;
@@ -373,7 +393,7 @@ const TaskDetailView = {
       ${this._headerHtml(t)}
       <div class="task-detail-layout">
         <div class="task-detail-main">
-          ${this._panel('Details', this._detailsHtml(t))}
+          ${this._panel('Details', `<div id="task-details-panel">${this._detailsHtml(t)}</div>`)}
           ${this._panel('Linked Records', this._linkedRecordsHtml())}
           ${this._panel('Activity', `<div id="task-activity-panel">${this._activityLoadingHtml()}</div>`)}
         </div>
@@ -429,6 +449,58 @@ const TaskDetailView = {
         <div><strong>Section</strong>${this._section ? this._escapeHtml(this._section.name) : '<span class="structure-empty">Organization-wide</span>'}</div>
         ${t.status === 'completed' ? `<div><strong>Completed</strong>${new Date(t.completed_at).toLocaleString()} by ${this._escapeHtml(this._userName(t.completed_by) || 'Unknown')}</div>` : ''}
       </div>
+      ${this._canEdit() ? `
+        <div class="task-detail-actions" style="margin-top:12px;">
+          <button class="btn btn-secondary btn-sm" data-open-edit-details><i class="ti ti-edit"></i> Edit</button>
+        </div>
+      ` : ''}
+    `;
+  },
+
+  // ── Editing (T3C) — Title/Description/Priority/Due Date/Visibility,
+  // the exact set update_task() actually supports (see the file header
+  // comment for Classification/Start Date, which it does not). Gated
+  // by _canEdit() above so this is never even offered where the RPC
+  // would reject the call. ───────────────────────────────────────────
+  _detailsEditFormHtml(t) {
+    return `
+      <form id="task-edit-form" class="task-edit-form">
+        <div class="field-group">
+          <label class="field-label" for="task-edit-title">Title</label>
+          <input class="field-input-plain" id="task-edit-title" value="${this._escapeAttr(t.title)}" required />
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="task-edit-description">Description</label>
+          <textarea class="field-input-plain" id="task-edit-description" rows="4">${this._escapeHtml(t.description || '')}</textarea>
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="task-edit-priority">Priority</label>
+          <select class="field-select" id="task-edit-priority">
+            <option value="low" ${t.priority === 'low' ? 'selected' : ''}>Low</option>
+            <option value="normal" ${t.priority === 'normal' ? 'selected' : ''}>Normal</option>
+            <option value="high" ${t.priority === 'high' ? 'selected' : ''}>High</option>
+            <option value="critical" ${t.priority === 'critical' ? 'selected' : ''}>Critical</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="task-edit-due-date">Due Date</label>
+          <input type="date" class="field-input-plain" id="task-edit-due-date" value="${t.due_date || ''}" />
+          ${t.due_date ? `<div class="field-hint">Can be changed to a different date, but not cleared once set — update_task() has no way to unset it. See docs/47.</div>` : ''}
+        </div>
+        <div class="field-group">
+          <label class="field-label" for="task-edit-visibility">Visibility</label>
+          <select class="field-select" id="task-edit-visibility">
+            <option value="private" ${t.visibility === 'private' ? 'selected' : ''}>Private</option>
+            <option value="section" ${t.visibility === 'section' ? 'selected' : ''}>Section</option>
+            <option value="organization" ${t.visibility === 'organization' ? 'selected' : ''}>Organization</option>
+          </select>
+        </div>
+        <div class="task-edit-error alert alert-error hidden" id="task-edit-error"></div>
+        <div class="modal-actions" style="justify-content:flex-end;">
+          <button type="button" class="btn btn-secondary btn-sm" data-cancel-edit-details>Cancel</button>
+          <button type="submit" class="btn btn-primary btn-sm" id="task-edit-save-btn">Save</button>
+        </div>
+      </form>
     `;
   },
 
@@ -765,12 +837,20 @@ const TaskDetailView = {
     `;
   },
 
-  // Complete/Cancel remain non-mutating placeholders — out of T2D's
-  // scope (assignee/watcher management only). Assign-to-Me/Unassign-
-  // Me/Watch/Unwatch, previously placeholders here (T2B), now live as
-  // real, working controls in the Assignees/Watchers panels above —
-  // removed from here rather than duplicated, so there is exactly one
-  // place each action can be taken from. See docs/43 §Architecture.
+  // Complete/Cancel (T3C) — real actions now, each gated by a
+  // confirmation modal (see _confirmLifecycleAction below). canComplete
+  // mirrors complete_task()'s own authorization exactly (creator/
+  // active-assignee/supervisor-in-scope/admin); canCancel mirrors
+  // cancel_task()'s (no active-assignee branch) — the two RPCs
+  // genuinely differ here, this isn't a copy-paste inconsistency.
+  // Status eligibility (in_progress/waiting -> completed;
+  // draft/open/in_progress/waiting -> cancelled) mirrors
+  // valid_task_status_transition()'s own allow-list — a transition not
+  // on that list is never even offered, though the trigger would
+  // reject it regardless (defense in depth, not the only guard). Other
+  // transitions the same table allows (draft->open, waiting<->in_
+  // progress, etc.) are intentionally not exposed here — T3C's own
+  // scope is Complete/Cancel only, see docs/47.
   _actionsHtml(t) {
     const canManage = this._canManage();
     const canComplete = ['in_progress', 'waiting'].includes(t.status) && (canManage || this._isActiveAssignee());
@@ -787,12 +867,149 @@ const TaskDetailView = {
 
   _bindContent(content) {
     content.querySelectorAll('[data-task-detail-action]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        alert('This action is coming in a later milestone — see docs/41-task-detail-foundation.md.');
-      });
+      btn.addEventListener('click', () => this._confirmLifecycleAction(btn.dataset.taskDetailAction));
     });
     this._bindAssigneesPanel(document.getElementById('task-assignees-panel'));
     this._bindWatchersPanel(document.getElementById('task-watchers-panel'));
+    this._bindDetailsPanel(document.getElementById('task-details-panel'));
+  },
+
+  // ── Editing panel toggle + save (T3C) ───────────────────────────
+  _bindDetailsPanel(panel) {
+    if (!panel) return;
+    panel.querySelector('[data-open-edit-details]')?.addEventListener('click', () => {
+      panel.innerHTML = this._detailsEditFormHtml(this._task);
+      this._bindDetailsEditForm(panel);
+    });
+  },
+
+  _bindDetailsEditForm(panel) {
+    panel.querySelector('[data-cancel-edit-details]')?.addEventListener('click', () => {
+      panel.innerHTML = this._detailsHtml(this._task);
+      this._bindDetailsPanel(panel);
+    });
+
+    const form = panel.querySelector('#task-edit-form');
+    form?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errEl = panel.querySelector('#task-edit-error');
+      errEl.classList.add('hidden');
+
+      const title = document.getElementById('task-edit-title').value.trim();
+      const description = document.getElementById('task-edit-description').value;
+      const priority = document.getElementById('task-edit-priority').value;
+      const dueDateValue = document.getElementById('task-edit-due-date').value;
+      const visibility = document.getElementById('task-edit-visibility').value;
+
+      // Mirrors the table's own `title CHECK (btrim(title) <> '')`
+      // constraint (create_task() enforces this explicitly up front;
+      // update_task() relies on the CHECK itself) — not a new,
+      // invented client-only rule, just avoiding a save the backend
+      // would reject anyway with a raw constraint-violation message.
+      if (!title) {
+        errEl.textContent = 'Title is required.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      // update_task() uses COALESCE(p_due_date, due_date) — NULL always
+      // means "leave unchanged," never "clear." Blocked here with an
+      // honest explanation rather than silently sending NULL and
+      // letting the save look like it worked when the due date is
+      // actually untouched. See docs/47 §Known limitations.
+      if (this._task.due_date && !dueDateValue) {
+        errEl.textContent = "Due date can't be cleared once set — pick a different date instead.";
+        errEl.classList.remove('hidden');
+        return;
+      }
+
+      const saveBtn = document.getElementById('task-edit-save-btn');
+      const cancelBtn = panel.querySelector('[data-cancel-edit-details]');
+      saveBtn.disabled = true;
+      cancelBtn.disabled = true;
+      const originalLabel = saveBtn.innerHTML;
+      saveBtn.innerHTML = `<span class="spinner spinner--dark" style="width:14px;height:14px;"></span> Saving…`;
+
+      try {
+        await TasksAPI.updateTask(this._taskId, {
+          title, description, priority, visibility,
+          dueDate: dueDateValue || undefined,
+        });
+        // Reload from the source of truth — same "re-fetch rather than
+        // hand-patch local state" choice every other mutation on this
+        // page already makes (comments, assignees, watchers). This
+        // also refreshes the header badge, the Completed row's
+        // eligibility, the Activity panel's new 'edited' event, and
+        // the Actions panel in one pass.
+        await this._load();
+      } catch (err) {
+        console.error('CorLink: failed to update task', err);
+        saveBtn.disabled = false;
+        cancelBtn.disabled = false;
+        saveBtn.innerHTML = originalLabel;
+        errEl.textContent = err.message || 'Could not save these changes. Try again.';
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
+  // ── Lifecycle actions (T3C) — Complete/Cancel, each behind a
+  // confirmation modal with an optional notes/reason field (both RPCs
+  // already accept one — p_notes/p_reason — reusing it rather than
+  // adding anything new). No client-side status-transition logic is
+  // duplicated here: _actionsHtml above only ever offers an action the
+  // backend's own valid_task_status_transition() allow-list permits,
+  // and the RPC/trigger remain the real, final authority regardless. ──
+  _confirmLifecycleAction(action) {
+    const isComplete = action === 'complete';
+    const title = isComplete ? 'Complete this task?' : 'Cancel this task?';
+    const message = isComplete
+      ? "This marks the task complete and can't be undone from here."
+      : "This cancels the task and can't be undone from here.";
+    const noteFieldLabel = isComplete ? 'Notes (optional)' : 'Reason (optional)';
+    const confirmLabel = isComplete ? 'Complete Task' : 'Cancel Task';
+    // No .btn-danger class exists in this app (confirmed against
+    // css/style.css) — mirrors the exact same inline destructive-tone
+    // style js/views/meetings.js's own delete confirmations already use,
+    // rather than inventing a new button variant for this one case.
+    const confirmBtnStyle = isComplete ? '' : 'style="background:var(--color-error-bg); color:var(--color-error-dark);"';
+
+    this._openModal(`
+      <h3>${title}</h3>
+      <p>${message}</p>
+      <div class="field-group">
+        <label class="field-label" for="task-lifecycle-note">${noteFieldLabel}</label>
+        <textarea class="field-input-plain" id="task-lifecycle-note" rows="3"></textarea>
+      </div>
+      <div class="task-lifecycle-error alert alert-error hidden" id="task-lifecycle-error"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" data-close-modal>Back</button>
+        <button type="button" class="btn" ${confirmBtnStyle} id="task-lifecycle-confirm-btn">${confirmLabel}</button>
+      </div>
+    `);
+
+    document.getElementById('task-lifecycle-confirm-btn').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const backBtn = document.getElementById('modal-root').querySelector('[data-close-modal]');
+      const errEl = document.getElementById('task-lifecycle-error');
+      const note = document.getElementById('task-lifecycle-note').value.trim() || null;
+      btn.disabled = true;
+      if (backBtn) backBtn.disabled = true;
+      const originalLabel = btn.innerHTML;
+      btn.innerHTML = `<span class="spinner spinner--dark" style="width:14px;height:14px;"></span> ${isComplete ? 'Completing…' : 'Cancelling…'}`;
+      try {
+        if (isComplete) await TasksAPI.completeTask(this._taskId, note);
+        else await TasksAPI.cancelTask(this._taskId, note);
+        this._closeModal();
+        await this._load();
+      } catch (err) {
+        console.error(`CorLink: failed to ${action} task`, err);
+        btn.disabled = false;
+        if (backBtn) backBtn.disabled = false;
+        btn.innerHTML = originalLabel;
+        errEl.textContent = err.message || 'That action failed. Try again.';
+        errEl.classList.remove('hidden');
+      }
+    });
   },
 
   // ── Mutation handling — a small shared helper so every assignee/
@@ -1012,5 +1229,18 @@ const TaskDetailView = {
     const div = document.createElement('div');
     div.textContent = value == null ? '' : String(value);
     return div.innerHTML;
+  },
+
+  // _escapeHtml() alone is safe inside text nodes but NOT inside a
+  // quoted HTML attribute — a text node's HTML serialization doesn't
+  // escape `"` (it isn't special there), so a title containing one
+  // could otherwise break out of value="...". T3C is the first place
+  // in this file that interpolates user-supplied text into a value=
+  // attribute (the edit form's Title/Due Date inputs), so this exists
+  // specifically for that; existing double-quote-unsafe value=
+  // interpolations elsewhere in this app (e.g. search boxes) predate
+  // T3C and are out of this milestone's scope to touch.
+  _escapeAttr(value) {
+    return this._escapeHtml(value).replace(/"/g, '&quot;');
   },
 };
