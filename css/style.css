@@ -843,6 +843,23 @@ p  { line-height: 1.6; }
 }
 .row-actions-menu .menu-item { padding: 10px 14px; font-size: 0.875rem; }
 
+/* ── Task Detail two-column layout (js/views/task-detail.js) ────────
+   Same breakpoint (900px) already used for the sidebar-nav / topbar-nav
+   split — collapses to one column at tablet width and below, where the
+   right rail's panels stack below the main content instead. */
+.task-detail-layout {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .task-detail-layout { grid-template-columns: 1fr; }
+}
+.task-detail-sidebar { display: flex; flex-direction: column; gap: 16px; }
+.task-detail-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.task-detail-actions .btn[disabled] { opacity: .55; cursor: not-allowed; }
+
 .notif-wrap { position: relative; }
 .notif-btn { position: relative; }
 .notif-badge {

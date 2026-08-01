@@ -239,3 +239,34 @@ means none of them were added here. Concretely:
 - **Dashboard, Comments, Timeline, Attachments, a dedicated Watchers
   panel, Related Tasks, Saved Filters** — all explicitly out of scope
   per the T2A brief, unchanged from docs/39's roadmap.
+
+## Addendum (T2B)
+
+Two small corrections made while building Task Detail (docs/41), for
+the record:
+
+1. **Task numbers now link to Task Detail** (`#task-detail?id=...`)
+   instead of showing the placeholder alert described above — Task
+   Detail exists as of T2B.
+2. **Bug fix in `TasksAPI.ORIGIN_MODULES.meeting`**: while wiring Task
+   Detail's own linked-record display (which reuses the real
+   `list_task_meeting_links()` RPC directly), it became clear that
+   `task_links.record_id` for `module_key='meeting'` is a
+   `meeting_decisions.id`, not a `meetings.id` — `list_task_meeting_links()`
+   (`patch-meeting-task-integration.sql`) joins `task_links ->
+   meeting_decisions -> meetings`, a two-hop relationship this file's
+   origin-resolution config had not accounted for. The Task List's own
+   bulk origin lookup was querying `meetings` directly by that id,
+   which would never match — a meeting-linked task's Origin chip would
+   silently fail to resolve (render as if the link weren't independently
+   viewable) rather than show the meeting. Fixed by pointing the
+   `meeting` entry in `ORIGIN_MODULES` at `meeting_decisions` (with a
+   nested `meeting:meetings(title)` embed) and adding a `routeIdField`
+   so the origin chip's route param uses the record's `meeting_id`
+   rather than its own `id`. Re-verified against the same headless test
+   harness used for T2A's own testing (docs/40 §Testing) — a
+   meeting-linked task's origin chip now correctly resolves to a
+   clickable `#meetings?meetingId=...` link showing both the meeting's
+   and the decision's titles. No SQL/RPC was touched — this was a
+   frontend-only correction to already-shipped JS, not a backend
+   defect.

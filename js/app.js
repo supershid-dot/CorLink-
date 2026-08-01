@@ -6,6 +6,7 @@ async function init() {
   Router.register('change-password', ChangePasswordView);
   Router.register('dashboard',       DashboardView);
   Router.register('tasks',           TasksView);
+  Router.register('task-detail',     TaskDetailView);
   Router.register('admin',           AdminView);
   Router.register('requests',        RequestsView);
   Router.register('request-detail',  RequestDetailView);

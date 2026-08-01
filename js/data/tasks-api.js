@@ -280,6 +280,13 @@ const TasksAPI = (() => {
     // js/views/request-detail.js / entry-detail.js), so its origin
     // chip routes to whichever parent id is present instead of a
     // dedicated internal-request-detail route that doesn't exist.
+    //
+    // meeting's task_links.record_id is a meeting_decisions.id, NOT a
+    // meetings.id — list_task_meeting_links() (patch-meeting-task-
+    // integration.sql) joins task_links -> meeting_decisions -> meetings,
+    // exactly the same two-hop shape mirrored here via routeIdField
+    // (which row field carries the id the ROUTE needs, when it differs
+    // from the row's own primary key that RLS is filtering on).
     ORIGIN_MODULES: {
       request: {
         table: 'requests', select: 'id, reference_number, subject',
@@ -287,9 +294,9 @@ const TasksAPI = (() => {
         label: (r) => r.reference_number || r.subject || 'Request',
       },
       meeting: {
-        table: 'meetings', select: 'id, title',
-        route: 'meetings', param: 'meetingId',
-        label: (r) => r.title || 'Meeting',
+        table: 'meeting_decisions', select: 'id, title, meeting_id, meeting:meetings(title)',
+        route: 'meetings', param: 'meetingId', routeIdField: 'meeting_id',
+        label: (r) => r.meeting?.title ? `${r.meeting.title} — ${r.title}` : (r.title || 'Meeting'),
       },
       external_correspondence: {
         table: 'external_correspondence', select: 'id, reference_number, subject',

@@ -218,7 +218,7 @@ const TasksView = {
       const cfg = TasksAPI.ORIGIN_MODULES[link.module_key];
       const row = originRecords[`${link.module_key}:${link.record_id}`];
       if (!cfg || !row) continue; // link visible, target record not independently viewable — see docs/40
-      let route = cfg.route, routeParams = cfg.param ? { [cfg.param]: row.id } : null;
+      let route = cfg.route, routeParams = cfg.param ? { [cfg.param]: row[cfg.routeIdField || 'id'] } : null;
       if (link.module_key === 'internal_request') {
         if (row.parent_request_id) { route = 'request-detail'; routeParams = { id: row.parent_request_id }; }
         else if (row.parent_entry_id) { route = 'entry-detail'; routeParams = { id: row.parent_entry_id }; }
@@ -296,7 +296,7 @@ const TasksView = {
       ${this._loadMoreHtml(raw)}
     `;
     this._bindToolbar(content);
-    this._bindRowActions(content, visible);
+    this._bindRowActions(content);
     this._bindLoadMore(content);
   },
 
@@ -478,7 +478,7 @@ const TasksView = {
     const assignees = this._assigneesByTask.get(t.id) || [];
     return `
       <tr>
-        <td data-label="Task"><a href="#" class="task-number-link" data-task-number="${this._escapeHtml(t.task_number || '')}">${this._escapeHtml(t.task_number || '—')}</a></td>
+        <td data-label="Task"><a href="#task-detail?id=${t.id}" class="task-number-link">${this._escapeHtml(t.task_number || '—')}</a></td>
         <td data-label="Title">${this._escapeHtml(t.title)}</td>
         <td data-label="Status">${this._statusBadge(t.status)}</td>
         <td data-label="Priority">${this._priorityBadge(t.priority)}</td>
@@ -580,7 +580,7 @@ const TasksView = {
     `;
   },
 
-  _bindRowActions(content, visible) {
+  _bindRowActions(content) {
     content.querySelectorAll('[data-row-menu-toggle]').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -616,25 +616,6 @@ const TasksView = {
         } catch (err) {
           console.error('CorLink: task action failed', err);
           alert(err.message || 'That action failed. Refresh and try again.');
-        }
-      });
-    });
-
-    content.querySelectorAll('[data-task-number]').forEach(link => {
-      link.addEventListener('click', async (e) => {
-        e.preventDefault();
-        const number = link.dataset.taskNumber;
-        if (!number) return;
-        // Task Detail doesn't exist yet (out of scope for T2A — see
-        // docs/40 §Future Extension Points); this confirms the task is
-        // real/visible via the same RLS-protected lookup a Detail page
-        // would use, and surfaces that instead of a dead link.
-        try {
-          const found = await TasksAPI.findTaskByNumber(number);
-          if (found) alert(`Task Detail isn't built yet — coming in a later milestone.\n\n${number}`);
-          else alert(`Task ${number} not found or not visible to you.`);
-        } catch (err) {
-          console.error('CorLink: task number lookup failed', err);
         }
       });
     });
