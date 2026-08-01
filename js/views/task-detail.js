@@ -141,6 +141,7 @@ const TaskDetailView = {
       // panels on request-detail.js/entry-detail.js/meetings.js/
       // prisoner-letter-detail.js) rather than blocking _load() above.
       this._loadActivity();
+      this._loadAttachments();
     } catch (err) {
       console.error('CorLink: failed to load task', err);
       content.innerHTML = `
@@ -394,6 +395,7 @@ const TaskDetailView = {
       <div class="task-detail-layout">
         <div class="task-detail-main">
           ${this._panel('Details', `<div id="task-details-panel">${this._detailsHtml(t)}</div>`)}
+          ${this._panel('Attachments', `<div id="task-attachments-panel">${this._attachmentsLoadingHtml()}</div>`)}
           ${this._panel('Linked Records', this._linkedRecordsHtml())}
           ${this._panel('Activity', `<div id="task-activity-panel">${this._activityLoadingHtml()}</div>`)}
         </div>
@@ -579,6 +581,209 @@ const TaskDetailView = {
     else if (['overdue'].includes(s)) cls = 'badge-error';
     else if (['pending_approval', 'submitted', 'in_progress', 'logged'].includes(s)) cls = 'badge-warning';
     return `<span class="badge ${cls}">${this._escapeHtml(status.replace(/_/g, ' '))}</span>`;
+  },
+
+  // ── Attachments (T3D) — reuses the existing, already-generic
+  // AttachmentsAPI (js/data/attachments-api.js) and the private
+  // `attachments` Storage bucket exactly as every other module already
+  // does, with record_type='task'. Loaded independently of the rest of
+  // the page (own loading/error/retry), same pattern as Activity
+  // above. See docs/48 §Architecture / §Storage reuse. ───────────────
+  _attachmentsLoadingHtml() {
+    return `<div class="tab-loading"><span class="spinner spinner--dark"></span> Loading attachments…</div>`;
+  },
+
+  async _loadAttachments() {
+    const panel = document.getElementById('task-attachments-panel');
+    if (!panel) return;
+    panel.innerHTML = this._attachmentsLoadingHtml();
+    try {
+      this._attachments = await AttachmentsAPI.list('task', this._taskId);
+      panel.innerHTML = this._attachmentsHtml();
+      this._bindAttachmentsPanel(panel);
+    } catch (err) {
+      console.error('CorLink: failed to load task attachments', err);
+      panel.innerHTML = `
+        <div class="alert alert-error">
+          <i class="ti ti-alert-triangle"></i> Couldn't load attachments: ${this._escapeHtml(err.message || 'unknown error')}.
+          <button class="btn btn-secondary btn-xs" id="task-attachments-retry-btn" style="margin-left:8px;">Retry</button>
+        </div>`;
+      document.getElementById('task-attachments-retry-btn')?.addEventListener('click', () => this._loadAttachments());
+    }
+  },
+
+  // Mirrors attachments_insert's 'task' branch (patch-task-
+  // attachments.sql) exactly — same predicate as _canEdit() above,
+  // since that RLS branch was deliberately written to match
+  // update_task()'s own authorization. Delete mirrors
+  // attachments_delete's 'task' branch: uploaded_by = me AND the task
+  // is still editable by me — losing edit access (e.g. unassigned)
+  // revokes delete on your own past uploads too, live, not frozen at
+  // upload time. See docs/48 §Permissions.
+  _canUploadAttachment() {
+    return this._canEdit();
+  },
+  _canDeleteAttachment(a) {
+    return a.uploaded_by === this._user.id && this._canEdit();
+  },
+
+  _formatBytes(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  },
+
+  _attachmentsHtml() {
+    const attachments = this._attachments || [];
+    const canUpload = this._canUploadAttachment();
+    const rows = attachments.map(a => {
+      const canDelete = this._canDeleteAttachment(a);
+      // Replace needs the same authority as a fresh upload (to put the
+      // new file in place) AND the same authority as delete (to remove
+      // the old one) — since both share the identical canEdit()-based
+      // predicate here, canDelete alone already implies canUpload too,
+      // but the check is written explicitly rather than assumed.
+      const canReplace = canDelete && canUpload;
+      return `
+        <div class="task-attachment-row" data-attachment-row="${a.id}">
+          <i class="ti ti-paperclip"></i>
+          <div class="task-attachment-info">
+            <button type="button" class="task-attachment-name" data-download="${a.id}" data-path="${this._escapeAttr(a.storage_path)}">${this._escapeHtml(a.filename)}</button>
+            <div class="task-attachment-meta">
+              ${this._formatBytes(a.file_size)} · Uploaded by ${this._escapeHtml(a.uploaded_by_user?.full_name || 'Unknown')} · ${new Date(a.created_at).toLocaleDateString()}
+            </div>
+          </div>
+          <div class="task-attachment-actions">
+            ${canReplace ? `
+              <label class="btn btn-secondary btn-xs" title="Replace">
+                <i class="ti ti-replace"></i> Replace
+                <input type="file" class="hidden" data-replace-input="${a.id}" data-replace-path="${this._escapeAttr(a.storage_path)}" />
+              </label>
+            ` : ''}
+            ${canDelete ? `<button type="button" class="btn btn-secondary btn-xs" data-delete-attachment="${a.id}"><i class="ti ti-trash"></i> Delete</button>` : ''}
+          </div>
+        </div>
+      `;
+    }).join('');
+    return `
+      <div class="task-attachments-list">
+        ${rows || '<p class="structure-empty">No attachments.</p>'}
+      </div>
+      ${canUpload ? `
+        <label class="attachment-dropzone" data-dropzone="task:${this._taskId}">
+          <i class="ti ti-cloud-upload"></i>
+          <span>Drag files here, or <span class="attachment-browse-link">browse</span></span>
+          <input type="file" multiple class="hidden" data-upload="task:${this._taskId}" />
+        </label>
+      ` : ''}
+      <div class="attachment-upload-error alert alert-error hidden" style="margin-top:8px;" id="task-attachments-error"></div>
+    `;
+  },
+
+  async _uploadAttachments(files) {
+    const errEl = document.getElementById('task-attachments-error');
+    if (errEl) errEl.classList.add('hidden');
+    const failures = [];
+    for (const file of files) {
+      try {
+        await AttachmentsAPI.upload('task', this._taskId, file);
+      } catch (err) {
+        failures.push(`${file.name}: ${err.message || 'upload failed'}`);
+      }
+    }
+    await this._loadAttachments();
+    if (failures.length > 0) {
+      const err2 = document.getElementById('task-attachments-error');
+      if (err2) {
+        err2.textContent = failures.join(' · ');
+        err2.classList.remove('hidden');
+      }
+    }
+  },
+
+  _bindAttachmentsPanel(panel) {
+    panel.querySelectorAll('[data-upload]').forEach(input => {
+      input.addEventListener('change', async () => {
+        const files = Array.from(input.files || []);
+        input.value = '';
+        if (files.length === 0) return;
+        await this._uploadAttachments(files);
+      });
+    });
+    panel.querySelectorAll('[data-dropzone]').forEach(zone => {
+      zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('attachment-dropzone--active'); });
+      zone.addEventListener('dragleave', (e) => { if (e.relatedTarget && zone.contains(e.relatedTarget)) return; zone.classList.remove('attachment-dropzone--active'); });
+      zone.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        zone.classList.remove('attachment-dropzone--active');
+        const files = Array.from(e.dataTransfer?.files || []);
+        if (files.length === 0) return;
+        await this._uploadAttachments(files);
+      });
+    });
+    panel.querySelectorAll('[data-download]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const errEl = document.getElementById('task-attachments-error');
+        errEl?.classList.add('hidden');
+        try {
+          const url = await AttachmentsAPI.getSignedUrl(btn.dataset.path);
+          window.open(url, '_blank', 'noopener');
+        } catch (err) {
+          if (errEl) { errEl.textContent = err.message || 'Could not open file.'; errEl.classList.remove('hidden'); }
+        }
+      });
+    });
+    panel.querySelectorAll('[data-delete-attachment]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Delete this attachment? This cannot be undone.')) return;
+        const errEl = document.getElementById('task-attachments-error');
+        errEl?.classList.add('hidden');
+        const attachment = (this._attachments || []).find(a => a.id === btn.dataset.deleteAttachment);
+        if (!attachment) return;
+        btn.disabled = true;
+        try {
+          await AttachmentsAPI.remove(attachment);
+          await this._loadAttachments();
+        } catch (err) {
+          console.error('CorLink: failed to delete attachment', err);
+          btn.disabled = false;
+          if (errEl) { errEl.textContent = err.message || 'Could not delete this attachment.'; errEl.classList.remove('hidden'); }
+        }
+      });
+    });
+    // Replace — upload the new file FIRST, only remove the old one once
+    // that succeeds. A failed upload leaves the original attachment
+    // completely intact (safer than delete-then-upload, which would
+    // leave neither file behind if the upload step failed). There is
+    // no "replace" concept at the backend — `attachments` has no
+    // version/supersedes column (schema.sql) — this is a client-
+    // orchestrated upload-then-delete-old sequence over the two
+    // existing primitives, not a new API. See docs/48 §Upload lifecycle.
+    panel.querySelectorAll('[data-replace-input]').forEach(input => {
+      input.addEventListener('change', async () => {
+        const file = input.files?.[0];
+        input.value = '';
+        if (!file) return;
+        const attachmentId = input.dataset.replaceInput;
+        const errEl = document.getElementById('task-attachments-error');
+        errEl?.classList.add('hidden');
+        const attachment = (this._attachments || []).find(a => a.id === attachmentId);
+        if (!attachment) return;
+        try {
+          await AttachmentsAPI.upload('task', this._taskId, file);
+        } catch (err) {
+          if (errEl) { errEl.textContent = `Replace failed, original file unchanged: ${err.message || 'upload failed'}`; errEl.classList.remove('hidden'); }
+          return;
+        }
+        try {
+          await AttachmentsAPI.remove(attachment);
+        } catch (err) {
+          console.error('CorLink: uploaded replacement but failed to remove the original', err);
+          if (errEl) { errEl.textContent = `New file uploaded, but the original ("${attachment.filename}") could not be removed automatically — delete it manually.`; errEl.classList.remove('hidden'); }
+        }
+        await this._loadAttachments();
+      });
+    });
   },
 
   // ── Activity (T2C): task_comments merged with audit_logs-derived

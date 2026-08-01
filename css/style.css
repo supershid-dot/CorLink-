@@ -2932,6 +2932,23 @@ mark.quote-highlight {
 .attachment-dropzone i { font-size: 1.125rem; }
 .attachment-browse-link { text-decoration: underline; }
 
+/* ── Task Attachments (js/views/task-detail.js, T3D) ────────────
+   Richer than .attachment-chip above — the spec requires Size and
+   Uploaded date visible per row, not just a filename chip, so this is
+   a new row layout (reusing .attachment-dropzone as-is for upload). */
+.task-attachments-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; }
+.task-attachment-row { display: flex; align-items: flex-start; gap: 10px; }
+.task-attachment-row > i { color: var(--color-text-muted); margin-top: 3px; }
+.task-attachment-info { flex: 1; min-width: 0; }
+.task-attachment-name {
+  display: block; background: none; border: none; padding: 0; margin: 0;
+  font-size: 0.875rem; font-weight: 500; color: var(--color-primary-dark);
+  text-decoration: underline; cursor: pointer; text-align: left;
+  word-break: break-word;
+}
+.task-attachment-meta { font-size: 0.75rem; color: var(--color-text-muted); margin-top: 2px; }
+.task-attachment-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
 /* ── Prisoner picker (letter compose modal) ──────────────────── */
 /* Searchable dropdown over the org's prisoner registry: type-ahead
    input, match list, then a summary card once one is chosen. Bound in

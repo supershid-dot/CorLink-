@@ -61,12 +61,25 @@ CREATE POLICY "attachments_storage_select" ON storage.objects
 -- allowlist was never updated to match, so every upload attempt for an
 -- internal reply's attachment (path internal_reply/{id}/{filename})
 -- has been silently rejected by Storage since that feature shipped.
+--
+-- 'task' added by patch-task-attachments.sql (T3D) — the table-level
+-- attachments_select/_insert/_delete policies gained a 'task' branch
+-- there; this allowlist has to be kept in sync by hand since it isn't
+-- part of that (or any) historical DROP+CREATE patch chain.
+--
+-- KNOWN, STILL-UNFIXED GAP found while making the 'task' change above:
+-- 'meeting' is missing from this list too — meeting attachments
+-- shipped via patch-meetings-foundation.sql (2026-07-22), which added
+-- a 'meeting' branch to the table-level policies but never touched
+-- this file, so every meeting attachment upload has likely been
+-- silently rejected by Storage since. NOT fixed here — out of
+-- T3D's own scope (Task Attachments) — see docs/48 §Known limitations.
 DROP POLICY IF EXISTS "attachments_storage_insert" ON storage.objects;
 CREATE POLICY "attachments_storage_insert" ON storage.objects
   FOR INSERT WITH CHECK (
     bucket_id = 'attachments'
     AND owner = auth.uid()
-    AND (storage.foldername(name))[1] IN ('request', 'response', 'internal_request', 'prisoner_letter', 'prisoner_reply', 'internal_reply', 'external_correspondence', 'external_correspondence_reply')
+    AND (storage.foldername(name))[1] IN ('request', 'response', 'internal_request', 'prisoner_letter', 'prisoner_reply', 'internal_reply', 'external_correspondence', 'external_correspondence_reply', 'task')
   );
 
 DROP POLICY IF EXISTS "attachments_storage_delete" ON storage.objects;
