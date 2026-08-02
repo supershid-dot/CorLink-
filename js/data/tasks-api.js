@@ -150,6 +150,52 @@ const TasksAPI = (() => {
       return data || [];
     },
 
+    async listRelatedTasks(taskId) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('list_related_tasks', { p_task_id: taskId });
+      if (error) throw error;
+      return data || [];
+    },
+
+    async getTaskRelationshipCapabilities(taskId) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('get_task_relationship_capabilities', { p_task_id: taskId });
+      if (error) throw error;
+      return (data && data[0]) || { can_create: false, can_remove: false };
+    },
+
+    async createTaskRelationship(sourceTaskId, targetTaskId, relationshipType) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('create_task_relationship', {
+        p_source_task_id: sourceTaskId,
+        p_target_task_id: targetTaskId,
+        p_relationship_type: relationshipType,
+      });
+      if (error) throw error;
+      return data;
+    },
+
+    async removeTaskRelationship(relationshipId) {
+      const db = getSupabase();
+      const { error } = await db.rpc('remove_task_relationship', { p_relationship_id: relationshipId });
+      if (error) throw error;
+    },
+
+    async searchRelationshipCandidates(taskId, organizationId, query, limit = 20) {
+      const term = (query || '').trim().replace(/[^\p{L}\p{N}\s_-]/gu, ' ').replace(/\s+/g, ' ');
+      if (!term) return [];
+      const db = getSupabase();
+      const { data, error } = await db.from('tasks')
+        .select('id, task_number, title, status, priority, due_date')
+        .eq('organization_id', organizationId)
+        .neq('id', taskId)
+        .or(`task_number.ilike.%${term}%,title.ilike.%${term}%`)
+        .order('updated_at', { ascending: false })
+        .limit(Math.min(Math.max(limit, 1), 50));
+      if (error) throw error;
+      return data || [];
+    },
+
     // ── Module links (supabase/patch-request-task-integration.sql,
     // supabase/patch-meeting-task-integration.sql,
     // supabase/patch-internal-collaboration-task-integration.sql,

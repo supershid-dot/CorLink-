@@ -932,6 +932,13 @@ p  { line-height: 1.6; }
 }
 .linked-record-card .task-card-header i { color: var(--color-text-muted); }
 
+/* Task-to-task relationships reuse the existing task-card and Task Detail
+   layout; no relationship-specific breakpoint is needed. */
+.related-task-list { display: grid; gap: 12px; }
+.related-task-card .task-card-actions { gap: 8px; flex-wrap: wrap; }
+.related-task-add { margin-top: 12px; }
+.user-picker-row.selected { border-color: var(--color-primary); background: var(--color-primary-light); }
+
 /* ── Task Dashboard (js/views/task-dashboard.js, T3A) ──────────────
    Desktop: 4-col, Tablet: 2-col, Mobile: 1-col — same 900px/640px
    breakpoints already used throughout this app (sidebar-nav split,

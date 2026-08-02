@@ -142,6 +142,7 @@ const TaskDetailView = {
       // prisoner-letter-detail.js) rather than blocking _load() above.
       this._loadActivity();
       this._loadAttachments();
+      this._loadRelatedTasks();
     } catch (err) {
       console.error('CorLink: failed to load task', err);
       content.innerHTML = `
@@ -397,6 +398,7 @@ const TaskDetailView = {
           ${this._panel('Details', `<div id="task-details-panel">${this._detailsHtml(t)}</div>`)}
           ${this._panel('Attachments', `<div id="task-attachments-panel">${this._attachmentsLoadingHtml()}</div>`)}
           ${this._panel('Linked Records', this._linkedRecordsHtml())}
+          ${this._panel('Related Tasks', `<div id="task-relationships-panel">${this._relationshipsLoadingHtml()}</div>`)}
           ${this._panel('Activity', `<div id="task-activity-panel">${this._activityLoadingHtml()}</div>`)}
         </div>
         <div class="task-detail-sidebar">
@@ -789,6 +791,76 @@ const TaskDetailView = {
   // ── Activity (T2C): task_comments merged with audit_logs-derived
   // lifecycle events into one chronological feed. Loaded independently
   // of the rest of the page — see the call site in _load() above. ────
+  _relationshipsLoadingHtml() {
+    return `<div class="tab-loading"><span class="spinner spinner--dark"></span> Loading related tasks…</div>`;
+  },
+
+  async _loadRelatedTasks() {
+    const panel = document.getElementById('task-relationships-panel');
+    if (!panel) return;
+    panel.innerHTML = this._relationshipsLoadingHtml();
+    try {
+      const [relationships, capabilities] = await Promise.all([
+        TasksAPI.listRelatedTasks(this._taskId),
+        TasksAPI.getTaskRelationshipCapabilities(this._taskId),
+      ]);
+      this._relationships = relationships;
+      this._relationshipCapabilities = capabilities;
+      panel.innerHTML = this._relationshipsHtml();
+      this._bindRelationshipsPanel(panel);
+    } catch (err) {
+      panel.innerHTML = `<div class="alert alert-error"><i class="ti ti-alert-triangle"></i> Couldn't load related tasks: ${this._escapeHtml(err.message || 'unknown error')}. <button class="btn btn-secondary btn-xs" data-retry-relationships>Retry</button></div>`;
+      panel.querySelector('[data-retry-relationships]')?.addEventListener('click', () => this._loadRelatedTasks());
+    }
+  },
+
+  _relationshipLabel(type) {
+    return ({ related: 'Related', blocked_by: 'Blocked by', blocks: 'Blocks', duplicate: 'Duplicate', parent: 'Parent', child: 'Child' })[type] || type;
+  },
+
+  _relationshipsHtml() {
+    const rows = (this._relationships || []).map(r => {
+      const assignees = (r.assignees || []).map(a => a.full_name).filter(Boolean).join(', ') || 'Unassigned';
+      return `<div class="task-card related-task-card">
+        <div class="task-card-header"><span class="badge badge-outline">${this._escapeHtml(this._relationshipLabel(r.relationship_type))}</span><a class="task-card-number task-number-link" href="#task-detail?id=${r.related_task_id}">${this._escapeHtml(r.task_number)}</a><span class="task-card-title">${this._escapeHtml(r.title)}</span></div>
+        <div class="task-card-meta"><span>${this._statusBadge(r.status)}</span><span>${this._priorityBadge(r.priority)}</span><span>Assignee: ${this._escapeHtml(assignees)}</span><span>Due: ${r.due_date ? new Date(r.due_date).toLocaleDateString() : '—'}</span></div>
+        <div class="task-card-actions"><a class="btn btn-secondary btn-xs" href="#task-detail?id=${r.related_task_id}">Open</a>${r.can_remove ? `<button class="btn btn-secondary btn-xs" data-remove-relationship="${r.relationship_id}">Remove Relationship</button>` : ''}</div>
+      </div>`;
+    }).join('');
+    return `${rows ? `<div class="related-task-list">${rows}</div>` : '<p class="structure-empty">No related tasks.</p>'}${this._relationshipCapabilities?.can_create ? '<div class="task-detail-actions related-task-add"><button class="btn btn-secondary btn-sm" data-create-relationship><i class="ti ti-link-plus"></i> Add Relationship</button></div>' : ''}<div class="alert alert-error hidden" data-relationships-error></div>`;
+  },
+
+  _bindRelationshipsPanel(panel) {
+    panel.querySelector('[data-create-relationship]')?.addEventListener('click', () => this._openRelationshipModal());
+    panel.querySelectorAll('[data-remove-relationship]').forEach(btn => btn.addEventListener('click', async () => {
+      const errEl = panel.querySelector('[data-relationships-error]');
+      errEl.classList.add('hidden'); btn.disabled = true;
+      try { await TasksAPI.removeTaskRelationship(btn.dataset.removeRelationship); await this._loadRelatedTasks(); }
+      catch (err) { btn.disabled = false; errEl.textContent = err.message || 'Could not remove this relationship.'; errEl.classList.remove('hidden'); }
+    }));
+  },
+
+  _openRelationshipModal() {
+    this._openModal(`<h3>Add Task Relationship</h3><form class="modal-form" id="task-relationship-form">
+      <div class="field-group"><label for="task-relationship-search">Search task number or title</label><input class="form-input" id="task-relationship-search" type="search" autocomplete="off" placeholder="Start typing…"></div>
+      <div id="task-relationship-results" class="user-picker-results"><p class="structure-empty">Enter a task number or title.</p></div><input type="hidden" id="task-relationship-target">
+      <div class="field-group"><label for="task-relationship-type">Relationship</label><select class="form-select" id="task-relationship-type"><option value="related">Related</option><option value="blocked_by">Blocked by</option><option value="blocks">Blocks</option><option value="duplicate">Duplicate</option><option value="parent">Parent</option><option value="child">Child</option></select></div>
+      <div class="alert alert-error hidden" id="task-relationship-error"></div><div class="modal-actions"><button type="button" class="btn btn-secondary" data-close-modal>Cancel</button><button class="btn btn-primary" type="submit" disabled>Add Relationship</button></div></form>`);
+    const root = document.getElementById('modal-root'); const form = root.querySelector('#task-relationship-form'); const search = root.querySelector('#task-relationship-search'); const results = root.querySelector('#task-relationship-results'); const target = root.querySelector('#task-relationship-target'); const submit = form.querySelector('[type="submit"]'); let timer;
+    search.addEventListener('input', () => { clearTimeout(timer); target.value = ''; submit.disabled = true; timer = setTimeout(async () => {
+      const query = search.value.trim(); if (!query) { results.innerHTML = '<p class="structure-empty">Enter a task number or title.</p>'; return; }
+      results.innerHTML = '<div class="tab-loading"><span class="spinner spinner--dark"></span> Searching…</div>';
+      try { const matches = await TasksAPI.searchRelationshipCandidates(this._taskId, this._task.organization_id, query); const activeIds = new Set((this._relationships || []).map(r => r.related_task_id));
+        results.innerHTML = matches.length ? matches.map(t => `<button type="button" class="user-picker-row" data-select-related-task="${t.id}" ${activeIds.has(t.id) ? 'disabled' : ''}><strong>${this._escapeHtml(t.task_number)} — ${this._escapeHtml(t.title)}</strong><span>${this._escapeHtml(t.status.replace(/_/g, ' '))}${activeIds.has(t.id) ? ' · Already related' : ''}</span></button>`).join('') : '<p class="structure-empty">No visible matching tasks.</p>';
+        results.querySelectorAll('[data-select-related-task]:not([disabled])').forEach(btn => btn.addEventListener('click', () => { target.value = btn.dataset.selectRelatedTask; results.querySelectorAll('[data-select-related-task]').forEach(row => row.classList.toggle('selected', row === btn)); submit.disabled = false; }));
+      } catch (err) { results.innerHTML = `<div class="alert alert-error">${this._escapeHtml(err.message || 'Search failed. Try again.')}</div>`; }
+    }, 250); });
+    form.addEventListener('submit', async e => { e.preventDefault(); const errEl = root.querySelector('#task-relationship-error'); if (!target.value) return; submit.disabled = true; errEl.classList.add('hidden');
+      try { await TasksAPI.createTaskRelationship(this._taskId, target.value, root.querySelector('#task-relationship-type').value); this._closeModal(); await this._loadRelatedTasks(); }
+      catch (err) { submit.disabled = false; errEl.textContent = err.message || 'Could not create this relationship.'; errEl.classList.remove('hidden'); }
+    }); search.focus();
+  },
+
   _activityLoadingHtml() {
     return `<div class="tab-loading"><span class="spinner spinner--dark"></span> Loading activity…</div>`;
   },
