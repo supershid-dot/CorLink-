@@ -36,6 +36,15 @@ const TasksAPI = (() => {
       return (data && data[0]) || null;
     },
 
+    async getTaskDependencyLifecycleState(taskId) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('get_task_dependency_lifecycle_state', {
+        p_task_id: taskId,
+      });
+      if (error) throw error;
+      return (data && data[0]) || null;
+    },
+
     // ── Mutating RPCs — exact names/parameters, no direct table
     // writes, no client-supplied actor identity ─────────────────────
     async createTask({

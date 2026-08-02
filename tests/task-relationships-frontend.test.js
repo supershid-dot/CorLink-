@@ -20,7 +20,7 @@ async function check(name, fn) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.setContent('<style>' + cssSource + '</style><div id="task-relationships-panel"></div><div id="modal-root"></div>');
+  await page.setContent('<style>' + cssSource + '</style><div id="task-relationships-panel"></div><div id="task-lifecycle-actions-panel"></div><div id="modal-root"></div>');
   await page.addScriptTag({ content: `window.TasksAPI={}; window.AppShell={initials:n=>n.slice(0,2)}; window.Auth={}; window.Router={}; window.RequestsAPI={}; window.AdminAPI={}; window.AttachmentsAPI={}; ${viewSource}\nwindow.__view=TaskDetailView;` });
   await page.evaluate(() => {
     const v = window.__view;
@@ -93,6 +93,67 @@ async function check(name, fn) {
   await check('T2A-T3D panel regression markers', async () => {
     for (const marker of ['Details','Attachments','Linked Records','Activity','Assignees','Watchers','Actions']) assert(viewSource.includes(`_panel('${marker}'`));
     assert(apiSource.includes('listTasks') && apiSource.includes('fetchTaskComments') && apiSource.includes('fetchTaskAssignments'));
+  });
+  await check('dependency lifecycle API wrapper', async () => {
+    assert(apiSource.includes("db.rpc('get_task_dependency_lifecycle_state'"));
+  });
+  await check('blocked state rendering and Complete gating', async () => {
+    const html = await page.evaluate(() => {
+      const v=window.__view;
+      v._user={id:'manager',is_super_admin:false,org_id:'org-a'};
+      v._isSupervisor=false; v._mySectionIds=new Set();
+      v._task={id:'task-a',organization_id:'org-a',created_by:'manager',status:'in_progress',assignees:[]};
+      v._dependencyLifecycleState={active_prerequisite_count:2,unresolved_prerequisite_count:2,is_blocked:true,can_start:false,can_complete:false};
+      v._dependencyLifecycleError=null;
+      return v._actionsHtml(v._task);
+    });
+    assert.match(html,/blocked by 2 unresolved prerequisites/);
+    assert.doesNotMatch(html,/data-task-detail-action="complete"/);
+    assert.match(html,/data-task-detail-action="cancel"/);
+  });
+  await check('hidden prerequisite details never rendered', async () => {
+    const html = await page.evaluate(() => {
+      window.__view._dependencyLifecycleState={active_prerequisite_count:null,unresolved_prerequisite_count:null,is_blocked:true,can_start:false,can_complete:false};
+      return window.__view._actionsHtml(window.__view._task);
+    });
+    assert.match(html,/one or more prerequisites are unresolved/);
+    assert.doesNotMatch(html,/task-b|TSK-|Confidential/);
+  });
+  await check('unblocked Complete behavior unchanged', async () => {
+    const html = await page.evaluate(() => {
+      window.__view._dependencyLifecycleState={active_prerequisite_count:1,unresolved_prerequisite_count:0,is_blocked:false,can_start:false,can_complete:true};
+      return window.__view._actionsHtml(window.__view._task);
+    });
+    assert.match(html,/data-task-detail-action="complete"/);
+  });
+  await check('no Start control invented', async () => {
+    const html = await page.evaluate(() => window.__view._actionsHtml(window.__view._task));
+    assert.doesNotMatch(html,/data-task-detail-action="start"|>Start</);
+  });
+  await check('dependency state loading marker', async () => {
+    assert.match(await page.evaluate(() => window.__view._actionsLoadingHtml(window.__view._task)),/Checking prerequisites/);
+  });
+  await check('dependency state error and retry', async () => {
+    await page.evaluate(async () => {
+      window.__view._closeModal();
+      window.TasksAPI.getTaskDependencyLifecycleState=async()=>{throw new Error('state offline')};
+      await window.__view._loadDependencyLifecycleState();
+    });
+    assert.match(await page.locator('[data-dependency-state-error]').innerText(),/Complete is unavailable/);
+    assert.strictEqual(await page.locator('[data-retry-dependency-state]').count(),1);
+    await page.evaluate(() => { window.TasksAPI.getTaskDependencyLifecycleState=async()=>({active_prerequisite_count:0,unresolved_prerequisite_count:0,is_blocked:false,can_complete:true}); });
+    await page.locator('[data-retry-dependency-state]').click();
+    await page.waitForFunction(() => document.querySelector('[data-task-detail-action="complete"]'));
+  });
+  await check('blocked RPC error handled without hidden details', async () => {
+    await page.evaluate(() => {
+      window.TasksAPI.completeTask=async()=>{throw new Error('Task cannot be completed because one or more prerequisites are unresolved.')};
+      window.__view._confirmLifecycleAction('complete');
+    });
+    await page.locator('#task-lifecycle-confirm-btn').click();
+    const message=await page.locator('#task-lifecycle-error').innerText();
+    assert.strictEqual(message,'Task cannot be completed because one or more prerequisites are unresolved.');
+    assert.doesNotMatch(message,/task-b|TSK-|Confidential/);
   });
 
   await browser.close();

@@ -108,6 +108,8 @@ const TaskDetailView = {
         return;
       }
       this._task = task;
+      this._dependencyLifecycleState = null;
+      this._dependencyLifecycleError = null;
 
       // Org member list is fetched ONCE, in full, and serves three
       // needs at once: resolving names for creator/completed_by (as
@@ -143,6 +145,7 @@ const TaskDetailView = {
       this._loadActivity();
       this._loadAttachments();
       this._loadRelatedTasks();
+      this._loadDependencyLifecycleState();
     } catch (err) {
       console.error('CorLink: failed to load task', err);
       content.innerHTML = `
@@ -404,7 +407,7 @@ const TaskDetailView = {
         <div class="task-detail-sidebar">
           ${this._panel('Assignees', `<div id="task-assignees-panel">${this._assigneesHtml(t)}</div>`)}
           ${this._panel('Watchers', `<div id="task-watchers-panel">${this._watchersHtml(t)}</div>`)}
-          ${this._panel('Actions', this._actionsHtml(t))}
+          ${this._panel('Actions', `<div id="task-lifecycle-actions-panel">${this._actionsLoadingHtml(t)}</div>`)}
         </div>
       </div>
     `;
@@ -1129,9 +1132,33 @@ const TaskDetailView = {
   // transitions the same table allows (draft->open, waiting<->in_
   // progress, etc.) are intentionally not exposed here — T3C's own
   // scope is Complete/Cancel only, see docs/47.
+  _actionsLoadingHtml(t) {
+    return `${this._actionsHtml(t)}<p class="field-hint" data-dependency-state-loading><span class="spinner spinner--dark" style="width:14px;height:14px;"></span> Checking prerequisites…</p>`;
+  },
+
+  async _loadDependencyLifecycleState() {
+    const panel = document.getElementById('task-lifecycle-actions-panel');
+    if (!panel) return;
+    panel.innerHTML = this._actionsLoadingHtml(this._task);
+    this._bindLifecycleActions(panel);
+    try {
+      const state = await TasksAPI.getTaskDependencyLifecycleState(this._taskId);
+      if (!state) throw new Error('Dependency state is unavailable.');
+      this._dependencyLifecycleState = state;
+      this._dependencyLifecycleError = null;
+    } catch (err) {
+      console.error('CorLink: failed to load Task dependency lifecycle state', err);
+      this._dependencyLifecycleState = null;
+      this._dependencyLifecycleError = err;
+    }
+    panel.innerHTML = this._actionsHtml(this._task);
+    this._bindLifecycleActions(panel);
+  },
+
   _actionsHtml(t) {
     const canManage = this._canManage();
-    const canComplete = ['in_progress', 'waiting'].includes(t.status) && (canManage || this._isActiveAssignee());
+    const completeAuthorized = ['in_progress', 'waiting'].includes(t.status) && (canManage || this._isActiveAssignee());
+    const canComplete = completeAuthorized && this._dependencyLifecycleState?.can_complete === true;
     const canCancel = ['draft', 'open', 'in_progress', 'waiting'].includes(t.status) && canManage;
 
     const btn = (label, icon, action) => `<button class="btn btn-secondary btn-sm" data-task-detail-action="${action}"><i class="ti ${icon}"></i> ${label}</button>`;
@@ -1139,17 +1166,30 @@ const TaskDetailView = {
     if (canComplete) items.push(btn('Complete', 'ti-check', 'complete'));
     if (canCancel) items.push(btn('Cancel', 'ti-x', 'cancel'));
 
-    if (items.length === 0) return `<p class="structure-empty">No actions available.</p>`;
-    return `<div class="task-detail-actions">${items.join('')}</div>`;
+    let explanation = '';
+    if (completeAuthorized && this._dependencyLifecycleState?.is_blocked) {
+      const unresolved = this._dependencyLifecycleState.unresolved_prerequisite_count;
+      explanation = `<div class="alert alert-warning" data-task-dependency-blocked>${Number.isInteger(unresolved) ? `This task is blocked by ${unresolved} unresolved prerequisite${unresolved === 1 ? '' : 's'}.` : 'This task is blocked because one or more prerequisites are unresolved.'}</div>`;
+    } else if (completeAuthorized && this._dependencyLifecycleError) {
+      explanation = `<div class="alert alert-error" data-dependency-state-error>Couldn’t verify dependency state. Complete is unavailable. <button class="btn btn-secondary btn-sm" data-retry-dependency-state>Retry</button></div>`;
+    }
+
+    const actions = items.length ? `<div class="task-detail-actions">${items.join('')}</div>` : `<p class="structure-empty">No actions available.</p>`;
+    return `${explanation}${actions}`;
   },
 
   _bindContent(content) {
-    content.querySelectorAll('[data-task-detail-action]').forEach(btn => {
-      btn.addEventListener('click', () => this._confirmLifecycleAction(btn.dataset.taskDetailAction));
-    });
+    this._bindLifecycleActions(content);
     this._bindAssigneesPanel(document.getElementById('task-assignees-panel'));
     this._bindWatchersPanel(document.getElementById('task-watchers-panel'));
     this._bindDetailsPanel(document.getElementById('task-details-panel'));
+  },
+
+  _bindLifecycleActions(root) {
+    root.querySelectorAll('[data-task-detail-action]').forEach(btn => {
+      btn.addEventListener('click', () => this._confirmLifecycleAction(btn.dataset.taskDetailAction));
+    });
+    root.querySelector('[data-retry-dependency-state]')?.addEventListener('click', () => this._loadDependencyLifecycleState());
   },
 
   // ── Editing panel toggle + save (T3C) ───────────────────────────
