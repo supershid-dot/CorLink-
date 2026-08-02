@@ -5,14 +5,18 @@ CREATE TABLE IF NOT EXISTS task_relationships (
   id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   source_task_id    UUID        NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   target_task_id    UUID        NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  relationship_type TEXT        NOT NULL CHECK (relationship_type IN (
-                      'related', 'blocked_by', 'blocks', 'duplicate', 'parent', 'child'
-                    )),
+  relationship_type TEXT        NOT NULL,
   created_by        UUID        NOT NULL REFERENCES users(id),
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   removed_by        UUID        REFERENCES users(id),
   removed_at        TIMESTAMPTZ,
-  CONSTRAINT task_relationships_no_self CHECK (source_task_id <> target_task_id)
+  CONSTRAINT task_relationships_type_check CHECK (
+    relationship_type IN ('related', 'duplicate', 'parent')
+  ),
+  CONSTRAINT task_relationships_no_self CHECK (source_task_id <> target_task_id),
+  CONSTRAINT task_relationships_canonical_direction CHECK (
+    relationship_type = 'parent' OR source_task_id < target_task_id
+  )
 );
 
 CREATE INDEX IF NOT EXISTS idx_task_relationships_source_active
@@ -20,7 +24,7 @@ CREATE INDEX IF NOT EXISTS idx_task_relationships_source_active
 CREATE INDEX IF NOT EXISTS idx_task_relationships_target_active
   ON task_relationships(target_task_id, created_at DESC) WHERE removed_at IS NULL;
 -- One active relationship of any type per unordered task pair. This also
--- prevents inverse duplicates such as A blocks B plus B blocked_by A.
+-- prevents inverse duplicates and contradictory hierarchy directions.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_task_relationships_active_pair
   ON task_relationships(
     LEAST(source_task_id, target_task_id),
@@ -34,6 +38,30 @@ CREATE POLICY "task_relationships_select" ON task_relationships
   USING (can_view_task(source_task_id) AND can_view_task(target_task_id));
 -- No INSERT/UPDATE/DELETE policies: all writes use the RPCs below.
 
+CREATE OR REPLACE FUNCTION can_view_task_relationship(p_relationship_id UUID)
+RETURNS BOOLEAN AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM task_relationships tr
+    WHERE tr.id = p_relationship_id
+      AND can_view_task(tr.source_task_id)
+      AND can_view_task(tr.target_task_id)
+  );
+$$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp;
+
+ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS audit_logs_record_type_check;
+ALTER TABLE audit_logs ADD CONSTRAINT audit_logs_record_type_check
+  CHECK (record_type IN (
+    'request', 'response', 'internal_request', 'prisoner_letter', 'deadline_extension',
+    'user', 'organization', 'section', 'session', 'attachment', 'external_correspondence',
+    'meeting_room', 'meeting_room_block', 'meeting_room_booking', 'meeting', 'meeting_group', 'meeting_series',
+    'task', 'task_relationship'
+  ));
+
+DROP POLICY IF EXISTS "audit_select_task_relationships" ON audit_logs;
+CREATE POLICY "audit_select_task_relationships" ON audit_logs
+  FOR SELECT TO authenticated
+  USING (record_type = 'task_relationship' AND can_view_task_relationship(record_id));
+
 CREATE OR REPLACE FUNCTION create_task_relationship(
   p_source_task_id UUID,
   p_target_task_id UUID,
@@ -42,8 +70,10 @@ CREATE OR REPLACE FUNCTION create_task_relationship(
 DECLARE
   v_actor UUID := auth.uid();
   v_relationship_id UUID;
-  v_parent UUID;
-  v_child UUID;
+  v_source UUID;
+  v_target UUID;
+  v_source_org UUID;
+  v_target_org UUID;
 BEGIN
   IF v_actor IS NULL THEN
     RAISE EXCEPTION 'create_task_relationship requires an authenticated caller';
@@ -54,57 +84,53 @@ BEGIN
   IF p_source_task_id = p_target_task_id THEN
     RAISE EXCEPTION 'A task cannot be related to itself';
   END IF;
-  IF p_relationship_type IS NULL OR p_relationship_type NOT IN (
-    'related', 'blocked_by', 'blocks', 'duplicate', 'parent', 'child'
-  ) THEN
+  IF p_relationship_type IS NULL OR p_relationship_type NOT IN ('related', 'duplicate', 'parent') THEN
     RAISE EXCEPTION 'Invalid task relationship type';
   END IF;
-  IF NOT can_manage_task(p_source_task_id) THEN
-    RAISE EXCEPTION 'Not authorized to manage relationships for this task';
+  IF NOT can_manage_task(p_source_task_id) OR NOT can_manage_task(p_target_task_id) THEN
+    RAISE EXCEPTION 'Not authorized to manage relationships for both tasks';
   END IF;
-  IF NOT can_view_task(p_target_task_id) THEN
-    RAISE EXCEPTION 'Related task not found or not visible';
+
+  SELECT organization_id INTO v_source_org FROM tasks WHERE id = p_source_task_id;
+  SELECT organization_id INTO v_target_org FROM tasks WHERE id = p_target_task_id;
+  IF v_source_org IS NULL OR v_target_org IS NULL OR v_source_org <> v_target_org THEN
+    RAISE EXCEPTION 'Task relationships require two tasks in the same organization';
   END IF;
+
+  -- Every create in one organization takes exactly one transaction-level
+  -- advisory lock. There is no multi-lock ordering and therefore no lock-order
+  -- deadlock. Duplicate, reverse-pair, contradictory-parent, and recursive
+  -- cycle checks all execute while this organization graph is serialized.
+  PERFORM pg_advisory_xact_lock(hashtextextended('task_relationships:' || v_source_org::text, 0));
+
+  IF p_relationship_type IN ('related', 'duplicate') THEN
+    v_source := LEAST(p_source_task_id, p_target_task_id);
+    v_target := GREATEST(p_source_task_id, p_target_task_id);
+  ELSE
+    v_source := p_source_task_id;
+    v_target := p_target_task_id;
+  END IF;
+
   IF EXISTS (
     SELECT 1 FROM task_relationships tr
     WHERE tr.removed_at IS NULL
-      AND LEAST(tr.source_task_id, tr.target_task_id) = LEAST(p_source_task_id, p_target_task_id)
-      AND GREATEST(tr.source_task_id, tr.target_task_id) = GREATEST(p_source_task_id, p_target_task_id)
+      AND LEAST(tr.source_task_id, tr.target_task_id) = LEAST(v_source, v_target)
+      AND GREATEST(tr.source_task_id, tr.target_task_id) = GREATEST(v_source, v_target)
   ) THEN
     RAISE EXCEPTION 'An active relationship already exists between these tasks';
   END IF;
 
-  IF p_relationship_type IN ('parent', 'child') THEN
-    -- Serialize hierarchy checks so two concurrent inserts cannot each pass
-    -- against a snapshot that lacks the other's edge and jointly form a cycle.
-    PERFORM pg_advisory_xact_lock(hashtext('task_relationships_parent_child'));
-    IF p_relationship_type = 'parent' THEN
-      v_parent := p_source_task_id;
-      v_child := p_target_task_id;
-    ELSE
-      v_parent := p_target_task_id;
-      v_child := p_source_task_id;
-    END IF;
-
-    -- Existing parent->child edges are normalized in the recursive CTE.
-    -- A path from the proposed child back to the proposed parent would close
-    -- a cycle, so reject it before inserting the new edge.
+  IF p_relationship_type = 'parent' THEN
     IF EXISTS (
       WITH RECURSIVE descendants(task_id) AS (
-        SELECT v_child
+        SELECT v_target
         UNION
-        SELECT CASE
-          WHEN tr.relationship_type = 'parent' THEN tr.target_task_id
-          ELSE tr.source_task_id
-        END
+        SELECT tr.target_task_id
         FROM task_relationships tr
-        JOIN descendants d ON d.task_id = CASE
-          WHEN tr.relationship_type = 'parent' THEN tr.source_task_id
-          ELSE tr.target_task_id
-        END
-        WHERE tr.removed_at IS NULL AND tr.relationship_type IN ('parent', 'child')
+        JOIN descendants d ON d.task_id = tr.source_task_id
+        WHERE tr.removed_at IS NULL AND tr.relationship_type = 'parent'
       )
-      SELECT 1 FROM descendants WHERE task_id = v_parent
+      SELECT 1 FROM descendants WHERE task_id = v_source
     ) THEN
       RAISE EXCEPTION 'This parent/child relationship would create a circular chain';
     END IF;
@@ -113,8 +139,12 @@ BEGIN
   INSERT INTO task_relationships (
     source_task_id, target_task_id, relationship_type, created_by
   ) VALUES (
-    p_source_task_id, p_target_task_id, p_relationship_type, v_actor
+    v_source, v_target, p_relationship_type, v_actor
   ) RETURNING id INTO v_relationship_id;
+
+  INSERT INTO audit_logs (user_id, action, record_type, record_id, notes)
+  VALUES (v_actor, 'task_linked', 'task_relationship', v_relationship_id,
+          'type=' || p_relationship_type);
 
   RETURN v_relationship_id;
 EXCEPTION
@@ -144,7 +174,7 @@ BEGIN
   END IF;
   IF NOT (
     can_manage_task(v_relationship.source_task_id)
-    OR can_manage_task(v_relationship.target_task_id)
+    AND can_manage_task(v_relationship.target_task_id)
   ) THEN
     RAISE EXCEPTION 'Not authorized to remove this task relationship';
   END IF;
@@ -152,6 +182,10 @@ BEGIN
   UPDATE task_relationships
   SET removed_at = NOW(), removed_by = v_actor
   WHERE id = p_relationship_id AND removed_at IS NULL;
+
+  INSERT INTO audit_logs (user_id, action, record_type, record_id, notes)
+  VALUES (v_actor, 'task_unlinked', 'task_relationship', p_relationship_id,
+          'type=' || v_relationship.relationship_type);
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp;
 
@@ -173,10 +207,7 @@ RETURNS TABLE (
     tr.id,
     CASE
       WHEN tr.source_task_id = p_task_id THEN tr.relationship_type
-      WHEN tr.relationship_type = 'blocked_by' THEN 'blocks'
-      WHEN tr.relationship_type = 'blocks' THEN 'blocked_by'
       WHEN tr.relationship_type = 'parent' THEN 'child'
-      WHEN tr.relationship_type = 'child' THEN 'parent'
       ELSE tr.relationship_type
     END,
     related.id,
@@ -195,7 +226,7 @@ RETURNS TABLE (
     ), '[]'::jsonb),
     related.due_date,
     tr.created_at,
-    can_manage_task(tr.source_task_id) OR can_manage_task(tr.target_task_id)
+    can_manage_task(tr.source_task_id) AND can_manage_task(tr.target_task_id)
   FROM task_relationships tr
   JOIN tasks related ON related.id = CASE
     WHEN tr.source_task_id = p_task_id THEN tr.target_task_id
@@ -222,7 +253,9 @@ REVOKE ALL ON FUNCTION create_task_relationship(UUID, UUID, TEXT) FROM PUBLIC, a
 REVOKE ALL ON FUNCTION remove_task_relationship(UUID) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION list_related_tasks(UUID) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION get_task_relationship_capabilities(UUID) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION can_view_task_relationship(UUID) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION create_task_relationship(UUID, UUID, TEXT) TO authenticated;
 GRANT EXECUTE ON FUNCTION remove_task_relationship(UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION list_related_tasks(UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION get_task_relationship_capabilities(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION can_view_task_relationship(UUID) TO authenticated;

@@ -8,7 +8,7 @@ The table exposes SELECT only. Creation and removal are exclusively SECURITY DEF
 
 ## Relationship model
 
-The supported types are `related`, `blocked_by`, `blocks`, `duplicate`, `parent`, and `child`. A type is expressed from the source task's perspective. When the target task is viewed, `list_related_tasks()` returns the inverse (`blocks`/`blocked_by` and `parent`/`child`); `related` and `duplicate` are symmetric.
+The only stored and createable types are `related`, `duplicate`, and `parent`. `related` and `duplicate` are symmetric and stored in canonical UUID order. `parent` is directional: source is parent and target is child. `child` is a read-only inverse label derived by `list_related_tasks()` when the target endpoint is viewed; it is never stored or accepted by creation.
 
 Only one active relationship is allowed for an unordered pair of tasks. Removal is soft, allowing the same pair to be related again later while retaining prior rows for history.
 
@@ -16,11 +16,11 @@ Only one active relationship is allowed for an unordered pair of tasks. Removal 
 
 Visibility requires `can_view_task()` for both endpoints. The SELECT RLS policy and listing RPC both delegate to that existing predicate, so a relationship cannot reveal a hidden task.
 
-Creating requires `can_manage_task()` on the source task and visibility of the target. Removing requires visibility of both endpoints and management of either endpoint. `get_task_relationship_capabilities()` provides the server-derived create/remove capability used by Task Detail; UI gating is convenience only and every mutation is re-authorized by its RPC.
+Creating requires `can_manage_task()` on both endpoints and requires both tasks to belong to the same organization. Removing requires visibility and `can_manage_task()` on both endpoints. `get_task_relationship_capabilities()` and per-row `can_remove` values mirror those rules; UI gating is convenience only and every mutation is re-authorized by its RPC.
 
 ## Validation
 
-Self-references are rejected by both the RPC and a table constraint. A partial unique expression index prevents duplicate active unordered pairs, including inverse duplicates. Parent/child edges are normalized to parent-to-child direction inside a recursive CTE; creation is rejected when the proposed child already reaches the proposed parent.
+Self-references are rejected by both the RPC and a table constraint. A partial unique expression index prevents duplicate active unordered pairs, including inverse and contradictory parent duplicates. Parent edges are rejected when the proposed child already reaches the proposed parent. An organization-scoped transaction advisory lock serializes the duplicate and recursive-cycle decision with insertion, making those checks safe under concurrent calls without multi-lock deadlock ordering.
 
 The modal excludes the current task, marks already-related results unavailable, and displays backend errors for duplicate, permission, and circular-chain races.
 
@@ -34,15 +34,17 @@ Related Tasks uses the existing Task Detail main column, task cards, buttons, ba
 
 ## Testing
 
-`supabase/validate-task-relationships.sql` verifies table structure, SELECT-only RLS, indexes, RPC presence and hardening, and `can_view_task()` delegation. `supabase/test-task-relationships.sql` is a rollback-wrapped local/disposable-database behavioral suite covering creation, inverse listing, self and duplicate rejection, circular parent/child rejection, server capabilities, soft deletion, and post-removal visibility.
+`supabase/validate-task-relationships.sql` verifies the exact stored vocabulary, canonical storage, SELECT-only RLS, grants, RPC hardening, both-endpoint authorization, derived `child`, and confidential audit visibility. On a fresh disposable PostgreSQL 17.10 database rebuilt through T3D.1, `supabase/test-task-relationships.sql` passes 30/30 authenticated scenarios, including real concurrent duplicate, reverse, and parent-cycle calls. The required T3D.1 security, task foundation, five module integration, audit, task attachment, and meeting attachment validators all pass after reapplication.
 
-Frontend verification covers initial loading, empty state, retry, bounded number/title search, creation, removal, navigation, and server capability gating. Existing static frontend checks and JavaScript syntax checks remain regression gates.
+The Playwright/Edge headless harness passes 17/17 scenarios covering exact creation options, derived child rendering, loading, empty, retry, navigation, permission gating, confirmed removal and failure handling, candidate exclusion, creation failure, responsive rendering, regression markers, and zero page errors. Every modified JavaScript file also passes `node --check`.
+
+The rollback audit proves refusal while any active or removed relationship history exists. After explicit disposable-data removal, schema objects and grants match the T3D.1 capture exactly (the random `pg_dump` restriction nonce is normalized for comparison), and T3E/T3E.1 reapply cleanly with all validation repeated.
 
 ## Known limitations
 
 - Task search is substring-based and intentionally limited to visible tasks in the current task's organization.
 - Relationships have no free-text notes, ordering, or notification fan-out.
-- Only parent/child relationships are cycle-checked; blocking cycles are not prohibited by the T3E model.
+- Parent hierarchy is intentionally the only directional relationship model; task dependencies are outside T3E scope.
 - Soft-removed history has no dedicated UI.
 
 ## Future enhancements

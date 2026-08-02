@@ -815,7 +815,7 @@ const TaskDetailView = {
   },
 
   _relationshipLabel(type) {
-    return ({ related: 'Related', blocked_by: 'Blocked by', blocks: 'Blocks', duplicate: 'Duplicate', parent: 'Parent', child: 'Child' })[type] || type;
+    return ({ related: 'Related', duplicate: 'Duplicate', parent: 'Parent', child: 'Child' })[type] || type;
   },
 
   _relationshipsHtml() {
@@ -833,6 +833,7 @@ const TaskDetailView = {
   _bindRelationshipsPanel(panel) {
     panel.querySelector('[data-create-relationship]')?.addEventListener('click', () => this._openRelationshipModal());
     panel.querySelectorAll('[data-remove-relationship]').forEach(btn => btn.addEventListener('click', async () => {
+      if (!window.confirm('Remove this task relationship? The tasks themselves will not be changed.')) return;
       const errEl = panel.querySelector('[data-relationships-error]');
       errEl.classList.add('hidden'); btn.disabled = true;
       try { await TasksAPI.removeTaskRelationship(btn.dataset.removeRelationship); await this._loadRelatedTasks(); }
@@ -844,7 +845,7 @@ const TaskDetailView = {
     this._openModal(`<h3>Add Task Relationship</h3><form class="modal-form" id="task-relationship-form">
       <div class="field-group"><label for="task-relationship-search">Search task number or title</label><input class="form-input" id="task-relationship-search" type="search" autocomplete="off" placeholder="Start typing…"></div>
       <div id="task-relationship-results" class="user-picker-results"><p class="structure-empty">Enter a task number or title.</p></div><input type="hidden" id="task-relationship-target">
-      <div class="field-group"><label for="task-relationship-type">Relationship</label><select class="form-select" id="task-relationship-type"><option value="related">Related</option><option value="blocked_by">Blocked by</option><option value="blocks">Blocks</option><option value="duplicate">Duplicate</option><option value="parent">Parent</option><option value="child">Child</option></select></div>
+      <div class="field-group"><label for="task-relationship-type">Relationship</label><select class="form-select" id="task-relationship-type"><option value="related">Related</option><option value="duplicate">Duplicate</option><option value="parent">Parent</option></select></div>
       <div class="alert alert-error hidden" id="task-relationship-error"></div><div class="modal-actions"><button type="button" class="btn btn-secondary" data-close-modal>Cancel</button><button class="btn btn-primary" type="submit" disabled>Add Relationship</button></div></form>`);
     const root = document.getElementById('modal-root'); const form = root.querySelector('#task-relationship-form'); const search = root.querySelector('#task-relationship-search'); const results = root.querySelector('#task-relationship-results'); const target = root.querySelector('#task-relationship-target'); const submit = form.querySelector('[type="submit"]'); let timer;
     search.addEventListener('input', () => { clearTimeout(timer); target.value = ''; submit.disabled = true; timer = setTimeout(async () => {
