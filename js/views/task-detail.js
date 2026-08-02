@@ -110,6 +110,9 @@ const TaskDetailView = {
       this._task = task;
       this._dependencyLifecycleState = null;
       this._dependencyLifecycleError = null;
+      this._dependencyLifecycleRequest = null;
+      this._dependencies = [];
+      this._dependencyCapabilities = null;
 
       // Org member list is fetched ONCE, in full, and serves three
       // needs at once: resolving names for creator/completed_by (as
@@ -145,6 +148,7 @@ const TaskDetailView = {
       this._loadActivity();
       this._loadAttachments();
       this._loadRelatedTasks();
+      this._loadDependencies();
       this._loadDependencyLifecycleState();
     } catch (err) {
       console.error('CorLink: failed to load task', err);
@@ -402,6 +406,7 @@ const TaskDetailView = {
           ${this._panel('Attachments', `<div id="task-attachments-panel">${this._attachmentsLoadingHtml()}</div>`)}
           ${this._panel('Linked Records', this._linkedRecordsHtml())}
           ${this._panel('Related Tasks', `<div id="task-relationships-panel">${this._relationshipsLoadingHtml()}</div>`)}
+          ${this._panel('Dependencies', `<div id="task-dependencies-panel">${this._dependenciesLoadingHtml()}</div>`)}
           ${this._panel('Activity', `<div id="task-activity-panel">${this._activityLoadingHtml()}</div>`)}
         </div>
         <div class="task-detail-sidebar">
@@ -865,6 +870,197 @@ const TaskDetailView = {
     }); search.focus();
   },
 
+  // ── Operational Task dependencies (T3F.3) ──────────────────────
+  // Lists, state, capabilities, candidate search, and mutations are all
+  // server-authoritative RPCs. This panel never reads task_dependencies
+  // directly and never reconstructs visibility or management permissions.
+  _dependenciesLoadingHtml() {
+    return `<div class="tab-loading" role="status"><span class="spinner spinner--dark"></span> Loading dependencies…</div>`;
+  },
+
+  async _fetchDependencyLifecycleState(force = false) {
+    if (!force && this._dependencyLifecycleRequest) return this._dependencyLifecycleRequest;
+    this._dependencyLifecycleRequest = (async () => {
+      try {
+        const state = await TasksAPI.getTaskDependencyLifecycleState(this._taskId);
+        if (!state) throw new Error('Dependency state is unavailable.');
+        this._dependencyLifecycleState = state;
+        this._dependencyLifecycleError = null;
+        return state;
+      } catch (err) {
+        this._dependencyLifecycleState = null;
+        this._dependencyLifecycleError = err;
+        throw err;
+      }
+    })();
+    return this._dependencyLifecycleRequest;
+  },
+
+  async _loadDependencies({ forceLifecycle = false } = {}) {
+    const panel = document.getElementById('task-dependencies-panel');
+    if (!panel) return;
+    panel.innerHTML = this._dependenciesLoadingHtml();
+    try {
+      const [dependencies, capabilities] = await Promise.all([
+        TasksAPI.listTaskDependencies(this._taskId, { limit: 100, offset: 0 }),
+        TasksAPI.getTaskDependencyCapabilities(this._taskId),
+        this._fetchDependencyLifecycleState(forceLifecycle),
+      ]);
+      this._dependencies = dependencies;
+      this._dependencyCapabilities = capabilities;
+      panel.innerHTML = this._dependenciesHtml();
+      this._bindDependenciesPanel(panel);
+    } catch (err) {
+      console.error('CorLink: failed to load Task dependencies', err);
+      panel.innerHTML = `<div class="alert alert-error" data-dependencies-error><i class="ti ti-alert-triangle"></i> Couldn't load dependencies: ${this._escapeHtml(err.message || 'unknown error')}. <button class="btn btn-secondary btn-xs" data-retry-dependencies>Retry</button></div>`;
+      panel.querySelector('[data-retry-dependencies]')?.addEventListener('click', () => this._loadDependencies({ forceLifecycle: true }));
+    } finally {
+      if (forceLifecycle) this._renderLifecycleActionsPanel();
+    }
+  },
+
+  _dependencyStateHtml() {
+    const state = this._dependencyLifecycleState;
+    if (!state) return '';
+    const blocked = state.is_blocked === true;
+    const counts = [];
+    if (state.active_prerequisite_count != null) counts.push(`<span>Active prerequisites: <strong>${this._escapeHtml(state.active_prerequisite_count)}</strong></span>`);
+    if (state.unresolved_prerequisite_count != null) counts.push(`<span>Unresolved: <strong>${this._escapeHtml(state.unresolved_prerequisite_count)}</strong></span>`);
+    return `<div class="dependency-state ${blocked ? 'dependency-state--blocked' : 'dependency-state--ready'}" data-dependency-panel-state="${blocked ? 'blocked' : 'ready'}" role="status">
+      <div><span class="badge ${blocked ? 'badge-error' : 'badge-success'}">${blocked ? 'BLOCKED' : 'READY'}</span>${blocked ? '<p>Blocked because one or more prerequisites are unresolved.</p>' : '<p>All active prerequisites are resolved.</p>'}</div>
+      ${counts.length ? `<div class="dependency-state-counts">${counts.join('')}</div>` : ''}
+    </div>`;
+  },
+
+  _dependencyCardHtml(row, isPrerequisite) {
+    const resolved = isPrerequisite && row.status === 'completed';
+    const canRemove = this._dependencyCapabilities?.can_remove_dependency === true && row.can_remove === true;
+    const direction = isPrerequisite ? 'Depends on' : 'Blocks';
+    return `<article class="task-card dependency-task-card" data-dependency-direction="${row.direction}" data-dependency-id="${row.dependency_id}">
+      <div class="task-card-header">
+        <a class="task-card-number task-number-link" href="#task-detail?id=${row.related_task_id}">${this._escapeHtml(row.task_number)}</a>
+        ${this._statusBadge(row.status)}
+      </div>
+      <div class="dependency-task-body">
+        <span class="task-card-title">${this._escapeHtml(row.title)}</span>
+        <div class="task-card-meta"><span>${this._priorityBadge(row.priority)}</span><span>Due: ${row.due_date ? new Date(row.due_date).toLocaleDateString() : '—'}</span></div>
+        <div class="dependency-task-labels"><span class="badge badge-outline">${direction}</span>${isPrerequisite ? `<span class="badge ${resolved ? 'badge-success' : 'badge-warning'}" data-dependency-resolution>${resolved ? 'Completed' : 'Unresolved'}</span>` : ''}</div>
+      </div>
+      <div class="task-card-actions">
+        <a class="btn btn-secondary btn-xs" href="#task-detail?id=${row.related_task_id}" aria-label="Open visible task ${this._escapeAttr(row.task_number)}">Open Task</a>
+        ${canRemove ? `<button class="btn btn-secondary btn-xs" data-remove-dependency="${row.dependency_id}" data-related-task-number="${this._escapeAttr(row.task_number)}">Remove Dependency</button>` : ''}
+      </div>
+    </article>`;
+  },
+
+  _dependenciesHtml() {
+    const prerequisites = (this._dependencies || []).filter(row => row.direction === 'depends_on');
+    const blockedTasks = (this._dependencies || []).filter(row => row.direction === 'blocks');
+    const group = (title, hint, rows, isPrerequisite, empty) => `<section class="dependency-group" aria-labelledby="dependency-${isPrerequisite ? 'prerequisites' : 'blocked-tasks'}-heading">
+      <div class="dependency-group-heading"><h4 id="dependency-${isPrerequisite ? 'prerequisites' : 'blocked-tasks'}-heading">${title}</h4><span class="field-hint">${hint}</span></div>
+      ${rows.length ? `<div class="dependency-card-list">${rows.map(row => this._dependencyCardHtml(row, isPrerequisite)).join('')}</div>` : `<p class="structure-empty">${empty}</p>`}
+    </section>`;
+    return `${this._dependencyStateHtml()}
+      <div class="dependency-groups">
+        ${group('Prerequisites', 'Tasks this Task depends on', prerequisites, true, 'No prerequisites.')}
+        ${group('Blocked Tasks', 'Tasks depending on this Task', blockedTasks, false, 'No blocked Tasks.')}
+      </div>
+      ${this._dependencyCapabilities?.can_add_dependency === true ? '<div class="task-detail-actions dependency-add"><button class="btn btn-secondary btn-sm" data-add-prerequisite><i class="ti ti-link-plus"></i> Add Prerequisite</button></div>' : ''}
+      <div class="alert alert-error hidden" data-dependency-mutation-error></div>`;
+  },
+
+  _bindDependenciesPanel(panel) {
+    panel.querySelector('[data-add-prerequisite]')?.addEventListener('click', () => this._openAddPrerequisiteModal());
+    panel.querySelectorAll('[data-remove-dependency]').forEach(btn => btn.addEventListener('click', async () => {
+      const number = btn.dataset.relatedTaskNumber;
+      if (!window.confirm(`Remove the dependency with ${number}? Neither Task status will change.`)) return;
+      const errEl = panel.querySelector('[data-dependency-mutation-error]');
+      errEl.classList.add('hidden');
+      const original = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner spinner--dark" style="width:14px;height:14px;"></span> Removing…';
+      try {
+        await TasksAPI.removeTaskDependency(btn.dataset.removeDependency);
+        await this._refreshDependencySurfaces();
+      } catch (err) {
+        btn.disabled = false;
+        btn.innerHTML = original;
+        errEl.textContent = err.message || 'Could not remove this dependency.';
+        errEl.classList.remove('hidden');
+      }
+    }));
+  },
+
+  async _refreshDependencySurfaces() {
+    await this._loadDependencies({ forceLifecycle: true });
+  },
+
+  _openAddPrerequisiteModal() {
+    this._openModal(`<h3 id="add-prerequisite-title">Add Prerequisite</h3>
+      <form class="modal-form" id="add-prerequisite-form">
+        <div class="field-group"><label for="dependency-candidate-search">Search Task number or title</label><input class="form-input" id="dependency-candidate-search" type="search" autocomplete="off" placeholder="Start typing…" aria-controls="dependency-candidate-results"></div>
+        <div id="dependency-candidate-results" class="user-picker-results" aria-live="polite"><p class="structure-empty">Enter a Task number or title.</p></div>
+        <input type="hidden" id="dependency-candidate-id">
+        <div class="alert alert-error hidden" id="add-prerequisite-error"></div>
+        <div class="modal-actions"><button type="button" class="btn btn-secondary" data-close-modal>Cancel</button><button class="btn btn-primary" type="submit" disabled>Add Prerequisite</button></div>
+      </form>`, { labelledBy: 'add-prerequisite-title' });
+    const root = document.getElementById('modal-root');
+    const form = root.querySelector('#add-prerequisite-form');
+    const search = root.querySelector('#dependency-candidate-search');
+    const results = root.querySelector('#dependency-candidate-results');
+    const target = root.querySelector('#dependency-candidate-id');
+    const submit = form.querySelector('[type="submit"]');
+    let timer;
+    search.addEventListener('input', () => {
+      clearTimeout(timer);
+      target.value = '';
+      submit.disabled = true;
+      timer = setTimeout(async () => {
+        const query = search.value.trim();
+        if (!query) { results.innerHTML = '<p class="structure-empty">Enter a Task number or title.</p>'; return; }
+        results.innerHTML = '<div class="tab-loading" role="status"><span class="spinner spinner--dark"></span> Searching…</div>';
+        try {
+          const matches = await TasksAPI.searchTasksForDependency(this._taskId, query, 20);
+          results.innerHTML = matches.length ? matches.map(task => `<button type="button" class="user-picker-row" data-select-dependency-task="${this._escapeAttr(task.id)}" aria-pressed="false"><strong>${this._escapeHtml(task.task_number)} — ${this._escapeHtml(task.title)}</strong><span>${this._escapeHtml((task.status || '').replace(/_/g, ' '))} · ${this._escapeHtml(task.priority || 'normal')}</span></button>`).join('') : '<p class="structure-empty">No eligible matching Tasks.</p>';
+          results.querySelectorAll('[data-select-dependency-task]').forEach(button => button.addEventListener('click', () => {
+            target.value = button.dataset.selectDependencyTask;
+            results.querySelectorAll('[data-select-dependency-task]').forEach(row => {
+              const selected = row === button;
+              row.classList.toggle('selected', selected);
+              row.setAttribute('aria-pressed', selected ? 'true' : 'false');
+            });
+            submit.disabled = false;
+          }));
+        } catch (err) {
+          results.innerHTML = `<div class="alert alert-error">${this._escapeHtml(err.message || 'Search failed. Try again.')}</div>`;
+        }
+      }, 250);
+    });
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (!target.value) return;
+      const errEl = root.querySelector('#add-prerequisite-error');
+      const cancel = root.querySelector('[data-close-modal]');
+      const original = submit.innerHTML;
+      errEl.classList.add('hidden');
+      submit.disabled = true;
+      if (cancel) cancel.disabled = true;
+      submit.innerHTML = '<span class="spinner spinner--dark" style="width:14px;height:14px;"></span> Adding…';
+      try {
+        await TasksAPI.createTaskDependency(this._taskId, target.value);
+        this._closeModal();
+        await this._refreshDependencySurfaces();
+      } catch (err) {
+        submit.disabled = false;
+        if (cancel) cancel.disabled = false;
+        submit.innerHTML = original;
+        errEl.textContent = err.message || 'Could not add this prerequisite.';
+        errEl.classList.remove('hidden');
+      }
+    });
+    search.focus();
+  },
+
   _activityLoadingHtml() {
     return `<div class="tab-loading"><span class="spinner spinner--dark"></span> Loading activity…</div>`;
   },
@@ -1136,21 +1332,22 @@ const TaskDetailView = {
     return `${this._actionsHtml(t)}<p class="field-hint" data-dependency-state-loading><span class="spinner spinner--dark" style="width:14px;height:14px;"></span> Checking prerequisites…</p>`;
   },
 
-  async _loadDependencyLifecycleState() {
+  async _loadDependencyLifecycleState(force = false) {
     const panel = document.getElementById('task-lifecycle-actions-panel');
     if (!panel) return;
     panel.innerHTML = this._actionsLoadingHtml(this._task);
     this._bindLifecycleActions(panel);
     try {
-      const state = await TasksAPI.getTaskDependencyLifecycleState(this._taskId);
-      if (!state) throw new Error('Dependency state is unavailable.');
-      this._dependencyLifecycleState = state;
-      this._dependencyLifecycleError = null;
+      await this._fetchDependencyLifecycleState(force);
     } catch (err) {
       console.error('CorLink: failed to load Task dependency lifecycle state', err);
-      this._dependencyLifecycleState = null;
-      this._dependencyLifecycleError = err;
     }
+    this._renderLifecycleActionsPanel();
+  },
+
+  _renderLifecycleActionsPanel() {
+    const panel = document.getElementById('task-lifecycle-actions-panel');
+    if (!panel) return;
     panel.innerHTML = this._actionsHtml(this._task);
     this._bindLifecycleActions(panel);
   },
@@ -1164,12 +1361,13 @@ const TaskDetailView = {
     const btn = (label, icon, action) => `<button class="btn btn-secondary btn-sm" data-task-detail-action="${action}"><i class="ti ${icon}"></i> ${label}</button>`;
     const items = [];
     if (canComplete) items.push(btn('Complete', 'ti-check', 'complete'));
+    else if (completeAuthorized && this._dependencyLifecycleState?.is_blocked) items.push('<button class="btn btn-secondary btn-sm" data-task-detail-action="complete" disabled aria-disabled="true"><i class="ti ti-check"></i> Complete</button>');
     if (canCancel) items.push(btn('Cancel', 'ti-x', 'cancel'));
 
     let explanation = '';
     if (completeAuthorized && this._dependencyLifecycleState?.is_blocked) {
       const unresolved = this._dependencyLifecycleState.unresolved_prerequisite_count;
-      explanation = `<div class="alert alert-warning" data-task-dependency-blocked>${Number.isInteger(unresolved) ? `This task is blocked by ${unresolved} unresolved prerequisite${unresolved === 1 ? '' : 's'}.` : 'This task is blocked because one or more prerequisites are unresolved.'}</div>`;
+      explanation = `<div class="alert alert-warning" data-task-dependency-blocked>${unresolved != null ? `This task is blocked by ${this._escapeHtml(unresolved)} unresolved prerequisite${Number(unresolved) === 1 ? '' : 's'}.` : 'This task is blocked because one or more prerequisites are unresolved.'}</div>`;
     } else if (completeAuthorized && this._dependencyLifecycleError) {
       explanation = `<div class="alert alert-error" data-dependency-state-error>Couldn’t verify dependency state. Complete is unavailable. <button class="btn btn-secondary btn-sm" data-retry-dependency-state>Retry</button></div>`;
     }
@@ -1189,7 +1387,7 @@ const TaskDetailView = {
     root.querySelectorAll('[data-task-detail-action]').forEach(btn => {
       btn.addEventListener('click', () => this._confirmLifecycleAction(btn.dataset.taskDetailAction));
     });
-    root.querySelector('[data-retry-dependency-state]')?.addEventListener('click', () => this._loadDependencyLifecycleState());
+    root.querySelector('[data-retry-dependency-state]')?.addEventListener('click', () => this._loadDependencyLifecycleState(true));
   },
 
   // ── Editing panel toggle + save (T3C) ───────────────────────────
@@ -1472,15 +1670,26 @@ const TaskDetailView = {
   // prisoner-letters.js's own _openModal/_closeModal (this codebase's
   // established per-view-copy convention). Task Detail had no modal
   // until T2D's picker needed one. ────────────────────────────────
-  _openModal(innerHtml) {
+  _openModal(innerHtml, { labelledBy = null } = {}) {
     const root = document.getElementById('modal-root');
+    this._modalReturnFocus = document.activeElement;
     root.innerHTML = `
       <div class="modal-overlay" id="modal-overlay">
-        <div class="modal-box">${innerHtml}</div>
+        <div class="modal-box" role="dialog" aria-modal="true" ${labelledBy ? `aria-labelledby="${this._escapeAttr(labelledBy)}"` : 'aria-label="Dialog"'}>${innerHtml}</div>
       </div>
     `;
-    document.getElementById('modal-overlay').addEventListener('click', (e) => {
+    const overlay = document.getElementById('modal-overlay');
+    overlay.addEventListener('click', (e) => {
       if (e.target.id === 'modal-overlay') this._closeModal();
+    });
+    overlay.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); this._closeModal(); return; }
+      if (e.key !== 'Tab') return;
+      const focusable = [...overlay.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])')];
+      if (!focusable.length) { e.preventDefault(); return; }
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
     });
     root.querySelectorAll('[data-close-modal]').forEach(btn => {
       btn.addEventListener('click', () => this._closeModal());
@@ -1489,6 +1698,8 @@ const TaskDetailView = {
 
   _closeModal() {
     document.getElementById('modal-root').innerHTML = '';
+    if (this._modalReturnFocus?.isConnected) this._modalReturnFocus.focus();
+    this._modalReturnFocus = null;
   },
 
   _renderNotFound(content) {

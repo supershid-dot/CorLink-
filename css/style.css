@@ -939,6 +939,41 @@ p  { line-height: 1.6; }
 .related-task-add { margin-top: 12px; }
 .user-picker-row.selected { border-color: var(--color-primary); background: var(--color-primary-light); }
 
+/* Operational Task dependencies reuse .task-card and the established Task
+   Detail 900px breakpoint. Direction groups sit side by side on desktop and
+   stack at tablet/mobile widths; no new global breakpoint is introduced. */
+.dependency-state {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 12px;
+  margin-bottom: 14px;
+  border-radius: var(--radius-md);
+}
+.dependency-state--ready { background: var(--color-success-bg); color: var(--color-success-dark); }
+.dependency-state--blocked { background: var(--color-error-bg); color: var(--color-error-dark); }
+.dependency-state p { margin: 6px 0 0; font-size: .875rem; }
+.dependency-state-counts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; font-size: .8125rem; }
+.dependency-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.dependency-group { min-width: 0; }
+.dependency-group-heading { margin-bottom: 10px; }
+.dependency-group-heading h4 { margin: 0 0 2px; }
+.dependency-card-list { display: grid; gap: 10px; }
+.dependency-task-body { display: flex; flex-direction: column; gap: 6px; }
+.dependency-task-labels { display: flex; flex-wrap: wrap; gap: 6px; }
+.dependency-task-card .task-card-actions { gap: 8px; flex-wrap: wrap; }
+.dependency-add { margin-top: 14px; }
+@media (max-width: 900px) {
+  .dependency-groups { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .dependency-state { flex-direction: column; }
+  .dependency-state-counts { justify-content: flex-start; }
+  .dependency-task-card .task-card-actions { justify-content: stretch; }
+  .dependency-task-card .task-card-actions .btn { flex: 1; min-height: 40px; }
+}
+
 /* ── Task Dashboard (js/views/task-dashboard.js, T3A) ──────────────
    Desktop: 4-col, Tablet: 2-col, Mobile: 1-col — same 900px/640px
    breakpoints already used throughout this app (sidebar-nav split,

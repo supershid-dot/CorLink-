@@ -45,6 +45,43 @@ const TasksAPI = (() => {
       return (data && data[0]) || null;
     },
 
+    async listTaskDependencies(taskId, { limit = 100, offset = 0 } = {}) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('list_task_dependencies', {
+        p_task_id: taskId,
+        p_limit: Math.min(Math.max(limit, 1), 100),
+        p_offset: Math.max(offset, 0),
+      });
+      if (error) throw error;
+      return data || [];
+    },
+
+    async getTaskDependencyCapabilities(taskId) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('get_task_dependency_capabilities', {
+        p_task_id: taskId,
+      });
+      if (error) throw error;
+      return (data && data[0]) || {
+        can_view_dependencies: false,
+        can_add_dependency: false,
+        can_remove_dependency: false,
+      };
+    },
+
+    async searchTasksForDependency(taskId, query, limit = 20) {
+      const term = (query || '').trim();
+      if (!term) return [];
+      const db = getSupabase();
+      const { data, error } = await db.rpc('search_tasks_for_dependency', {
+        p_task_id: taskId,
+        p_query: term,
+        p_limit: Math.min(Math.max(limit, 1), 50),
+      });
+      if (error) throw error;
+      return data || [];
+    },
+
     // ── Mutating RPCs — exact names/parameters, no direct table
     // writes, no client-supplied actor identity ─────────────────────
     async createTask({
@@ -98,6 +135,25 @@ const TasksAPI = (() => {
         p_task_id: taskId, p_notes: notes || null,
       });
       if (error) throw error;
+    },
+
+    async createTaskDependency(dependentTaskId, prerequisiteTaskId) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('create_task_dependency', {
+        p_dependent_task_id: dependentTaskId,
+        p_prerequisite_task_id: prerequisiteTaskId,
+      });
+      if (error) throw error;
+      return data;
+    },
+
+    async removeTaskDependency(dependencyId) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('remove_task_dependency', {
+        p_dependency_id: dependencyId,
+      });
+      if (error) throw error;
+      return data;
     },
 
     async assignTask(taskId, userId) {
