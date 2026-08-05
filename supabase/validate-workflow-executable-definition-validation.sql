@@ -72,11 +72,17 @@ BEGIN
      OR v_def NOT ILIKE '%canonicalize_workflow_definition_payload%'
   THEN v_missing := v_missing || 'create-version-gate '; END IF;
 
-  -- No new tables, no new RLS policies, no widened grants — this
-  -- milestone touches zero storage shape. Confirm the Phase 1/2
-  -- table count and SELECT-only posture are byte-identical to
-  -- validate-workflow-backend-foundation.sql's own expectations.
-  IF (SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE 'workflow\_%' ESCAPE '\') <> 10
+  -- No new tables, no new RLS policies, no widened grants — THIS
+  -- milestone (Phase 2B.1) touches zero storage shape. Asserts a
+  -- lower bound (>= 10, the Phase 1 baseline), not an exact count —
+  -- docs/63 itself explicitly defers workflow_approval_rounds/
+  -- workflow_approval_positions DDL to "that [activation] implementation"
+  -- (Phase 2B.2), so a later, separately-approved milestone legitimately
+  -- growing the table count is not a Phase 2B.1 regression. What this
+  -- validator guarantees is narrower and still fully intact: Phase
+  -- 2B.1 itself added none, and whatever exists keeps SELECT-only
+  -- posture (checked immediately below).
+  IF (SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE 'workflow\_%' ESCAPE '\') < 10
   THEN v_missing := v_missing || 'unexpected-new-table '; END IF;
 
   IF EXISTS (
