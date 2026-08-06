@@ -10,13 +10,13 @@ BEGIN
   -- DEFINER with a pinned search_path, and is never directly callable
   -- by any client role — reachable only from within another
   -- SECURITY DEFINER function's already-authorized transaction.
-  IF to_regprocedure('public.workflow_enter_downstream_node(uuid,uuid,uuid,uuid,uuid,integer,uuid,bigint,bigint,uuid,text,text,jsonb)') IS NULL THEN
+  IF to_regprocedure('public.workflow_enter_downstream_node(uuid,uuid,uuid,uuid,uuid,integer,uuid,bigint,bigint,uuid,text,text,jsonb,jsonb)') IS NULL THEN
     v_missing := v_missing || 'workflow_enter_downstream_node-missing ';
   ELSE
-    IF NOT (SELECT prosecdef FROM pg_proc WHERE oid = to_regprocedure('public.workflow_enter_downstream_node(uuid,uuid,uuid,uuid,uuid,integer,uuid,bigint,bigint,uuid,text,text,jsonb)'))
+    IF NOT (SELECT prosecdef FROM pg_proc WHERE oid = to_regprocedure('public.workflow_enter_downstream_node(uuid,uuid,uuid,uuid,uuid,integer,uuid,bigint,bigint,uuid,text,text,jsonb,jsonb)'))
        OR NOT EXISTS (
          SELECT 1 FROM pg_proc p
-         WHERE p.oid = to_regprocedure('public.workflow_enter_downstream_node(uuid,uuid,uuid,uuid,uuid,integer,uuid,bigint,bigint,uuid,text,text,jsonb)')
+         WHERE p.oid = to_regprocedure('public.workflow_enter_downstream_node(uuid,uuid,uuid,uuid,uuid,integer,uuid,bigint,bigint,uuid,text,text,jsonb,jsonb)')
            AND p.proconfig @> ARRAY['search_path=public, pg_temp']::TEXT[]
        ) THEN
       v_missing := v_missing || 'workflow_enter_downstream_node-security ';

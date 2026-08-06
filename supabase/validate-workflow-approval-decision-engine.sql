@@ -119,7 +119,7 @@ BEGIN
   -- Prior-phase baseline (2C.1 shared helper + graph-advancement
   -- command, 2B.1 canonicalizer, 2B.2 approval-round tables) remains
   -- intact and unaffected.
-  IF to_regprocedure('public.workflow_enter_downstream_node(uuid,uuid,uuid,uuid,uuid,integer,uuid,bigint,bigint,uuid,text,text,jsonb)') IS NULL
+  IF to_regprocedure('public.workflow_enter_downstream_node(uuid,uuid,uuid,uuid,uuid,integer,uuid,bigint,bigint,uuid,text,text,jsonb,jsonb)') IS NULL
      OR to_regprocedure('public.workflow_advance_graph_step(uuid,bigint,uuid)') IS NULL
      OR to_regprocedure('public.canonicalize_workflow_definition_payload(jsonb,uuid)') IS NULL
      OR to_regclass('workflow_approval_rounds') IS NULL

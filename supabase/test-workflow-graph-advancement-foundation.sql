@@ -269,7 +269,12 @@ SELECT wfga_assert_contiguous((SELECT id FROM wfga_ids WHERE name='i_seq'), 'sce
 INSERT INTO wfga_results VALUES (12,'activation into a sequential-delivery approval node (unaffected by this milestone) still offers exactly 1 work item regardless of electorate size');
 
 -- ── 13: an optional second-hop approval node that resolves zero
---     candidates fails closed, naming the deferred capability. ─────
+--     candidates now skips and synchronously continues to its
+--     'skipped' edge (Phase 3.2's empty-electorate extension), rather
+--     than the fail-closed interim behavior this scenario originally
+--     asserted. Superseded per docs/63's own "Optional approval"
+--     contract, not a defect in the prior approved behavior — see
+--     docs/68. ──────────────────────────────────────────────────────
 WITH made AS (
  SELECT * FROM create_workflow_definition('66500000-0000-0000-0000-000000000001','wfga_optzero','WFGA OptZero','opaque_case',:OPTIONAL_SECOND_PAYLOAD::jsonb,'66500000-1000-0000-0000-000000000044'))
 INSERT INTO wfga_ids SELECT 'v_optzero',version_id FROM made;
@@ -277,16 +282,22 @@ SELECT publish_workflow_definition_version((SELECT id FROM wfga_ids WHERE name='
 INSERT INTO wfga_ids SELECT 'i_optzero', create_workflow_instance((SELECT id FROM wfga_ids WHERE name='v_optzero'),'opaque_case','66500000-2000-0000-0000-000000000008','66500000-0000-0000-0000-000000000001','66500000-1000-0000-0000-000000000046',NULL);
 SELECT * FROM start_workflow_instance((SELECT id FROM wfga_ids WHERE name='i_optzero'),0,'66500000-1000-0000-0000-000000000047');
 SELECT wfga_simulate_decision((SELECT id FROM wfga_ids WHERE name='i_optzero'), 'review1', 'approved');
-SAVEPOINT wfga_sp13;
-\set ON_ERROR_STOP off
-SELECT workflow_advance_graph_step((SELECT id FROM wfga_ids WHERE name='i_optzero'),1,'66500000-1000-0000-0000-000000000048');
-\set ON_ERROR_STOP on
-ROLLBACK TO SAVEPOINT wfga_sp13;
-DO $$ BEGIN
-  IF (SELECT count(*) FROM workflow_approval_rounds WHERE instance_id=(SELECT id FROM wfga_ids WHERE name='i_optzero')) <> 1 THEN
-    RAISE EXCEPTION 'zero-candidate optional second hop must leave zero partial rows'; END IF;
+SELECT * FROM workflow_advance_graph_step((SELECT id FROM wfga_ids WHERE name='i_optzero'),1,'66500000-1000-0000-0000-000000000048');
+DO $$
+DECLARE v_iid UUID := (SELECT id FROM wfga_ids WHERE name='i_optzero');
+BEGIN
+  IF (SELECT status FROM workflow_instances WHERE id=v_iid) <> 'completed'
+     OR (SELECT terminal_outcome FROM workflow_instances WHERE id=v_iid) <> 's' THEN
+    RAISE EXCEPTION 'zero-candidate optional second hop must skip and complete with outcome s';
+  END IF;
+  IF (SELECT count(*) FROM workflow_approval_rounds WHERE instance_id=v_iid) <> 2 THEN
+    RAISE EXCEPTION 'expected 2 rounds: review1 (simulated) + review2 (skipped)'; END IF;
+  IF (SELECT state FROM workflow_instance_steps WHERE instance_id=v_iid AND definition_node_key='review2') <> 'completed'
+     OR (SELECT result_code FROM workflow_instance_steps WHERE instance_id=v_iid AND definition_node_key='review2') <> 'skipped' THEN
+    RAISE EXCEPTION 'expected review2 completed with result_code skipped'; END IF;
 END $$;
-INSERT INTO wfga_results VALUES (13,'an optional second-hop approval node resolving zero candidates fails closed, matching the same conservative resolution Phase 2B.2 already established for the first node');
+SELECT wfga_assert_contiguous((SELECT id FROM wfga_ids WHERE name='i_optzero'), 'scenario 13');
+INSERT INTO wfga_results VALUES (13,'an optional second-hop approval node resolving zero candidates now skips (immutable skipped round/step history, no work item) and synchronously continues to End via the skipped edge, per docs/63''s empty-electorate contract completed in Phase 3.2');
 
 -- ── 14: required second-hop with an undersized electorate fails
 --     closed with zero partial rows. ────────────────────────────────

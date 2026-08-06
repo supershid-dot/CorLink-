@@ -298,9 +298,18 @@ ALTER TABLE workflow_events DISABLE TRIGGER workflow_events_immutable;
 DELETE FROM workflow_events WHERE instance_id IN (SELECT id FROM workflow_instances WHERE created_by::text LIKE '65200000-%');
 ALTER TABLE workflow_events ENABLE TRIGGER workflow_events_immutable;
 DELETE FROM workflow_participants WHERE instance_id IN (SELECT id FROM workflow_instances WHERE created_by::text LIKE '65200000-%');
+-- Phase 3.2's terminal-state immutability triggers reject a DELETE
+-- against a decided/cancelled position or a completed/cancelled/
+-- failed round, exactly as intended in production — disabled here
+-- only for this disposable database's own fixture teardown, matching
+-- the established workflow_events_immutable convention above.
+ALTER TABLE workflow_approval_positions DISABLE TRIGGER workflow_approval_positions_immutable_after_terminal;
 DELETE FROM workflow_approval_positions WHERE instance_id IN (SELECT id FROM workflow_instances WHERE created_by::text LIKE '65200000-%');
+ALTER TABLE workflow_approval_positions ENABLE TRIGGER workflow_approval_positions_immutable_after_terminal;
 DELETE FROM workflow_work_items WHERE instance_id IN (SELECT id FROM workflow_instances WHERE created_by::text LIKE '65200000-%');
+ALTER TABLE workflow_approval_rounds DISABLE TRIGGER workflow_approval_rounds_immutable_after_terminal;
 DELETE FROM workflow_approval_rounds WHERE instance_id IN (SELECT id FROM workflow_instances WHERE created_by::text LIKE '65200000-%');
+ALTER TABLE workflow_approval_rounds ENABLE TRIGGER workflow_approval_rounds_immutable_after_terminal;
 DELETE FROM workflow_tokens WHERE instance_id IN (SELECT id FROM workflow_instances WHERE created_by::text LIKE '65200000-%');
 DELETE FROM workflow_instance_steps WHERE instance_id IN (SELECT id FROM workflow_instances WHERE created_by::text LIKE '65200000-%');
 DELETE FROM workflow_instances WHERE created_by::text LIKE '65200000-%';

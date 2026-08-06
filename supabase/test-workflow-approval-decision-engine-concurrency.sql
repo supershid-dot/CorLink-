@@ -179,7 +179,7 @@ DO $$ DECLARE v_val TEXT; v_err TEXT; BEGIN
   INSERT INTO wfadc_c2 VALUES (v_val, v_err);
 END $$;
 DO $$
-DECLARE v_iid UUID := (SELECT id FROM wfadc_ids WHERE name='inst3'); v_winners INTEGER; v_loser_wi UUID; v_cur_lock BIGINT;
+DECLARE v_iid UUID := (SELECT id FROM wfadc_ids WHERE name='inst3'); v_winners INTEGER; v_loser_wi UUID; v_loser_actor UUID; v_cur_lock BIGINT;
 BEGIN
   -- Both decisions target different work items and would each be
   -- individually valid alone, but decide_workflow_work_item requires
@@ -193,22 +193,23 @@ BEGIN
     SELECT v FROM wfadc_c1 WHERE v IS NOT NULL UNION ALL SELECT v FROM wfadc_c2 WHERE v IS NOT NULL
   ) w;
   IF v_winners <> 1 THEN RAISE EXCEPTION 'expected exactly one immediate winner among two concurrent decisions on the same instance, got %', v_winners; END IF;
-  IF (SELECT err FROM wfadc_c1) IS NOT NULL AND (SELECT err FROM wfadc_c1) NOT ILIKE '%changed concurrently%' THEN
-    RAISE EXCEPTION 'expected the loser to see a concurrent-change conflict, got: %', (SELECT err FROM wfadc_c1);
-  END IF;
-  IF (SELECT err FROM wfadc_c2) IS NOT NULL AND (SELECT err FROM wfadc_c2) NOT ILIKE '%changed concurrently%' THEN
-    RAISE EXCEPTION 'expected the loser to see a concurrent-change conflict, got: %', (SELECT err FROM wfadc_c2);
+
+  -- Determine the loser from actual database state, not from
+  -- dblink's captured error text: dblink_get_result(conn, false)
+  -- does not reliably raise a catchable exception on a remote
+  -- error, so an err-column comparison can silently pick the wrong
+  -- side depending on race timing. Whichever work item is still
+  -- 'offered' after the race is the one whose vote never landed.
+  SELECT wi.id, wi.assigned_to INTO v_loser_wi, v_loser_actor
+  FROM workflow_work_items wi
+  WHERE wi.id IN ((SELECT id FROM wfadc_ids WHERE name='wi3a'),(SELECT id FROM wfadc_ids WHERE name='wi3b'))
+    AND wi.state = 'offered';
+  IF v_loser_wi IS NULL THEN
+    RAISE EXCEPTION 'expected exactly one of the two work items to remain offered (the loser)';
   END IF;
 
-  -- Retry the loser with the now-current lock version — the round
-  -- must still be reachable and must complete exactly once overall.
-  SELECT id INTO v_loser_wi FROM wfadc_ids WHERE name = CASE WHEN (SELECT err FROM wfadc_c1) IS NOT NULL THEN 'wi3a' ELSE 'wi3b' END;
   SELECT lock_version INTO v_cur_lock FROM workflow_instances WHERE id = v_iid;
-  IF (SELECT err FROM wfadc_c1) IS NOT NULL THEN
-    PERFORM set_config('request.jwt.claims','{"sub":"67300000-0001-0000-0000-000000000002"}',true);
-  ELSE
-    PERFORM set_config('request.jwt.claims','{"sub":"67300000-0001-0000-0000-000000000003"}',true);
-  END IF;
+  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub',v_loser_actor)::text, true);
   PERFORM decide_workflow_work_item(v_loser_wi, 'approve', v_cur_lock, 0, gen_random_uuid());
 
   IF (SELECT count(*) FROM workflow_approval_rounds WHERE instance_id=v_iid AND state='completed') <> 1 THEN
@@ -257,7 +258,7 @@ DO $$ DECLARE v_val TEXT; v_err TEXT; BEGIN
   INSERT INTO wfadc_c2 VALUES (v_val, v_err);
 END $$;
 DO $$
-DECLARE v_iid UUID := (SELECT id FROM wfadc_ids WHERE name='inst4'); v_winners INTEGER; v_loser_wi UUID; v_cur_lock BIGINT;
+DECLARE v_iid UUID := (SELECT id FROM wfadc_ids WHERE name='inst4'); v_winners INTEGER; v_loser_wi UUID; v_loser_actor UUID; v_cur_lock BIGINT;
 BEGIN
   -- Same instance-level optimistic-concurrency serialization as
   -- scenario 3: exactly one of the two final unanimous votes succeeds
@@ -266,20 +267,21 @@ BEGIN
     SELECT v FROM wfadc_c1 WHERE v IS NOT NULL UNION ALL SELECT v FROM wfadc_c2 WHERE v IS NOT NULL
   ) w;
   IF v_winners <> 1 THEN RAISE EXCEPTION 'expected exactly one immediate winner among the two concurrent final unanimous votes, got %', v_winners; END IF;
-  IF (SELECT err FROM wfadc_c1) IS NOT NULL AND (SELECT err FROM wfadc_c1) NOT ILIKE '%changed concurrently%' THEN
-    RAISE EXCEPTION 'expected the loser to see a concurrent-change conflict, got: %', (SELECT err FROM wfadc_c1);
-  END IF;
-  IF (SELECT err FROM wfadc_c2) IS NOT NULL AND (SELECT err FROM wfadc_c2) NOT ILIKE '%changed concurrently%' THEN
-    RAISE EXCEPTION 'expected the loser to see a concurrent-change conflict, got: %', (SELECT err FROM wfadc_c2);
+
+  -- Determine the loser from actual database state — see scenario
+  -- 3's comment: dblink_get_result(conn, false) does not reliably
+  -- populate a catchable error, so an err-column comparison can pick
+  -- the wrong side depending on race timing.
+  SELECT wi.id, wi.assigned_to INTO v_loser_wi, v_loser_actor
+  FROM workflow_work_items wi
+  WHERE wi.id IN ((SELECT id FROM wfadc_ids WHERE name='wi4a'),(SELECT id FROM wfadc_ids WHERE name='wi4b'))
+    AND wi.state = 'offered';
+  IF v_loser_wi IS NULL THEN
+    RAISE EXCEPTION 'expected exactly one of the two work items to remain offered (the loser)';
   END IF;
 
-  SELECT id INTO v_loser_wi FROM wfadc_ids WHERE name = CASE WHEN (SELECT err FROM wfadc_c1) IS NOT NULL THEN 'wi4a' ELSE 'wi4b' END;
   SELECT lock_version INTO v_cur_lock FROM workflow_instances WHERE id = v_iid;
-  IF (SELECT err FROM wfadc_c1) IS NOT NULL THEN
-    PERFORM set_config('request.jwt.claims','{"sub":"67300000-0001-0000-0000-000000000002"}',true);
-  ELSE
-    PERFORM set_config('request.jwt.claims','{"sub":"67300000-0001-0000-0000-000000000003"}',true);
-  END IF;
+  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub',v_loser_actor)::text, true);
   PERFORM decide_workflow_work_item(v_loser_wi, 'approve', v_cur_lock, 0, gen_random_uuid());
 
   IF (SELECT status FROM workflow_instances WHERE id=v_iid) <> 'completed'
@@ -411,9 +413,19 @@ ALTER TABLE workflow_decisions DISABLE TRIGGER workflow_decisions_immutable;
 DELETE FROM workflow_decisions WHERE instance_id IN (SELECT id FROM workflow_instances WHERE created_by::text LIKE '67300000-%');
 ALTER TABLE workflow_decisions ENABLE TRIGGER workflow_decisions_immutable;
 DELETE FROM workflow_participants WHERE instance_id IN (SELECT id FROM workflow_instances WHERE created_by::text LIKE '67300000-%');
+-- Phase 3.2's terminal-state immutability triggers reject a DELETE
+-- against a decided/cancelled position or a completed/cancelled/
+-- failed round, exactly as intended in production — disabled here
+-- only for this disposable database's own fixture teardown, matching
+-- the established workflow_events_immutable/workflow_decisions_
+-- immutable convention above.
+ALTER TABLE workflow_approval_positions DISABLE TRIGGER workflow_approval_positions_immutable_after_terminal;
 DELETE FROM workflow_approval_positions WHERE instance_id IN (SELECT id FROM workflow_instances WHERE created_by::text LIKE '67300000-%');
+ALTER TABLE workflow_approval_positions ENABLE TRIGGER workflow_approval_positions_immutable_after_terminal;
 DELETE FROM workflow_work_items WHERE instance_id IN (SELECT id FROM workflow_instances WHERE created_by::text LIKE '67300000-%');
+ALTER TABLE workflow_approval_rounds DISABLE TRIGGER workflow_approval_rounds_immutable_after_terminal;
 DELETE FROM workflow_approval_rounds WHERE instance_id IN (SELECT id FROM workflow_instances WHERE created_by::text LIKE '67300000-%');
+ALTER TABLE workflow_approval_rounds ENABLE TRIGGER workflow_approval_rounds_immutable_after_terminal;
 DELETE FROM workflow_tokens WHERE instance_id IN (SELECT id FROM workflow_instances WHERE created_by::text LIKE '67300000-%');
 DELETE FROM workflow_instance_steps WHERE instance_id IN (SELECT id FROM workflow_instances WHERE created_by::text LIKE '67300000-%');
 DELETE FROM workflow_instances WHERE created_by::text LIKE '67300000-%';
