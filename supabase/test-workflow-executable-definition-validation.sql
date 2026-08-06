@@ -115,10 +115,16 @@ DO $$ BEGIN PERFORM wfv_assert_create_rejected('wfv_bad1',
   '63000000-1000-0000-0000-000000000010','unknown_or_missing_top_level_field'); END $$;
 INSERT INTO wfv_results VALUES (5,'unknown top-level field rejected');
 
+-- schema_version:2 is now a supported capability version (CAP-002
+-- Phase 4.1, docs/69/70's gateway_exclusive routing contract), so
+-- this scenario now asserts rejection of schema_version:3, a version
+-- number that remains genuinely unsupported, rather than 2 — the
+-- same superseded-not-defective update pattern already applied to
+-- Phase 2C.1's own scenario 13 in Phase 3.2.
 DO $$ BEGIN PERFORM wfv_assert_create_rejected('wfv_bad2',
-  '{"schema_version":2,"entry_node":"start","nodes":[{"key":"start","type":"start","config":{}},{"key":"e","type":"end","config":{"outcome_code":"x"}}],"edges":[{"source":"start","target":"e","outcome":"started","priority":0,"default":false}]}'::jsonb,
+  '{"schema_version":3,"entry_node":"start","nodes":[{"key":"start","type":"start","config":{}},{"key":"e","type":"end","config":{"outcome_code":"x"}}],"edges":[{"source":"start","target":"e","outcome":"started","priority":0,"default":false}]}'::jsonb,
   '63000000-1000-0000-0000-000000000011','unsupported_schema_version'); END $$;
-INSERT INTO wfv_results VALUES (6,'unsupported schema_version rejected');
+INSERT INTO wfv_results VALUES (6,'unsupported schema_version (3, since 2 is now supported by Phase 4.1) rejected');
 
 DO $$ BEGIN PERFORM wfv_assert_create_rejected('wfv_bad3',
   '{"schema_version":1,"entry_node":"Start","nodes":[{"key":"start","type":"start","config":{}},{"key":"e","type":"end","config":{"outcome_code":"x"}}],"edges":[{"source":"start","target":"e","outcome":"started","priority":0,"default":false}]}'::jsonb,
