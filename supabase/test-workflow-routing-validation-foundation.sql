@@ -183,16 +183,42 @@ SELECT wfrv_assert_create_rejected('wfrv_bad_literal',
   gen_random_uuid(),'gateway_condition_value_invalid');
 INSERT INTO wfrv_results VALUES (17,'a condition literal that does not match its declared value_type is rejected');
 
--- ── 18: a gateway node with more than one inbound edge is rejected
---    (reuses exactly the approval-node rule; see docs/70) — two
---    distinct gateway sources (gw1 and gw2) both routing into the
---    same downstream gateway (gw3). ─────────────────────────────────
-SELECT wfrv_assert_create_rejected('wfrv_bad_inbound',
+-- ── 18: a gateway node reachable from two distinct gateway sources
+--    (gw1 and gw2, both routing into gw3) is ACCEPTED and publishes
+--    successfully — ordinary reconvergence under the single-token
+--    model (docs/69 "Merge behavior"; corrected by Phase 4.1A after
+--    Phase 4.1 incorrectly rejected this). Publication's pipeline
+--    re-verifies reachability and acyclicity as part of the same
+--    validation pass that accepts this payload, so a successful
+--    publish here is itself the proof the graph remains acyclic and
+--    fully reachable (points 1 and 2 of the Phase 4.1A test
+--    correction). Version 1 behavior is unaffected — see scenario 3,
+--    unchanged, which still rejects gateway_exclusive under
+--    schema_version=1 (point 4). This scenario creates a definition
+--    only; no instance, token, or runtime execution is created or
+--    touched, so no parallel-token or merge runtime behavior is
+--    exercised or introduced here (point 5) — the structural
+--    validator separately confirms workflow_enter_downstream_node
+--    carries no gateway-execution logic at all. ───────────────────
+WITH made AS (
+ SELECT * FROM create_workflow_definition(
+  '64900000-0000-0000-0000-000000000001','wfrv_inbound_ok','WFRV Inbound OK','opaque_case',
   '{"schema_version":2,"entry_node":"start","nodes":[{"key":"start","type":"start","config":{}},{"key":"gw1","type":"gateway_exclusive","config":{}},{"key":"gw2","type":"gateway_exclusive","config":{}},{"key":"gw3","type":"gateway_exclusive","config":{}},{"key":"a_end","type":"end","config":{"outcome_code":"a"}},{"key":"b_end","type":"end","config":{"outcome_code":"b"}},{"key":"dead_end","type":"end","config":{"outcome_code":"d"}}],"edges":[{"source":"start","target":"gw1","outcome":"started","priority":0,"default":false},{"source":"gw1","target":"gw3","outcome":"routed","priority":0,"default":false,"condition":{"source":"instance_variable","variable_name":"x","operator":"is_null"}},{"source":"gw1","target":"gw2","outcome":"routed","priority":1,"default":true},{"source":"gw2","target":"gw3","outcome":"routed","priority":0,"default":false,"condition":{"source":"instance_variable","variable_name":"z","operator":"is_null"}},{"source":"gw2","target":"dead_end","outcome":"routed","priority":1,"default":true},{"source":"gw3","target":"a_end","outcome":"routed","priority":0,"default":false,"condition":{"source":"instance_variable","variable_name":"y","operator":"is_null"}},{"source":"gw3","target":"b_end","outcome":"routed","priority":1,"default":true}]}'::jsonb,
-  gen_random_uuid(),'gateway_inbound_edges_invalid');
-INSERT INTO wfrv_results VALUES (18,'a gateway node reachable from two distinct gateway sources (two inbound edges) is rejected with gateway_inbound_edges_invalid');
+  '64900000-1000-0000-0000-000000000020'))
+INSERT INTO wfrv_ids SELECT 'inbound_ok_v', version_id FROM made;
+SELECT publish_workflow_definition_version((SELECT id FROM wfrv_ids WHERE name='inbound_ok_v'),0,'64900000-1000-0000-0000-000000000021');
+DO $$ BEGIN IF (SELECT status FROM workflow_definition_versions WHERE id=(SELECT id FROM wfrv_ids WHERE name='inbound_ok_v')) <> 'published'
+  THEN RAISE EXCEPTION 'expected a gateway node with two distinct gateway-source inbound edges to publish successfully'; END IF; END $$;
+INSERT INTO wfrv_results VALUES (18,'a gateway node reachable from two distinct gateway sources (two inbound edges) is accepted and publishes successfully — ordinary single-token reconvergence, not rejected');
 
--- ── 19: reconvergence onto an End node from two distinct gateway
+-- ── 19: a gateway node with ZERO inbound edges is still rejected
+--    (the one case the corrected rule does reject). ───────────────
+SELECT wfrv_assert_create_rejected('wfrv_bad_zero_inbound',
+  '{"schema_version":2,"entry_node":"start","nodes":[{"key":"start","type":"start","config":{}},{"key":"real_end","type":"end","config":{"outcome_code":"r"}},{"key":"gw","type":"gateway_exclusive","config":{}},{"key":"a_end","type":"end","config":{"outcome_code":"a"}},{"key":"b_end","type":"end","config":{"outcome_code":"b"}}],"edges":[{"source":"start","target":"real_end","outcome":"started","priority":0,"default":false},{"source":"gw","target":"a_end","outcome":"routed","priority":0,"default":false,"condition":{"source":"instance_variable","variable_name":"x","operator":"is_null"}},{"source":"gw","target":"b_end","outcome":"routed","priority":1,"default":true}]}'::jsonb,
+  gen_random_uuid(),'gateway_inbound_edges_invalid');
+INSERT INTO wfrv_results VALUES (19,'a gateway_exclusive node with zero inbound edges is rejected with gateway_inbound_edges_invalid');
+
+-- ── 20: reconvergence onto an End node from two distinct gateway
 --    branches is fully supported (docs/70 ''Merge behavior'') —
 --    publishes successfully. ────────────────────────────────────
 WITH made AS (
@@ -204,7 +230,7 @@ INSERT INTO wfrv_ids SELECT 'reconv_v', version_id FROM made;
 SELECT publish_workflow_definition_version((SELECT id FROM wfrv_ids WHERE name='reconv_v'),0,'64900000-1000-0000-0000-000000000004');
 DO $$ BEGIN IF (SELECT status FROM workflow_definition_versions WHERE id=(SELECT id FROM wfrv_ids WHERE name='reconv_v')) <> 'published'
   THEN RAISE EXCEPTION 'expected reconvergence definition to publish'; END IF; END $$;
-INSERT INTO wfrv_results VALUES (19,'two distinct gateway branches (from different gateway nodes) targeting the same End node publish successfully');
+INSERT INTO wfrv_results VALUES (20,'two distinct gateway branches (from different gateway nodes) targeting the same End node publish successfully');
 
 -- ── 21: the defensive capability_version_mismatch check at publish
 --    time actually fires — verified by deliberately disabling the
@@ -232,7 +258,7 @@ BEGIN
     IF SQLERRM NOT ILIKE '%capability_version_mismatch%' THEN RAISE; END IF;
   END;
 END $$;
-INSERT INTO wfrv_results VALUES (20,'publish rejects a definition version whose stored capability_version no longer matches its payload schema_version');
+INSERT INTO wfrv_results VALUES (21,'publish rejects a definition version whose stored capability_version no longer matches its payload schema_version');
 
 -- ── Fixture for the variable-write scenarios: a plain inert instance
 --    (variables are not tied to schema_version=2 — the write
@@ -264,7 +290,7 @@ BEGIN
   WHERE instance_id = (SELECT id FROM wfrv_ids WHERE name='var_i') AND variable_name = 'priority_band';
   IF v_lv1 <> 1 OR v_lv2 <> 1 THEN RAISE EXCEPTION 'expected lock_version=1 after create and after exact replay'; END IF;
 END $$;
-INSERT INTO wfrv_results VALUES (21,'a first instance-variable write succeeds and an exact idempotent replay is a no-op');
+INSERT INTO wfrv_results VALUES (22,'a first instance-variable write succeeds and an exact idempotent replay is a no-op');
 
 -- ── 23: the same idempotency key reused with different input fails
 --    with the standard idempotency-mismatch contract. ─────────────
@@ -279,7 +305,7 @@ BEGIN
     IF SQLERRM NOT ILIKE '%Idempotency key was already used with different input%' THEN RAISE; END IF;
   END;
 END $$;
-INSERT INTO wfrv_results VALUES (22,'reusing a variable-write idempotency key with different input is rejected');
+INSERT INTO wfrv_results VALUES (23,'reusing a variable-write idempotency key with different input is rejected');
 
 -- ── 24: a new idempotency key updates the value and increments
 --    lock_version. ─────────────────────────────────────────────────
@@ -292,7 +318,7 @@ BEGIN
      OR (SELECT variable_value FROM workflow_variables WHERE instance_id=(SELECT id FROM wfrv_ids WHERE name='var_i') AND variable_name='priority_band') <> '"low"'::jsonb
   THEN RAISE EXCEPTION 'expected updated value and lock_version=2'; END IF;
 END $$;
-INSERT INTO wfrv_results VALUES (23,'a fresh idempotency key updates an existing variable and increments lock_version');
+INSERT INTO wfrv_results VALUES (24,'a fresh idempotency key updates an existing variable and increments lock_version');
 
 -- ── 25: a value that does not match its declared value_type is
 --    rejected. ──────────────────────────────────────────────────────
@@ -306,7 +332,7 @@ BEGIN
     IF SQLERRM NOT ILIKE '%does not match its declared type%' THEN RAISE; END IF;
   END;
 END $$;
-INSERT INTO wfrv_results VALUES (24,'a variable value that does not match its declared value_type is rejected');
+INSERT INTO wfrv_results VALUES (25,'a variable value that does not match its declared value_type is rejected');
 
 -- ── 26: value_type=''json'' accepts an arbitrary JSON object; a
 --    value_type=''null'' write requires an actual JSON null value. ──
@@ -324,7 +350,7 @@ BEGIN
     IF SQLERRM NOT ILIKE '%does not match its declared type%' THEN RAISE; END IF;
   END;
 END $$;
-INSERT INTO wfrv_results VALUES (25,'value_type=''json'' accepts an arbitrary JSON object and value_type=''null'' requires an actual JSON null');
+INSERT INTO wfrv_results VALUES (26,'value_type=''json'' accepts an arbitrary JSON object and value_type=''null'' requires an actual JSON null');
 
 RESET ROLE;
 
@@ -342,7 +368,7 @@ BEGIN
     IF SQLERRM NOT ILIKE '%not found or not manageable%' THEN RAISE; END IF;
   END;
 END $$;
-INSERT INTO wfrv_results VALUES (26,'a same-organization non-manager outsider cannot write an instance variable');
+INSERT INTO wfrv_results VALUES (27,'a same-organization non-manager outsider cannot write an instance variable');
 
 -- ── 28: a cross-organization actor cannot write an instance
 --    variable. ──────────────────────────────────────────────────────
@@ -357,7 +383,7 @@ BEGIN
     IF SQLERRM NOT ILIKE '%not found or not manageable%' THEN RAISE; END IF;
   END;
 END $$;
-INSERT INTO wfrv_results VALUES (27,'a cross-organization actor cannot write an instance variable');
+INSERT INTO wfrv_results VALUES (28,'a cross-organization actor cannot write an instance variable');
 
 -- ── 29: an instance variable cannot be set once the instance has
 --    been cancelled (mutating commands require pending/active). ────
@@ -373,7 +399,7 @@ BEGIN
     IF SQLERRM NOT ILIKE '%pending or active%' THEN RAISE; END IF;
   END;
 END $$;
-INSERT INTO wfrv_results VALUES (28,'an instance variable cannot be set once the instance is cancelled');
+INSERT INTO wfrv_results VALUES (29,'an instance variable cannot be set once the instance is cancelled');
 
 RESET ROLE;
 
@@ -381,10 +407,10 @@ DO $$
 DECLARE v_count INTEGER;
 BEGIN
   SELECT count(*) INTO v_count FROM wfrv_results;
-  IF v_count <> 28 THEN
-    RAISE EXCEPTION 'Workflow routing validation foundation tests FAILED: expected 28, got %', v_count;
+  IF v_count <> 29 THEN
+    RAISE EXCEPTION 'Workflow routing validation foundation tests FAILED: expected 29, got %', v_count;
   END IF;
-  RAISE NOTICE 'Workflow routing validation foundation tests PASSED: %/28', v_count;
+  RAISE NOTICE 'Workflow routing validation foundation tests PASSED: %/29', v_count;
 END $$;
 
 DROP FUNCTION wfrv_assert_create_rejected(TEXT, JSONB, UUID, TEXT);

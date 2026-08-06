@@ -27,6 +27,21 @@ BEGIN
     IF v_def NOT ILIKE '%''start'',''approval'',''end''%' THEN
       v_missing := v_missing || 'canonicalize-v1-node-type-allowlist-drift ';
     END IF;
+    -- Gateway inbound-edge cardinality (Phase 4.1A correction): the
+    -- corrected comparison (reject only zero inbound edges) must be
+    -- present. This is a necessary but not sufficient structural
+    -- signal — the behavioral suite (scenarios 18/19) is what proves
+    -- the comparison is actually the one applied to gateway_exclusive
+    -- nodes specifically, since the approval-node rule legitimately
+    -- keeps its own unrelated "<> 1" text in the same function body.
+    IF v_def NOT ILIKE '%v_inbound_total < 1%' THEN
+      v_missing := v_missing || 'gateway-inbound-edge-rule-not-corrected ';
+    END IF;
+    -- The approval-node inbound rule itself must remain untouched by
+    -- this correction — still exactly one inbound edge.
+    IF v_def NOT ILIKE '%v_inbound_total <> 1%' THEN
+      v_missing := v_missing || 'approval-inbound-edge-rule-regressed ';
+    END IF;
     IF has_function_privilege('anon', to_regprocedure('public.canonicalize_workflow_definition_payload(jsonb,uuid)'), 'EXECUTE')
        OR has_function_privilege('authenticated', to_regprocedure('public.canonicalize_workflow_definition_payload(jsonb,uuid)'), 'EXECUTE')
     THEN v_missing := v_missing || 'canonicalize-execute-leak '; END IF;

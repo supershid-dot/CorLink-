@@ -39,20 +39,25 @@
 -- input replays; same key + different input fails with 22023"
 -- contract docs/63 requires, without an event.
 --
--- Deliberate scope decision on gateway inbound-edge cardinality: the
--- approval-node validator this file's Phase 2B.1 predecessor already
--- shipped enforces EXACTLY ONE inbound edge per approval node (not
--- the more permissive "one or more, prove one reachable path"
--- reading of docs/63's prose). docs/69 said gateway_exclusive nodes
--- "reuse exactly the same rule already applied to approval nodes" —
--- this patch honors that literally by requiring exactly one inbound
--- edge per gateway_exclusive node too, which in turn means
--- docs/69's "Merge behavior" reconvergence claim is fully available
--- only onto End nodes (which have no upper inbound-edge bound) in
--- this implementation, not onto a second approval/gateway node. This
--- is a faithful implementation of "reuse the same rule," not a
--- redesign; it is called out explicitly in docs/70 rather than
--- silently reconciled.
+-- Gateway inbound-edge cardinality (corrected by CAP-002 Phase 4.1A,
+-- commit fix(workflow): allow gateway reconvergence, applied here in
+-- place since Phase 4.1 was never pushed or approved): a
+-- gateway_exclusive node requires one or more structural inbound
+-- edges, rejecting only zero. This matches docs/69 exactly ("one or
+-- more are structurally permitted... reusing exactly the same rule
+-- and the same proof obligation docs/63 already states for approval
+-- nodes") and its "Merge behavior" section, which explicitly
+-- describes ordinary reconvergence onto a gateway node as supported
+-- under the single-token model ("only one of the converging paths is
+-- ever actually live"). This node type's inbound rule is
+-- deliberately looser than the approval node's shipped
+-- exactly-one-inbound-edge check directly below it: an approval round
+-- is stateful (a quorum snapshot opens fresh at entry, so entry
+-- ambiguity would be a real correctness concern), while a
+-- gateway_exclusive node is stateless and re-evaluates identically
+-- regardless of which upstream path led to it, so the approval node's
+-- stricter precedent does not transfer. The approval-node inbound
+-- rule itself is unchanged by this correction.
 -- ============================================================
 
 BEGIN;
@@ -574,14 +579,14 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- Gateway nodes: exactly one inbound edge (reusing the exact same
-  -- rule already applied to approval nodes above — see docs/69
-  -- "Merge behavior" and this file's header comment), 2-16 outbound
+  -- Gateway nodes: one or more inbound edges (ordinary reconvergence
+  -- under the single-token model — see this file's header comment
+  -- and docs/69 "Merge behavior"; rejects only zero), 2-16 outbound
   -- edges, exactly one default edge, and pairwise-unique priorities
   -- among the node's own outbound edges.
   FOR v_node IN SELECT n FROM jsonb_array_elements(p_payload -> 'nodes') n WHERE (n ->> 'type') = 'gateway_exclusive' LOOP
     v_inbound_total := (SELECT count(*) FROM jsonb_array_elements(p_payload -> 'edges') e WHERE e ->> 'target' = v_node ->> 'key');
-    IF v_inbound_total <> 1 THEN
+    IF v_inbound_total < 1 THEN
       RAISE EXCEPTION 'wf_def_validation: rule=gateway_inbound_edges_invalid node=%', (v_node ->> 'key') USING ERRCODE = '22023';
     END IF;
 
