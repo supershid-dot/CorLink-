@@ -117,7 +117,12 @@ BEGIN
 
   -- Zero new tables — this milestone completes the round lifecycle on
   -- the existing Phase 1+2B.2 storage shape (still exactly 12).
-  IF (SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE 'workflow\_%' ESCAPE '\') <> 12
+  -- CAP-002 Phase 5.1 legitimately added 4 new tables
+  -- (workflow_delegations, workflow_delegation_events,
+  -- workflow_substitutions, workflow_substitution_events) on top of
+  -- this milestone's own baseline of 12 -- this check is updated to
+  -- the new, superseding total of 16, not defective.
+  IF (SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE 'workflow\_%' ESCAPE '\') <> 16
   THEN v_missing := v_missing || 'unexpected-table-count '; END IF;
 
   IF EXISTS (

@@ -127,7 +127,7 @@ RESET ROLE;
 --    workflow_events retains its single existing SELECT policy. ────
 DO $$
 BEGIN
-  IF (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'workflow\_%' ESCAPE '\') <> 12 THEN
+  IF (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'workflow\_%' ESCAPE '\') <> 16 THEN -- CAP-002 Phase 5.1 legitimately added 4 tables
     RAISE EXCEPTION 'unexpected workflow table count';
   END IF;
   IF (SELECT count(*) FROM pg_policies WHERE schemaname='public' AND tablename='workflow_events') <> 1 THEN

@@ -96,7 +96,12 @@ BEGIN
     SELECT 1 FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'workflow_variables' AND column_name = 'write_idempotency_key'
   ) THEN v_missing := v_missing || 'workflow_variables-missing-write-foundation-columns '; END IF;
-  IF (SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE 'workflow\_%' ESCAPE '\') <> 12
+  -- CAP-002 Phase 5.1 legitimately added 4 new tables
+  -- (workflow_delegations, workflow_delegation_events,
+  -- workflow_substitutions, workflow_substitution_events) on top of
+  -- this milestone's own baseline of 12 -- this check is updated to
+  -- the new, superseding total of 16, not defective.
+  IF (SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE 'workflow\_%' ESCAPE '\') <> 16
   THEN v_missing := v_missing || 'unexpected-table-count '; END IF;
 
   -- set_workflow_instance_variable: the one new command, authenticated-
