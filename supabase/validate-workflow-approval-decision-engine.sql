@@ -116,6 +116,21 @@ BEGIN
       AND privilege_type <> 'SELECT'
   ) THEN v_missing := v_missing || 'direct-write-grant '; END IF;
 
+  -- CAP-002 Phase 4.3 stabilization fix: the idempotency-replay
+  -- comparison must include both expected lock-version fields, not
+  -- just work_item_id/decision_code/comment — matching docs/67's own
+  -- "identical semantics to every other command" claim and mirroring
+  -- workflow_transition_instance/workflow_advance_graph_step's own
+  -- expected_lock_version comparison. Re-fetches the function body
+  -- fresh (v_def is reused as a loop variable elsewhere in this file)
+  -- and checks for the quoted metadata-key read, not the bare
+  -- parameter name (which appears in both the pre- and post-fix
+  -- bodies as an ordinary function argument).
+  SELECT pg_get_functiondef(to_regprocedure(v_fn)) INTO v_def;
+  IF v_def NOT ILIKE '%metadata ->> ''expected_instance_lock_version''%'
+     OR v_def NOT ILIKE '%metadata ->> ''expected_work_item_lock_version''%'
+  THEN v_missing := v_missing || 'decision-replay-omits-expected-lock-version-comparison '; END IF;
+
   -- Prior-phase baseline (2C.1 shared helper + graph-advancement
   -- command, 2B.1 canonicalizer, 2B.2 approval-round tables) remains
   -- intact and unaffected.

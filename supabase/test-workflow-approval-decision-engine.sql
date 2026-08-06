@@ -560,16 +560,54 @@ END $$;
 SELECT wfad_assert_contiguous((SELECT id FROM wfad_ids WHERE name='s18'), 'scenario 18');
 INSERT INTO wfad_results VALUES (18,'an actor from a different organization who was never offered the work item is rejected');
 
+-- ── 19: idempotency key reused with the same work_item_id/decision_
+--    code/comment but mismatched expected lock versions is rejected —
+--    CAP-002 Phase 4.3 stabilization fix. Before the fix, only
+--    work_item_id/decision_code/comment were compared on replay, so a
+--    command_id reused with different expected_instance_lock_version/
+--    expected_work_item_lock_version silently returned the original
+--    result (replayed=true) instead of the 22023 rejection docs/67
+--    promises ("identical semantics to every other command in this
+--    codebase"), matching workflow_transition_instance/workflow_
+--    advance_graph_step's own expected_lock_version comparison. A true
+--    replay (identical everything, including both lock versions)
+--    must still succeed. ──────────────────────────────────────────
+SELECT wfad_set_supervisor_count(3);
+SELECT wfad_start('s19', :MAJORITY_PAYLOAD::jsonb, '67100000-0001-0000-0000-000000000001');
+DO $$
+DECLARE v_iid UUID := (SELECT id FROM wfad_ids WHERE name='s19'); v_wi UUID; v_actor UUID; v_cmd UUID := gen_random_uuid();
+  v_replayed BOOLEAN;
+BEGIN
+  SELECT user_id INTO v_actor FROM workflow_approval_positions WHERE instance_id=v_iid ORDER BY ordinal LIMIT 1;
+  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub',v_actor)::text, true);
+  SELECT id INTO v_wi FROM workflow_work_items WHERE instance_id=v_iid AND assigned_to=v_actor;
+  PERFORM decide_workflow_work_item(v_wi, 'approve', 1, 0, v_cmd);
+  BEGIN
+    PERFORM decide_workflow_work_item(v_wi, 'approve', 999, 999, v_cmd);
+    RAISE EXCEPTION 'expected reused idempotency key with mismatched expected lock versions to be rejected';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM = 'expected reused idempotency key with mismatched expected lock versions to be rejected' THEN RAISE; END IF;
+    IF SQLERRM NOT ILIKE '%already used with different input%' THEN RAISE; END IF;
+  END;
+  SELECT replayed INTO v_replayed FROM decide_workflow_work_item(v_wi, 'approve', 1, 0, v_cmd);
+  IF NOT v_replayed THEN
+    RAISE EXCEPTION 'expected a true replay (identical lock versions) to still succeed with replayed=true';
+  END IF;
+  PERFORM set_config('request.jwt.claims','{"sub":"67100000-0001-0000-0000-000000000001"}',true);
+END $$;
+SELECT wfad_assert_contiguous((SELECT id FROM wfad_ids WHERE name='s19'), 'scenario 19');
+INSERT INTO wfad_results VALUES (19,'reusing a command id with the same work_item_id/decision_code/comment but a different expected instance or work item lock version is rejected as an idempotency-key conflict, not silently replayed; a true replay with identical lock versions still succeeds');
+
 RESET ROLE;
 
 DO $$
 DECLARE v_count INTEGER;
 BEGIN
   SELECT count(*) INTO v_count FROM wfad_results;
-  IF v_count <> 18 THEN
-    RAISE EXCEPTION 'Workflow approval decision engine behavioral tests FAILED: expected 18, got %', v_count;
+  IF v_count <> 19 THEN
+    RAISE EXCEPTION 'Workflow approval decision engine behavioral tests FAILED: expected 19, got %', v_count;
   END IF;
-  RAISE NOTICE 'Workflow approval decision engine behavioral tests PASSED: %/18', v_count;
+  RAISE NOTICE 'Workflow approval decision engine behavioral tests PASSED: %/19', v_count;
 END $$;
 
 ROLLBACK;
