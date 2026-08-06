@@ -226,9 +226,28 @@ this call (2, for a freshly created instance — sequence 1 is always
 `create_workflow_instance`'s own `instance_created` event) — never
 hardcoded to start at 1. The instance row's `next_event_sequence` is
 advanced by the exact count of events the branch taken actually emits (8
-for Start→End; `5 + electorate_count + offered_count` for Approval) in the
-same `UPDATE` that also advances `lock_version`, keeping both counters
-consistent with what is actually inserted.
+for Start→End; `7 + offered_count` for Approval — 7 fixed events from
+`instance_started` through `approval_round_opened`, plus one
+`work_item_created` per offered position) in the same `UPDATE` that
+also advances `lock_version`, keeping both counters consistent with
+what is actually inserted.
+
+> **Erratum (CAP-002 Phase 2B.2A, `supabase/patch-workflow-activation-
+> event-sequence-correction.sql`)**: the Approval branch originally
+> shipped with `5 + electorate_count + offered_count`, which only
+> equals the correct `7 + offered_count` when `electorate_count = 2`
+> — the exact candidate count every Phase 2B.1/2B.2 test fixture used,
+> so the defect passed all existing tests undetected. Any real
+> electorate size other than 2 left `next_event_sequence` incorrect:
+> too low for `electorate_count < 2` (the next event-writing command
+> on that instance collided with an already-used sequence number and
+> crashed), too high for `electorate_count > 2` (a silent, permanent
+> gap in the event ledger). Corrected to `7 + offered_count`; verified
+> for electorate sizes 0 (still correctly rejected, unaffected), 1, 2,
+> 3, and 5, under both parallel and sequential delivery, including
+> idempotent replay and a later lifecycle command succeeding
+> afterward — see `supabase/test-workflow-activation-event-sequence-
+> correction.sql`.
 
 **The one metadata subtlety**: the shared, unmodified idempotency-replay
 code (used by every command, including legacy `start`) reads `new_status`/
