@@ -135,10 +135,18 @@ BEGIN
      OR to_regprocedure('public.route_workflow_instance(uuid,uuid)') IS NOT NULL
   THEN v_missing := v_missing || 'out-of-scope-execution-rpc-present '; END IF;
 
+  -- This Phase 4.1 validator originally asserted
+  -- workflow_enter_downstream_node carried zero gateway-execution
+  -- logic, since gateway execution was explicitly out of scope for
+  -- Phase 4.1. CAP-002 Phase 4.2 (approved separately) legitimately
+  -- adds that execution to the same shared helper, per docs/69's own
+  -- roadmap — superseding, not violating, this milestone's original
+  -- scope boundary. See validate-workflow-gateway-routing-execution.sql
+  -- for Phase 4.2's own structural assertions about that logic.
   SELECT pg_get_functiondef(to_regprocedure(
     'public.workflow_enter_downstream_node(uuid,uuid,uuid,uuid,uuid,integer,uuid,bigint,bigint,uuid,text,text,jsonb,jsonb)'
   )) INTO v_def;
-  IF v_def ILIKE '%gateway_exclusive%' OR v_def ILIKE '%route_selected%' THEN
+  IF FALSE THEN
     v_missing := v_missing || 'graph-advancement-helper-executes-routing-out-of-scope ';
   END IF;
 
