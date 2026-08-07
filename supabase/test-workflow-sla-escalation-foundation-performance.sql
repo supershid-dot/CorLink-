@@ -226,4 +226,43 @@ BEGIN
   RAISE NOTICE 'Dimension 6e (workflow_calculate_calendar_deadline, business_days, 26-holiday calendar): % ms', round(v_ms, 2);
 END $$;
 
+-- ── CAP-002 Phase 5.3A correction 2 performance dimensions:
+--    calendar-aware business-time offset evaluation. ────────────────
+
+-- Dimension 6f: a single backward business-hours offset call, normal
+-- working-week calculation (no holidays crossed).
+DO $$
+DECLARE v_start TIMESTAMPTZ; v_ms NUMERIC; v_result TIMESTAMPTZ;
+BEGIN
+  v_start := clock_timestamp();
+  v_result := workflow_calculate_calendar_offset_backward(now(), 2, 'business_hours', '65360000-0003-0000-0000-000000000002', 'UTC');
+  v_ms := extract(epoch FROM (clock_timestamp() - v_start)) * 1000;
+  RAISE NOTICE 'Dimension 6f (workflow_calculate_calendar_offset_backward, business_hours, normal working week): % ms', round(v_ms, 2);
+END $$;
+
+-- Dimension 6g: a backward business_days offset against the 26-
+-- holiday-heavy calendar (the holiday-density case that most
+-- stresses the bounded day-stepping loop).
+DO $$
+DECLARE v_start TIMESTAMPTZ; v_ms NUMERIC; v_result TIMESTAMPTZ;
+BEGIN
+  v_start := clock_timestamp();
+  v_result := workflow_calculate_calendar_offset_backward(now(), 10, 'business_days', '65360000-0003-0000-0000-000000000002', 'UTC');
+  v_ms := extract(epoch FROM (clock_timestamp() - v_start)) * 1000;
+  RAISE NOTICE 'Dimension 6g (workflow_calculate_calendar_offset_backward, business_days, holiday-heavy 26-holiday calendar): % ms', round(v_ms, 2);
+END $$;
+
+-- Dimension 6h: repeated business-hour walking -- 1,000 consecutive
+-- backward calls, simulating a batch of warning-offset evaluations.
+DO $$
+DECLARE v_start TIMESTAMPTZ; v_ms NUMERIC; v_result TIMESTAMPTZ; i INTEGER;
+BEGIN
+  v_start := clock_timestamp();
+  FOR i IN 1..1000 LOOP
+    v_result := workflow_calculate_calendar_offset_backward(now() - (i || ' minutes')::INTERVAL, 3, 'business_hours', '65360000-0003-0000-0000-000000000002', 'UTC');
+  END LOOP;
+  v_ms := extract(epoch FROM (clock_timestamp() - v_start)) * 1000;
+  RAISE NOTICE 'Dimension 6h (1,000 repeated workflow_calculate_calendar_offset_backward calls, business_hours): % ms total, % ms/call', round(v_ms, 2), round(v_ms / 1000, 4);
+END $$;
+
 DO $$ BEGIN RAISE NOTICE 'Workflow SLA/escalation foundation performance probe PASSED'; END $$;

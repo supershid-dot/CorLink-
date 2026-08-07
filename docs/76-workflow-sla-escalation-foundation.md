@@ -94,13 +94,25 @@ overwritten — a query against `workflow_sla_clock_events` still shows every ea
 full lifecycle exactly as it happened.
 
 Docs/73 approves clock restart only as something a future "Reopen" workflow-level command
-would trigger, stating "no other trigger is approved by this document." Investigation found
-`workflow_instances.execution_epoch` already exists as a column (default 1) but has never
-been incremented anywhere in the codebase — no Reopen RPC exists yet. This is resolved as a
-narrow, documented interpretation, not an architecture decision: `restart_workflow_sla_
-clock` is implemented as an explicitly authorized, manually-invoked administrative command,
-never auto-wired to anything, documented here as the SLA-clock-level primitive a future
-Reopen RPC would call once it exists. It is never triggered automatically by this phase.
+would trigger, stating verbatim in its own "Open questions / deferred items" section:
+"Whether SLA clock 'restart' should ever be triggerable by anything other than Reopen is
+left open; no other trigger is approved by this document." `workflow_instances.execution_
+epoch` already exists as a column (default 1) but has never been incremented anywhere in the
+codebase — no Reopen RPC exists yet.
+
+**`restart_workflow_sla_clock` is not exposed as a standalone authenticated command in this
+phase.** An initial implementation granted `EXECUTE` on it to `authenticated`, reasoning that
+this was a narrow concretization of an open implementation detail; a subsequent read-only
+architecture-conformance review against docs/73's exact text found this to be a genuine
+mismatch, not a narrow interpretation — docs/73 doesn't merely leave the trigger *mechanism*
+unspecified, it explicitly declines to approve any trigger other than Reopen at all, and a
+directly callable RPC provides exactly that. The correction (`patch-workflow-sla-timing-
+correction.sql`) revokes `authenticated`'s `EXECUTE` grant; the function itself (epoch
+handling, prior-epoch snapshotting, deadline recomputation) is otherwise sound and is
+preserved unchanged as a private, ungranted primitive a future, separately approved Reopen
+RPC can call once Reopen itself exists. No Reopen RPC and no other trigger are invented by
+this phase — restart is currently unreachable from any client, by design, until that future
+milestone exists.
 
 ## Business calendar semantics
 
@@ -131,15 +143,29 @@ parameter, since there is no policy to source one from). Exactly one of `policy_
 `absolute_deadline` may be supplied — never both, never neither.
 
 Warning offsets (`[{"amount": N, "unit": "..."}]`, JSONB on the policy and copied onto the
-clock at creation) describe how long before the deadline a warning becomes due. **Narrow,
-documented simplification**: unlike the deadline itself, which is fully calendar-aware, a
-warning offset's `business_hours`/`business_days` units are treated identically to plain
-`hours`/`days` when computing "how far before the deadline." Rationale: an offset measures
-a lead time relative to an already-calendar-resolved deadline, not an independent calendar
-traversal — the deadline's own calendar-awareness is preserved completely; only the
-lead-time arithmetic is simplified. `record_workflow_sla_warning` requires each offset to be
-recorded strictly in order (never skipping index N-1) and only once its due time has been
-reached; it never changes `clock.state`.
+clock at creation) describe how long before the deadline a warning becomes due.
+**`business_hours`/`business_days` offsets are calendar-aware**, exactly like the deadline
+itself, using the same pinned business calendar (working days, working hours, timezone,
+holidays, and the specific calendar version pinned to the clock — never "whatever the
+calendar's current version is"). An initial implementation treated business-time offsets as
+plain elapsed time (identical to `hours`/`days`); a subsequent architecture-conformance
+review found this contradicted docs/73, which uses calendar-flavored language and examples
+for offsets throughout ("2 business days before due," "24 business hours after breach") with
+no separate, simplified arithmetic rule ever stated. The correction adds `workflow_
+calculate_calendar_offset_backward` — the same bounded, timezone-aware, holiday-aware
+day-stepping algorithm `workflow_calculate_calendar_deadline` already uses for the forward
+direction, generalized to walk backward — and routes both `record_workflow_sla_warning` and
+`workflow_sla_clocks_due_for_warning` through it. Escalation-level offsets (forward: "N
+business hours/days after breach or the previous level") reuse `workflow_calculate_
+calendar_deadline` directly, unchanged, since that is exactly what a forward calendar-aware
+offset already computes. **Plain `hours`/`days` offsets remain simple wall-clock
+arithmetic** — only `business_hours`/`business_days` are calendar-aware; this was never in
+question and is unaffected by the correction. `create_workflow_sla_policy` now also rejects
+a calendar-aware warning offset, or a reference to an escalation policy with any
+calendar-aware level offset, when no `calendar_id` is supplied — otherwise such an offset
+could be configured but never evaluated. `record_workflow_sla_warning` still requires each
+offset to be recorded strictly in order (never skipping index N-1) and only once its
+(now calendar-aware) due time has been reached; it never changes `clock.state`.
 
 ## Escalation policy model and ordered levels
 
@@ -174,6 +200,16 @@ triggering actor — is exactly what a later milestone needs to actually perform
 this phase deliberately stops at "recording that it is due/was manually invoked," never
 "performing the external effect."
 
+An architecture-conformance review confirmed this evidence-only behavior is correct but
+found that the schema itself did not self-document the distinction — a future reader of
+`workflow_escalation_events` without this document in hand could reasonably misread a
+`notify_supervisor` row as proof of delivery. The correction adds `COMMENT ON TABLE
+workflow_escalation_events` and `COMMENT ON COLUMN ...action_code`, stating explicitly that
+a row means the action became due/triggered and was recorded, that this does **not** prove
+external delivery or completion, and that `mark_breached` is the sole exception that also
+performs a real effect — self-documentation any future consumer of the table can see
+directly via `\d+` or `pg_description`, without needing this document.
+
 Manual escalation never grants visibility, never advances the graph, never records a
 business decision, and never mutates any of the six action codes' underlying work-item or
 approval state — behavioral scenarios 41 and 42 verify both the visibility and the
@@ -192,8 +228,10 @@ schedule** — no cron, no `pg_cron`, no background process, no trigger. The esc
 due-time calculation anchors `offset_from = 'breach'` to `breached_at` and `offset_from =
 'previous_level'` to the immediately preceding level's `workflow_escalation_events.occurred_
 at`; for level 1 (which has no possible previous level), `previous_level` is treated as
-`breach` — the same narrow lead-time-simplification precedent as warning offsets, applied
-consistently rather than inventing new semantics for an edge case docs/73 does not address.
+`breach` — a narrow, documented interpretation for an edge case docs/73 does not
+address, unrelated to and unaffected by the offset-arithmetic correction described above.
+The due-time itself (base anchor + offset) is now always calendar-aware for `business_
+hours`/`business_days` levels, computed via `workflow_calculate_calendar_deadline`.
 
 ## Authorization and visibility
 
@@ -278,6 +316,13 @@ scan, at this scale. No additional index was added beyond the two partial indexe
 present in the schema (`idx_workflow_sla_clocks_active_deadline`, `idx_workflow_sla_clocks_
 breach_due`) — none proved necessary at the tested scale.
 
+The Phase 5.3A correction re-ran and extended these probes for the new calendar-aware
+offset arithmetic: a single backward business-hours call (normal working week), a backward
+business-days call against the 26-holiday-heavy calendar (the case that most stresses the
+bounded day-stepping loop), and 1,000 repeated backward calls simulating a batch of warning-
+offset evaluations. All completed in well under a millisecond per call (~0.01–0.5 ms), and
+the due-detection queries' own timings were unaffected at the tested scale.
+
 ## Rollback
 
 Every one of the eight tables this phase creates is wholly new — no prior data was ever
@@ -293,9 +338,26 @@ passes; the patch reapplies cleanly afterward with the structural and behavioral
 passing again; the refusal path correctly blocks rollback when real data exists, with zero
 partial rollback (the refusing check runs before any `DROP` inside the same transaction).
 
+**The Phase 5.3A correction has its own, separate rollback**
+(`rollback-workflow-sla-timing-correction.sql`), reversing exactly the three corrected items
+(restart's grant, the calendar-aware offset functions and their callers, the evidence-table
+comments) back to byte-identical function definitions, grants, and comment state as commit
+`7cdc86e` — verified directly via `pg_get_functiondef` equality on every touched function,
+`has_function_privilege` equality on `restart_workflow_sla_clock`, and `obj_description`
+returning `NULL` again for `workflow_escalation_events`. This correction creates no table
+and stores no data of its own, so no refusal path is needed — reverting it never risks
+destroying evidence; existing clock/evidence rows are completely unaffected by which version
+of these functions is active, since a function body only affects future calls. **Rollback
+order**: to fully reverse Phase 5.3 including this correction, run `rollback-workflow-sla-
+timing-correction.sql` first, then `rollback-workflow-sla-escalation-foundation.sql` — the
+original Phase 5.3 rollback was not modified and does not need to be, since it already drops
+every table and (pre-correction) function it created; running it alone, without first
+reversing the correction, would merely leave the correction's one added function (`workflow_
+calculate_calendar_offset_backward`) behind as a harmless orphan.
+
 ## Testing
 
-Structural validator, a 47-scenario behavioral suite (clock creation/idempotency/
+Structural validator, a 57-scenario behavioral suite (clock creation/idempotency/
 authorization, pause/resume/repeated cycles, restart including history preservation,
 completion/cancellation and terminal immutability at both the RPC and database level,
 warning/breach threshold recording and due-detection reflection, ordered/idempotent/
@@ -303,9 +365,13 @@ rejected manual escalation across all the boundary conditions, calendar business
 holiday/timezone/version-stability behavior, no-visibility-grant and no-automatic-decision
 verification, delegation coexistence, work-item-assignee authorization, cross-organization
 rejection, and config-validation negative cases), an 8-scenario RLS suite, a 6-scenario/
-5-invariant concurrency suite, and a 6-dimension performance suite. The full CAP-002
-regression sweep (63 structural/behavioral/RLS/concurrency/performance files, Phase 1
-through 5.3) passes with zero failures.
+5-invariant concurrency suite, and an 8-dimension performance suite. Ten of the 57 behavioral
+scenarios (48–57) were added by the Phase 5.3A correction specifically: authenticated denial
+of `restart_workflow_sla_clock`, forward/backward business-hours offsets crossing a weekend
+and a configured holiday, plain-unit-offset regression, calendar-version stability for
+offset evaluation, the two new policy-creation validation rejections, and the escalation-
+evidence schema-comment check. The full CAP-002 regression sweep (63 structural/behavioral/
+RLS/concurrency/performance files, Phase 1 through 5.3A) passes with zero failures.
 
 Eleven earlier phases' structural/RLS validators hardcode an exact `workflow_%` table
 count as a schema-drift detector; each was updated from 16 to 24 to reflect this phase's 8
@@ -333,8 +399,24 @@ form, per the governing instruction:
 - **No new gateway or approval semantics.** Escalation never advances the graph, never
   records a decision, and never mutates any existing `workflow_events` event type.
 
-Four narrow, explicitly resolved implementation decisions (restart's trigger mechanism,
-manual-escalation's evidence-only vs. real-effect split, the warning/escalation-offset
-lead-time simplification, and the RLS-predicate grant fix) are documented inline above,
-each concretizing a detail docs/73 left open rather than changing anything docs/73
-actually specifies.
+Four narrow implementation decisions are documented inline above, each intended to
+concretize a detail docs/73 left open rather than change anything docs/73 actually
+specifies. A subsequent read-only architecture-conformance review found that two of the
+four, as originally implemented, did not hold to that standard, and the Phase 5.3A
+correction brings both back into conformance:
+
+- **Restart's trigger mechanism** — originally implemented as a standalone authenticated
+  command; the review found this exceeded docs/73's explicit "no other trigger is approved"
+  language. Corrected: private/ungranted, unreachable until a future Reopen RPC exists.
+- **Warning/escalation-offset arithmetic** — originally treated `business_hours`/`business_
+  days` offsets as plain elapsed time; the review found docs/73 uses calendar-flavored
+  language and examples for offsets with no separate simplified rule ever stated. Corrected:
+  fully calendar-aware, reusing/generalizing the same bounded calendar-walking algorithm the
+  deadline calculation already uses.
+- **Manual escalation's evidence-only vs. real-effect split** — reviewed and confirmed
+  correct as originally implemented (docs/73's own architecture-phase scope statement
+  excludes notification delivery); only the schema's self-documentation needed strengthening,
+  added via the Phase 5.3A `COMMENT ON TABLE`/`COLUMN` correction.
+- **The RLS-predicate grant shape** (`can_manage_workflow_sla_config`/`_clock` granted to
+  `authenticated`) — reviewed and confirmed to match `can_manage_workflow_definition`'s and
+  `can_manage_workflow_instance`'s own established precedent exactly; unchanged.

@@ -198,10 +198,13 @@ BEGIN
   IF has_function_privilege('anon', 'can_manage_workflow_sla_config(uuid)', 'EXECUTE') THEN v_missing := v_missing || 'can_manage_workflow_sla_config-anon-leak '; END IF;
   IF has_function_privilege('anon', 'can_manage_workflow_sla_clock(uuid)', 'EXECUTE') THEN v_missing := v_missing || 'can_manage_workflow_sla_clock-anon-leak '; END IF;
   IF has_function_privilege('authenticated', 'workflow_calculate_calendar_deadline(timestamptz,numeric,text,uuid,text)', 'EXECUTE') THEN v_missing := v_missing || 'workflow_calculate_calendar_deadline '; END IF;
-  IF has_function_privilege('authenticated', 'workflow_sla_offset_interval(numeric,text)', 'EXECUTE') THEN v_missing := v_missing || 'workflow_sla_offset_interval '; END IF;
+  IF has_function_privilege('authenticated', 'workflow_calculate_calendar_offset_backward(timestamptz,numeric,text,uuid,text)', 'EXECUTE') THEN v_missing := v_missing || 'workflow_calculate_calendar_offset_backward '; END IF;
   IF has_function_privilege('authenticated', 'workflow_sla_clocks_due_for_warning(integer)', 'EXECUTE') THEN v_missing := v_missing || 'due_for_warning '; END IF;
   IF has_function_privilege('authenticated', 'workflow_sla_clocks_due_for_breach(integer)', 'EXECUTE') THEN v_missing := v_missing || 'due_for_breach '; END IF;
   IF has_function_privilege('authenticated', 'workflow_sla_clocks_due_for_escalation(integer)', 'EXECUTE') THEN v_missing := v_missing || 'due_for_escalation '; END IF;
+  -- Phase 5.3A correction 1: restart_workflow_sla_clock must no longer be granted to
+  -- authenticated (docs/73 approves no restart trigger other than a future Reopen command).
+  IF has_function_privilege('authenticated', 'restart_workflow_sla_clock(uuid,bigint,text,uuid)', 'EXECUTE') THEN v_missing := v_missing || 'restart_workflow_sla_clock-must-not-be-granted '; END IF;
   IF v_missing <> '' THEN RAISE EXCEPTION 'unexpected grant posture: %', v_missing; END IF;
 
   -- Directly attempting to call a genuinely private helper still fails at runtime.
@@ -210,8 +213,13 @@ BEGIN
     RAISE EXCEPTION 'expected direct invocation of a private due-detection helper to be rejected';
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
+  BEGIN
+    PERFORM restart_workflow_sla_clock(gen_random_uuid(), 0, 'should be denied', gen_random_uuid());
+    RAISE EXCEPTION 'expected direct invocation of restart_workflow_sla_clock to be rejected';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
 END $$;
-INSERT INTO wf53r_results VALUES (7,'the calendar arithmetic core, the offset-interval helper, and all three due-detection functions are ungranted to authenticated and anon and reject direct invocation at runtime; the two RLS-predicate helpers (can_manage_workflow_sla_config/_clock) are correctly granted to authenticated only, matching established precedent, never anon');
+INSERT INTO wf53r_results VALUES (7,'the calendar arithmetic core (both the forward and the new backward calendar-walk functions), all three due-detection functions, and restart_workflow_sla_clock are all ungranted to authenticated and anon and reject direct invocation at runtime; the two RLS-predicate helpers (can_manage_workflow_sla_config/_clock) remain correctly granted to authenticated only, matching established precedent, never anon');
 
 -- ── 8: only the intended RPCs are granted, and pre-existing workflow_ RLS/grants are completely unchanged ──
 DO $$

@@ -308,6 +308,11 @@ END $$;
 INSERT INTO wf53_results VALUES (12,'repeated pause/resume cycles remain mathematically correct: accumulated_paused_duration is the exact sum of every cycle''s elapsed interval');
 
 -- ── 13: restart discards prior elapsed contribution, begins a new epoch, and preserves history ──
+-- restart_workflow_sla_clock is no longer granted to authenticated (Phase 5.3A correction 1 --
+-- docs/73 approves no restart trigger other than a future Reopen command). This scenario
+-- exercises the function's own internal correctness the way a future, separately approved
+-- Reopen RPC would invoke it -- as a private primitive, not as a directly authenticated command.
+RESET ROLE;
 DO $$
 DECLARE v_before workflow_sla_clocks; v_result RECORD; v_after workflow_sla_clocks; v_ev workflow_sla_clock_events;
     v_prior_events_before INTEGER; v_prior_events_after INTEGER;
@@ -372,6 +377,8 @@ BEGIN
   END;
 END $$;
 INSERT INTO wf53_results VALUES (15,'restart_workflow_sla_clock is rejected on a paused clock -- it must be resumed first, restart is never used as a substitute for resume');
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claims', :'ADMIN_A', false);
 
 -- ── 16: complete sets completed_at and the terminal state ──
 DO $$
@@ -1032,15 +1039,286 @@ BEGIN
 END $$;
 INSERT INTO wf53_results VALUES (47,'create_workflow_sla_policy rejects a malformed warning_offsets entry (missing amount or an invalid unit)');
 
+-- ═══════════════════════════════════════════════════════════════════
+-- CAP-002 Phase 5.3A architecture-conformance correction scenarios
+-- ═══════════════════════════════════════════════════════════════════
+
+-- ── 48: authenticated cannot call restart_workflow_sla_clock directly ──
+DO $$
+BEGIN
+  BEGIN
+    PERFORM restart_workflow_sla_clock((SELECT id FROM wf53_ids WHERE name='clock_plain1'), 0, 'should be denied', gen_random_uuid());
+    RAISE EXCEPTION 'expected authenticated to be denied EXECUTE on restart_workflow_sla_clock';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+END $$;
+INSERT INTO wf53_results VALUES (48,'restart_workflow_sla_clock is not directly callable by authenticated -- docs/73 approves no restart trigger other than a future Reopen command, so this remains a private primitive until that command exists');
+
+-- A dedicated calendar for scenarios 49/51 (weekend-only cases) -- NOT the 'cal' calendar
+-- used by scenarios 38/40/54, since those later scenarios (in file order; 54 runs after this
+-- section) publish additional versions on 'cal' with different working hours, which would
+-- change 'cal' s *active* version out from under a freshly-created clock here.
+DO $$
+DECLARE v_ver_id UUID;
+BEGIN
+  SELECT version_id INTO v_ver_id FROM create_workflow_business_calendar_version(
+    '65330000-0000-0000-0000-000000000001','wf53_cal_53a_base','WF53A base calendar (weekend cases)','UTC',
+    ARRAY[1,2,3,4,5], '09:00'::TIME, '17:00'::TIME, ARRAY[]::DATE[], gen_random_uuid());
+  INSERT INTO wf53_ids VALUES ('cal_v_base_53a', v_ver_id);
+END $$;
+
+-- A second business calendar version carrying a holiday, shared by scenarios 50 and 52.
+DO $$
+DECLARE v_ver_id UUID;
+BEGIN
+  SELECT version_id INTO v_ver_id FROM create_workflow_business_calendar_version(
+    '65330000-0000-0000-0000-000000000001','wf53_cal_53a_holiday','WF53A holiday calendar','UTC',
+    ARRAY[1,2,3,4,5], '09:00'::TIME, '17:00'::TIME, ARRAY['2026-01-12']::DATE[], gen_random_uuid());
+  INSERT INTO wf53_ids VALUES ('cal_v_holiday_53a', v_ver_id);
+END $$;
+
+-- ── 49: forward business-hours escalation offset crosses a weekend correctly ──
+DO $$
+DECLARE v_esc_policy_id UUID; v_sla_policy_id UUID; v_clock_id UUID; v_cal_id UUID;
+BEGIN
+  SELECT calendar_id INTO v_cal_id FROM workflow_business_calendar_versions WHERE id = (SELECT id FROM wf53_ids WHERE name='cal_v_base_53a');
+  SELECT escalation_policy_id INTO v_esc_policy_id FROM create_workflow_escalation_policy(
+    '65330000-0000-0000-0000-000000000001','wf53_esc_calendar_wknd','Calendar-aware escalation policy (weekend)',
+    '[{"level_order":1,"offset_from":"breach","offset_amount":2,"offset_unit":"business_hours","action_code":"remind_actor"}]'::jsonb,
+    gen_random_uuid());
+  SELECT sla_policy_id INTO v_sla_policy_id FROM create_workflow_sla_policy(
+    '65330000-0000-0000-0000-000000000001','wf53_policy_esc_cal_wknd','Calendar-aware SLA+escalation policy (weekend)',
+    2,'hours',v_cal_id,'UTC','[]'::jsonb,true,true,v_esc_policy_id,gen_random_uuid());
+  SELECT clock_id INTO v_clock_id FROM create_workflow_sla_clock(
+    (SELECT id FROM wf53_ids WHERE name='i1'), NULL, NULL, v_sla_policy_id, 'manual', NULL, NULL, NULL, gen_random_uuid());
+  INSERT INTO wf53_ids VALUES ('clock_esc_calendar_wknd', v_clock_id);
+END $$;
+RESET ROLE;
+-- Force breached_at to Friday 2026-01-09 16:00 UTC (the 'cal' calendar version: Mon-Fri 09:00-17:00, no holiday).
+UPDATE workflow_sla_clocks SET breached_at = '2026-01-09 16:00:00+00'::timestamptz
+WHERE id = (SELECT id FROM wf53_ids WHERE name='clock_esc_calendar_wknd');
+DO $$
+DECLARE v_due_at TIMESTAMPTZ;
+BEGIN
+  SELECT due_at INTO v_due_at FROM workflow_sla_clocks_due_for_escalation(1000)
+  WHERE clock_id = (SELECT id FROM wf53_ids WHERE name='clock_esc_calendar_wknd');
+  IF v_due_at <> '2026-01-12 10:00:00+00'::timestamptz THEN
+    RAISE EXCEPTION 'expected the forward business-hours escalation offset (breach + 2 business hours) to skip the weekend, landing at 2026-01-12 10:00 UTC, got %', v_due_at;
+  END IF;
+END $$;
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claims', :'ADMIN_A', false);
+INSERT INTO wf53_results VALUES (49,'a forward business-hours escalation offset (breach + 2 business hours) correctly skips a weekend, via calendar-aware reuse of workflow_calculate_calendar_deadline, landing at the next working day''s opening hour');
+
+-- ── 50: forward business-hours escalation offset crosses a configured holiday correctly ──
+DO $$
+DECLARE v_esc_policy_id UUID; v_sla_policy_id UUID; v_clock_id UUID; v_cal_id UUID;
+BEGIN
+  SELECT calendar_id INTO v_cal_id FROM workflow_business_calendar_versions WHERE id = (SELECT id FROM wf53_ids WHERE name='cal_v_holiday_53a');
+  SELECT escalation_policy_id INTO v_esc_policy_id FROM create_workflow_escalation_policy(
+    '65330000-0000-0000-0000-000000000001','wf53_esc_calendar_hol','Calendar-aware escalation policy (holiday)',
+    '[{"level_order":1,"offset_from":"breach","offset_amount":2,"offset_unit":"business_hours","action_code":"remind_actor"}]'::jsonb,
+    gen_random_uuid());
+  SELECT sla_policy_id INTO v_sla_policy_id FROM create_workflow_sla_policy(
+    '65330000-0000-0000-0000-000000000001','wf53_policy_esc_cal_hol','Calendar-aware SLA+escalation policy (holiday)',
+    2,'hours',v_cal_id,'UTC','[]'::jsonb,true,true,v_esc_policy_id,gen_random_uuid());
+  SELECT clock_id INTO v_clock_id FROM create_workflow_sla_clock(
+    (SELECT id FROM wf53_ids WHERE name='i1'), NULL, NULL, v_sla_policy_id, 'manual', NULL, NULL, NULL, gen_random_uuid());
+  INSERT INTO wf53_ids VALUES ('clock_esc_calendar_hol', v_clock_id);
+END $$;
+RESET ROLE;
+-- Force breached_at to Friday 2026-01-09 16:00 UTC; the holiday calendar version marks
+-- Monday 2026-01-12 as a holiday, so the offset must also skip that day.
+UPDATE workflow_sla_clocks SET breached_at = '2026-01-09 16:00:00+00'::timestamptz
+WHERE id = (SELECT id FROM wf53_ids WHERE name='clock_esc_calendar_hol');
+DO $$
+DECLARE v_due_at TIMESTAMPTZ;
+BEGIN
+  SELECT due_at INTO v_due_at FROM workflow_sla_clocks_due_for_escalation(1000)
+  WHERE clock_id = (SELECT id FROM wf53_ids WHERE name='clock_esc_calendar_hol');
+  IF v_due_at <> '2026-01-13 10:00:00+00'::timestamptz THEN
+    RAISE EXCEPTION 'expected the forward business-hours escalation offset to also skip the configured holiday, landing at 2026-01-13 10:00 UTC, got %', v_due_at;
+  END IF;
+END $$;
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claims', :'ADMIN_A', false);
+INSERT INTO wf53_results VALUES (50,'a forward business-hours escalation offset also correctly skips a configured holiday, in addition to a non-working weekday');
+
+-- ── 51: backward business-hours warning offset crosses a weekend correctly ──
+DO $$
+DECLARE v_policy_id UUID; v_clock_id UUID; v_cal_id UUID;
+BEGIN
+  SELECT calendar_id INTO v_cal_id FROM workflow_business_calendar_versions WHERE id = (SELECT id FROM wf53_ids WHERE name='cal_v_base_53a');
+  SELECT sla_policy_id INTO v_policy_id FROM create_workflow_sla_policy(
+    '65330000-0000-0000-0000-000000000001','wf53_policy_warn_cal_wknd','Calendar-aware warning policy (weekend)',
+    4,'hours',v_cal_id,'UTC','[{"amount":2,"unit":"business_hours"}]'::jsonb,true,true,NULL,gen_random_uuid());
+  SELECT clock_id INTO v_clock_id FROM create_workflow_sla_clock(
+    (SELECT id FROM wf53_ids WHERE name='i1'), NULL, NULL, v_policy_id, 'manual', NULL, NULL, NULL, gen_random_uuid());
+  INSERT INTO wf53_ids VALUES ('clock_warn_calendar_wknd', v_clock_id);
+END $$;
+RESET ROLE;
+-- Force the deadline to Monday 2026-01-12 10:00 UTC.
+UPDATE workflow_sla_clocks SET effective_deadline = '2026-01-12 10:00:00+00'::timestamptz, effective_deadline_adjusted = '2026-01-12 10:00:00+00'::timestamptz
+WHERE id = (SELECT id FROM wf53_ids WHERE name='clock_warn_calendar_wknd');
+DO $$
+DECLARE v_due_at TIMESTAMPTZ;
+BEGIN
+  SELECT due_at INTO v_due_at FROM workflow_sla_clocks_due_for_warning(1000)
+  WHERE clock_id = (SELECT id FROM wf53_ids WHERE name='clock_warn_calendar_wknd');
+  IF v_due_at <> '2026-01-09 16:00:00+00'::timestamptz THEN
+    RAISE EXCEPTION 'expected the backward business-hours warning offset (deadline - 2 business hours) to skip the weekend, landing at 2026-01-09 16:00 UTC, got %', v_due_at;
+  END IF;
+END $$;
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claims', :'ADMIN_A', false);
+INSERT INTO wf53_results VALUES (51,'a backward business-hours warning offset (deadline - 2 business hours) correctly skips a weekend, via the new calendar-aware workflow_calculate_calendar_offset_backward, landing at the prior working day''s closing hour');
+
+-- ── 52: backward business-hours warning offset crosses a configured holiday correctly ──
+DO $$
+DECLARE v_policy_id UUID; v_clock_id UUID; v_cal_id UUID;
+BEGIN
+  SELECT calendar_id INTO v_cal_id FROM workflow_business_calendar_versions WHERE id = (SELECT id FROM wf53_ids WHERE name='cal_v_holiday_53a');
+  SELECT sla_policy_id INTO v_policy_id FROM create_workflow_sla_policy(
+    '65330000-0000-0000-0000-000000000001','wf53_policy_warn_cal_hol','Calendar-aware warning policy (holiday)',
+    4,'hours',v_cal_id,'UTC','[{"amount":2,"unit":"business_hours"}]'::jsonb,true,true,NULL,gen_random_uuid());
+  SELECT clock_id INTO v_clock_id FROM create_workflow_sla_clock(
+    (SELECT id FROM wf53_ids WHERE name='i1'), NULL, NULL, v_policy_id, 'manual', NULL, NULL, NULL, gen_random_uuid());
+  INSERT INTO wf53_ids VALUES ('clock_warn_calendar_hol', v_clock_id);
+END $$;
+RESET ROLE;
+-- Force the deadline to Tuesday 2026-01-13 10:00 UTC; the holiday calendar version marks
+-- Monday 2026-01-12 as a holiday, so the offset must skip both that day and the weekend.
+UPDATE workflow_sla_clocks SET effective_deadline = '2026-01-13 10:00:00+00'::timestamptz, effective_deadline_adjusted = '2026-01-13 10:00:00+00'::timestamptz
+WHERE id = (SELECT id FROM wf53_ids WHERE name='clock_warn_calendar_hol');
+DO $$
+DECLARE v_due_at TIMESTAMPTZ;
+BEGIN
+  SELECT due_at INTO v_due_at FROM workflow_sla_clocks_due_for_warning(1000)
+  WHERE clock_id = (SELECT id FROM wf53_ids WHERE name='clock_warn_calendar_hol');
+  IF v_due_at <> '2026-01-09 16:00:00+00'::timestamptz THEN
+    RAISE EXCEPTION 'expected the backward business-hours warning offset to also skip the configured holiday, landing at 2026-01-09 16:00 UTC, got %', v_due_at;
+  END IF;
+END $$;
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claims', :'ADMIN_A', false);
+INSERT INTO wf53_results VALUES (52,'a backward business-hours warning offset also correctly skips a configured holiday, in addition to a non-working weekday');
+
+-- ── 53: plain hours/days offsets remain simple wall-clock arithmetic, unaffected by calendar-awareness ──
+RESET ROLE;
+DO $$
+DECLARE v_forward TIMESTAMPTZ; v_backward TIMESTAMPTZ;
+BEGIN
+  v_forward := workflow_calculate_calendar_deadline('2026-01-09 16:00:00+00'::timestamptz, 5, 'hours', NULL, 'UTC');
+  IF v_forward <> '2026-01-09 21:00:00+00'::timestamptz THEN
+    RAISE EXCEPTION 'expected a plain-hours forward offset to remain simple wall-clock addition, got %', v_forward;
+  END IF;
+  v_backward := workflow_calculate_calendar_offset_backward('2026-01-13 10:00:00+00'::timestamptz, 3, 'days', NULL, 'UTC');
+  IF v_backward <> '2026-01-10 10:00:00+00'::timestamptz THEN
+    RAISE EXCEPTION 'expected a plain-days backward offset to remain simple wall-clock subtraction (never skipping weekends), got %', v_backward;
+  END IF;
+END $$;
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claims', :'ADMIN_A', false);
+INSERT INTO wf53_results VALUES (53,'plain hours/days offsets (both forward, for escalation, and backward, for warnings) remain simple wall-clock arithmetic, completely unaffected by the calendar-awareness correction applied to business_hours/business_days');
+
+-- ── 54: calendar-version stability also holds for offset evaluation, not just the deadline itself ──
+DO $$
+DECLARE v_policy_id UUID; v_clock_id UUID; v_row workflow_sla_clocks; v_new_ver_id UUID; v_due_before TIMESTAMPTZ; v_due_after TIMESTAMPTZ;
+BEGIN
+  SELECT sla_policy_id INTO v_policy_id FROM create_workflow_sla_policy(
+    '65330000-0000-0000-0000-000000000001','wf53_policy_warn_cal_stab','Calendar-version-stability warning policy',
+    4,'hours',(SELECT id FROM wf53_ids WHERE name='cal'),'UTC','[{"amount":2,"unit":"business_hours"}]'::jsonb,true,true,NULL,gen_random_uuid());
+  SELECT clock_id INTO v_clock_id FROM create_workflow_sla_clock(
+    (SELECT id FROM wf53_ids WHERE name='i1'), NULL, NULL, v_policy_id, 'manual', NULL, NULL, NULL, gen_random_uuid());
+  INSERT INTO wf53_ids VALUES ('clock_warn_cal_stab', v_clock_id);
+END $$;
+RESET ROLE;
+UPDATE workflow_sla_clocks SET effective_deadline = '2026-01-12 10:00:00+00'::timestamptz, effective_deadline_adjusted = '2026-01-12 10:00:00+00'::timestamptz
+WHERE id = (SELECT id FROM wf53_ids WHERE name='clock_warn_cal_stab');
+DO $$
+DECLARE v_due_before TIMESTAMPTZ;
+BEGIN
+  SELECT due_at INTO v_due_before FROM workflow_sla_clocks_due_for_warning(1000) WHERE clock_id = (SELECT id FROM wf53_ids WHERE name='clock_warn_cal_stab');
+  INSERT INTO wf53_scratch VALUES ('cal_stab_due_before', v_due_before::TEXT);
+END $$;
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claims', :'ADMIN_A', false);
+DO $$
+DECLARE v_new_ver_id UUID;
+BEGIN
+  -- Publish a new calendar version with different working hours -- this must NOT change
+  -- the already-pinned clock's offset due-time.
+  SELECT version_id INTO v_new_ver_id FROM create_workflow_business_calendar_version(
+    '65330000-0000-0000-0000-000000000001','wf53_cal','WF53 Calendar','UTC',
+    ARRAY[1,2,3,4,5], '07:00'::TIME, '19:00'::TIME, ARRAY[]::DATE[], gen_random_uuid());
+END $$;
+RESET ROLE;
+DO $$
+DECLARE v_due_before TIMESTAMPTZ; v_due_after TIMESTAMPTZ;
+BEGIN
+  SELECT val::TIMESTAMPTZ INTO v_due_before FROM wf53_scratch WHERE key = 'cal_stab_due_before';
+  SELECT due_at INTO v_due_after FROM workflow_sla_clocks_due_for_warning(1000) WHERE clock_id = (SELECT id FROM wf53_ids WHERE name='clock_warn_cal_stab');
+  IF v_due_after <> v_due_before THEN
+    RAISE EXCEPTION 'expected the offset due-time to remain pinned to the ORIGINAL calendar version, unaffected by a newer version''s different working hours, before=% after=%', v_due_before, v_due_after;
+  END IF;
+END $$;
+SET ROLE authenticated;
+SELECT set_config('request.jwt.claims', :'ADMIN_A', false);
+INSERT INTO wf53_results VALUES (54,'calendar-version stability holds for offset evaluation exactly as it does for the deadline itself: publishing a newer calendar version never retroactively changes an existing clock''s already-pinned offset due-time calculation');
+
+-- ── 55: create_workflow_sla_policy rejects a calendar-aware warning offset with no calendar_id ──
+DO $$
+BEGIN
+  BEGIN
+    PERFORM create_workflow_sla_policy(
+      '65330000-0000-0000-0000-000000000001','wf53_policy_badwarn_cal','Warning offset needs calendar',
+      1,'hours',NULL,'UTC','[{"amount":2,"unit":"business_hours"}]'::jsonb,true,true,NULL,gen_random_uuid());
+    RAISE EXCEPTION 'expected a business_hours warning offset with no calendar_id to be rejected';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT ILIKE '%calendar_id is required when any warning offset%' THEN RAISE; END IF;
+  END;
+END $$;
+INSERT INTO wf53_results VALUES (55,'create_workflow_sla_policy rejects a calendar-aware (business_hours/business_days) warning offset when no calendar_id is supplied, preventing a clock from ever being created with an offset it could never evaluate');
+
+-- ── 56: create_workflow_sla_policy rejects a calendar-aware escalation-level offset with no calendar_id ──
+DO $$
+DECLARE v_esc_policy_id UUID;
+BEGIN
+  SELECT escalation_policy_id INTO v_esc_policy_id FROM create_workflow_escalation_policy(
+    '65330000-0000-0000-0000-000000000001','wf53_esc_needs_cal','Escalation policy with a calendar-aware level',
+    '[{"level_order":1,"offset_from":"breach","offset_amount":1,"offset_unit":"business_days","action_code":"remind_actor"}]'::jsonb,
+    gen_random_uuid());
+  BEGIN
+    PERFORM create_workflow_sla_policy(
+      '65330000-0000-0000-0000-000000000001','wf53_policy_badesc_cal','Escalation offset needs calendar',
+      1,'hours',NULL,'UTC','[]'::jsonb,true,true,v_esc_policy_id,gen_random_uuid());
+    RAISE EXCEPTION 'expected referencing an escalation policy with a business_days level offset, with no calendar_id, to be rejected';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT ILIKE '%calendar_id is required when the referenced escalation policy%' THEN RAISE; END IF;
+  END;
+END $$;
+INSERT INTO wf53_results VALUES (56,'create_workflow_sla_policy rejects referencing an escalation policy that has any calendar-aware (business_hours/business_days) level offset when no calendar_id is supplied');
+
+-- ── 57: escalation evidence carries the required due/triggered-vs-performed self-documentation ──
+DO $$
+DECLARE v_comment TEXT;
+BEGIN
+  SELECT obj_description('workflow_escalation_events'::regclass, 'pg_class') INTO v_comment;
+  IF v_comment IS NULL OR v_comment NOT ILIKE '%does NOT prove%' THEN
+    RAISE EXCEPTION 'expected workflow_escalation_events to carry a schema comment clarifying due/triggered-vs-performed semantics, got %', v_comment;
+  END IF;
+END $$;
+INSERT INTO wf53_results VALUES (57,'workflow_escalation_events carries a schema-level comment self-documenting that a row means the action became due/triggered and was recorded, not that an external effect (notification, module action) was actually delivered -- except mark_breached, which also performs a real effect');
+
 RESET ROLE;
 DO $$
 DECLARE v_count INTEGER;
 BEGIN
   SELECT count(*) INTO v_count FROM wf53_results;
-  IF v_count <> 47 THEN
-    RAISE EXCEPTION 'Expected 47 scenarios to record a result, found %', v_count;
+  IF v_count <> 57 THEN
+    RAISE EXCEPTION 'Expected 57 scenarios to record a result, found %', v_count;
   END IF;
-  RAISE NOTICE 'Workflow SLA/escalation foundation behavioral tests PASSED: %/47', v_count;
+  RAISE NOTICE 'Workflow SLA/escalation foundation behavioral tests PASSED: %/57', v_count;
 END $$;
 
 ROLLBACK;

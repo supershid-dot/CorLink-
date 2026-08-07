@@ -172,7 +172,6 @@ BEGIN
     'create_workflow_sla_clock(uuid,uuid,uuid,uuid,text,uuid,timestamptz,text,uuid)',
     'pause_workflow_sla_clock(uuid,bigint,text,uuid)',
     'resume_workflow_sla_clock(uuid,bigint,uuid)',
-    'restart_workflow_sla_clock(uuid,bigint,text,uuid)',
     'complete_workflow_sla_clock(uuid,bigint,uuid)',
     'cancel_workflow_sla_clock(uuid,bigint,text,uuid)',
     'record_workflow_sla_warning(uuid,bigint,integer,uuid)',
@@ -194,6 +193,78 @@ BEGIN
         AND p.prosecdef AND p.proconfig @> ARRAY['search_path=public, pg_temp']::TEXT[]
     ) THEN v_missing := v_missing || (v_def || '-security '); END IF;
   END LOOP;
+
+  -- CAP-002 Phase 5.3A correction 1: restart_workflow_sla_clock must
+  -- exist (as a private primitive a future, separately approved
+  -- Reopen RPC can call) but must NOT be directly callable by
+  -- authenticated or anon -- docs/73's own "Open questions" section
+  -- states "no other trigger is approved by this document" for
+  -- restart besides Reopen, so exposing it as a standalone
+  -- authenticated command exceeds the approved contract.
+  IF to_regprocedure('public.restart_workflow_sla_clock(uuid,bigint,text,uuid)') IS NULL THEN
+    v_missing := v_missing || 'restart_workflow_sla_clock-missing ';
+  ELSE
+    IF has_function_privilege('authenticated', to_regprocedure('public.restart_workflow_sla_clock(uuid,bigint,text,uuid)'), 'EXECUTE') THEN
+      v_missing := v_missing || 'restart_workflow_sla_clock-must-not-be-granted-to-authenticated ';
+    END IF;
+    IF has_function_privilege('anon', to_regprocedure('public.restart_workflow_sla_clock(uuid,bigint,text,uuid)'), 'EXECUTE') THEN
+      v_missing := v_missing || 'restart_workflow_sla_clock-anon-leak ';
+    END IF;
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.restart_workflow_sla_clock(uuid,bigint,text,uuid)')
+        AND p.prosecdef AND p.proconfig @> ARRAY['search_path=public, pg_temp']::TEXT[]
+    ) THEN v_missing := v_missing || 'restart_workflow_sla_clock-security '; END IF;
+  END IF;
+
+  -- CAP-002 Phase 5.3A correction 2: business_hours/business_days
+  -- offsets are now calendar-aware. workflow_sla_offset_interval (the
+  -- old calendar-oblivious helper) must be gone; the new backward
+  -- calendar-walk function must exist and remain private (same
+  -- posture as workflow_calculate_calendar_deadline, which it mirrors
+  -- and which must remain unchanged and still private).
+  IF to_regprocedure('public.workflow_sla_offset_interval(numeric,text)') IS NOT NULL THEN
+    v_missing := v_missing || 'workflow_sla_offset_interval-should-be-dropped ';
+  END IF;
+  IF to_regprocedure('public.workflow_calculate_calendar_offset_backward(timestamptz,numeric,text,uuid,text)') IS NULL THEN
+    v_missing := v_missing || 'workflow_calculate_calendar_offset_backward-missing ';
+  ELSE
+    IF has_function_privilege('authenticated', to_regprocedure('public.workflow_calculate_calendar_offset_backward(timestamptz,numeric,text,uuid,text)'), 'EXECUTE')
+       OR has_function_privilege('anon', to_regprocedure('public.workflow_calculate_calendar_offset_backward(timestamptz,numeric,text,uuid,text)'), 'EXECUTE')
+    THEN v_missing := v_missing || 'workflow_calculate_calendar_offset_backward-execute-leak '; END IF;
+  END IF;
+  IF to_regprocedure('public.workflow_calculate_calendar_deadline(timestamptz,numeric,text,uuid,text)') IS NULL THEN
+    v_missing := v_missing || 'workflow_calculate_calendar_deadline-missing ';
+  END IF;
+  -- record_workflow_sla_warning and both due-detection functions that
+  -- evaluate offsets must reference the calendar-aware functions, not
+  -- the dropped interval helper.
+  FOR v_def IN SELECT unnest(ARRAY[
+    'record_workflow_sla_warning(uuid,bigint,integer,uuid)',
+    'workflow_sla_clocks_due_for_warning(integer)'
+  ]) LOOP
+    SELECT pg_get_functiondef(to_regprocedure('public.' || v_def)) INTO v_tbl;
+    IF v_tbl NOT ILIKE '%workflow_calculate_calendar_offset_backward%' THEN
+      v_missing := v_missing || (v_def || '-not-calendar-aware-backward ');
+    END IF;
+  END LOOP;
+  SELECT pg_get_functiondef(to_regprocedure('public.workflow_sla_clocks_due_for_escalation(integer)')) INTO v_tbl;
+  IF v_tbl NOT ILIKE '%workflow_calculate_calendar_deadline%' THEN
+    v_missing := v_missing || 'workflow_sla_clocks_due_for_escalation-not-calendar-aware-forward ';
+  END IF;
+
+  -- CAP-002 Phase 5.3A correction 3: workflow_escalation_events must
+  -- carry the triggered/due-vs-performed self-documentation comment.
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_description d
+    JOIN pg_class c ON c.oid = d.objoid
+    WHERE c.relname = 'workflow_escalation_events' AND d.objsubid = 0
+      AND d.description ILIKE '%does NOT prove%'
+  ) THEN v_missing := v_missing || 'workflow_escalation_events-missing-evidence-semantics-comment '; END IF;
+
+  -- No worker/cron/notification execution was added by the correction.
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
+    v_missing := v_missing || 'pg_cron-extension-present ';
+  END IF;
 
   -- Idempotent-replay discipline (the Phase 4.3 defect this patch
   -- must not repeat): every mutating RPC's body compares
@@ -255,5 +326,5 @@ BEGIN
   IF v_missing <> '' THEN
     RAISE EXCEPTION 'Workflow SLA/escalation foundation structural check FAILED: %', v_missing;
   END IF;
-  RAISE NOTICE 'Workflow SLA/escalation foundation structural check PASSED (8 new tables with RLS enabled and SELECT-only grants, immutability triggers present, closed 7-action allowlist intact, smallest-state-machine clock states intact, effective_deadline_adjusted correctly NOT a generated column, due-detection helpers private and read-only, all lifecycle RPCs authenticated-only/SECURITY DEFINER/pinned search_path with expected_lock_version replay discipline, manual escalation never touches protected graph machinery, zero out-of-scope worker/notification/cron wiring, prior-phase baseline fully intact and unaware of SLA/escalation).';
+  RAISE NOTICE 'Workflow SLA/escalation foundation structural check PASSED (8 new tables with RLS enabled and SELECT-only grants, immutability triggers present, closed 7-action allowlist intact, smallest-state-machine clock states intact, effective_deadline_adjusted correctly NOT a generated column, due-detection helpers private and read-only, all lifecycle RPCs authenticated-only/SECURITY DEFINER/pinned search_path with expected_lock_version replay discipline, manual escalation never touches protected graph machinery, zero out-of-scope worker/notification/cron wiring, prior-phase baseline fully intact and unaware of SLA/escalation -- Phase 5.3A: restart_workflow_sla_clock private/ungranted, business_hours/business_days offsets calendar-aware via workflow_calculate_calendar_offset_backward/workflow_calculate_calendar_deadline, escalation-evidence semantics documented via schema comment).';
 END $$;

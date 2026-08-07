@@ -42,6 +42,18 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Same as wf53c_connect but stays as postgres (never SET ROLE
+-- authenticated) -- used only to simulate the internal/future-Reopen-
+-- primitive invocation of restart_workflow_sla_clock, which Phase
+-- 5.3A correction 1 makes ungranted to authenticated.
+CREATE OR REPLACE FUNCTION wf53c_connect_super(p_conn TEXT, p_sub TEXT) RETURNS VOID AS $$
+DECLARE v_dummy TEXT;
+BEGIN
+  PERFORM dblink_connect(p_conn, 'host=127.0.0.1 port='||current_setting('port')||' dbname='||current_database()||' user=postgres');
+  SELECT t.v INTO v_dummy FROM dblink(p_conn, format($f$SELECT set_config('request.jwt.claims','{"sub":"%s"}',false)$f$, p_sub)) AS t(v TEXT);
+END;
+$$ LANGUAGE plpgsql;
+
 -- Staying postgres at the top level (as the Phase 5.2 precedent
 -- does): dblink_connect() requires the calling role to be superuser
 -- (or supply a password), and postgres bypasses RLS/grants anyway.
@@ -227,7 +239,10 @@ BEGIN
     (SELECT id FROM wf53c_ids WHERE name='i1'), NULL, NULL, (SELECT id FROM wf53c_ids WHERE name='policy_esc'), 'manual', NULL, NULL, NULL, gen_random_uuid());
   INSERT INTO wf53c_ids VALUES ('clock4', v_clock_id);
 END $$;
-SELECT wf53c_connect('w1','65350000-0001-0000-0000-000000000001');
+-- w1 uses the superuser (non-authenticated-role) connector: restart_workflow_sla_clock is
+-- private (Phase 5.3A correction 1), so this race simulates the internal/future-Reopen-
+-- primitive invocation racing against an ordinary authenticated manual escalation call.
+SELECT wf53c_connect_super('w1','65350000-0001-0000-0000-000000000001');
 SELECT wf53c_connect('w2','65350000-0001-0000-0000-000000000001');
 DO $$
 DECLARE v_id UUID := (SELECT id FROM wf53c_ids WHERE name='clock4');
