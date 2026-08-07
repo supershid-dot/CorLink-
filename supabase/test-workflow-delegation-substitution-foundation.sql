@@ -599,7 +599,40 @@ END $$;
 SET LOCAL ROLE authenticated;
 INSERT INTO wfds_results VALUES (32,'substitution lifecycle evidence is immutable: even a direct superuser UPDATE or DELETE is rejected by the append-only trigger');
 
+-- Scenario 22's acting_appointment substitution (org 001 supervisor
+-- role -> Dave) is still active at this point and was never revoked
+-- by any later scenario in this file. Phase 5.1 never needed to
+-- clean it up, since nothing downstream cared under the "no live
+-- integration" boundary this section originally proved. Phase 5.2
+-- makes workflow_resolve_approval_candidates substitution-aware, so
+-- a leftover active substitution for the exact role/scope this
+-- fixture's own selector uses would now (correctly) collapse Alice
+-- and Bob to the same effective candidate (Dave) and fail the
+-- fixture's candidate resolution before it even reaches the
+-- delegation assertions below. Revoked here purely to give this
+-- fixture a substitution-free candidate pool again, matching its own
+-- narrow intent (proving delegation's effect on assigned_to) rather
+-- than accidentally re-testing substitution's effect on candidate
+-- resolution, which now has its own dedicated coverage in
+-- test-workflow-delegation-runtime-integration.sql.
+SELECT set_config('request.jwt.claims', :'ADMIN', true);
+SELECT status FROM revoke_workflow_substitution((SELECT id FROM wfds_ids WHERE name='s22'), 0, 'test fixture cleanup', gen_random_uuid());
+
 -- ══════════════ LIVE-INTEGRATION BOUNDARY (real engine fixture) ═══
+--
+-- Phase 5.2 note: this section was written under Phase 5.1's
+-- deliberate "no live integration" scope and originally proved the
+-- OPPOSITE of what is now true by design. Scenario 33 (a work-item-
+-- scoped delegation never changes workflow_work_items.assigned_to)
+-- remains true and unmodified under Phase 5.2's additive-authorization
+-- design. Scenarios 34-35, which asserted zero references to the
+-- delegation/substitution tables from the engine's core functions,
+-- are updated below to assert the new, intended integrated behavior
+-- instead of being left to assert something Phase 5.2 correctly makes
+-- false — the superseded-assertion discipline already used elsewhere
+-- in this codebase for facts a later, approved milestone legitimately
+-- changes (e.g. the workflow table count going from 12 to 16 in Phase
+-- 5.1's own structural validator).
 
 \set REAL_PAYLOAD '\'{"schema_version":1,"entry_node":"start","nodes":[{"key":"start","type":"start","config":{}},{"key":"review","type":"approval","config":{"delivery_mode":"parallel","decision_rule":"majority","minimum_approvals":null,"requirement":"required","optional_policy":null,"allow_abstain":true,"reject_behavior":"when_approval_impossible","allow_self_approval":true,"allow_multi_capacity":false,"minimum_candidates":1,"candidate_selectors":[{"key":"home_supervisors","order":1,"type":"organization_role","organization":"home","role":"supervisor"}],"comment_policy":{"approve":"optional","reject":"required","abstain":"optional"}}},{"key":"a_end","type":"end","config":{"outcome_code":"a"}},{"key":"r_end","type":"end","config":{"outcome_code":"r"}}],"edges":[{"source":"start","target":"review","outcome":"started","priority":0,"default":false},{"source":"review","target":"a_end","outcome":"approved","priority":0,"default":false},{"source":"review","target":"r_end","outcome":"rejected","priority":0,"default":false}]}\''
 
@@ -642,22 +675,32 @@ BEGIN
     RAISE EXCEPTION 'expected the existing approval decision path to behave exactly as before Phase 5.1, got status %', v_status;
   END IF;
 END $$;
-INSERT INTO wfds_results VALUES (34,'an ordinary approval decision on the same instance behaves exactly as it did before Phase 5.1 (delegation is not live-integrated)');
+INSERT INTO wfds_results VALUES (34,'an ordinary approval decision by the original assignee, with no delegation/substitution in effect, behaves exactly as it did before Phase 5.1/5.2');
 
--- ── 35: existing workflow engine validators remain passing ─────────
+-- ── 35: Phase 5.2 integration is present where docs/73 places it ───
+-- Superseded by Phase 5.2 (was: "must not reference" — proving the
+-- Phase 5.1 non-integration boundary). Now inverted to confirm the
+-- opposite, intended fact: decide_workflow_work_item genuinely
+-- consults workflow_delegations (its authorization seam) and
+-- workflow_enter_downstream_node's candidate resolution genuinely
+-- consults workflow_substitutions (via workflow_resolve_approval_
+-- candidates, its candidate-resolution seam), while routing/graph-
+-- traversal mechanics remain untouched. Full structural/behavioral
+-- coverage of the integration itself lives in
+-- test-workflow-delegation-runtime-integration.sql.
 DO $$
 DECLARE v_def TEXT;
 BEGIN
   SELECT pg_get_functiondef('decide_workflow_work_item(uuid,text,bigint,bigint,uuid,text)'::regprocedure) INTO v_def;
-  IF v_def ILIKE '%workflow_delegations%' OR v_def ILIKE '%workflow_substitutions%' THEN
-    RAISE EXCEPTION 'decide_workflow_work_item must not reference the new delegation/substitution tables';
+  IF v_def NOT ILIKE '%workflow_delegations%' AND v_def NOT ILIKE '%workflow_resolve_active_delegation%' THEN
+    RAISE EXCEPTION 'decide_workflow_work_item should now consult delegation, per Phase 5.2';
   END IF;
   SELECT pg_get_functiondef('workflow_enter_downstream_node(uuid,uuid,uuid,uuid,uuid,integer,uuid,bigint,bigint,uuid,text,text,jsonb,jsonb)'::regprocedure) INTO v_def;
   IF v_def ILIKE '%workflow_delegations%' OR v_def ILIKE '%workflow_substitutions%' THEN
-    RAISE EXCEPTION 'workflow_enter_downstream_node must not reference the new delegation/substitution tables';
+    RAISE EXCEPTION 'workflow_enter_downstream_node itself must still carry zero direct references — substitution is consulted only inside workflow_resolve_approval_candidates, never inlined into graph-traversal mechanics';
   END IF;
 END $$;
-INSERT INTO wfds_results VALUES (35,'the core graph-advancement and decision functions carry zero references to the new delegation/substitution objects (full validator/regression coverage runs separately)');
+INSERT INTO wfds_results VALUES (35,'decide_workflow_work_item now genuinely consults delegation (its authorization seam) while workflow_enter_downstream_node itself still carries zero direct references to either table -- substitution reaches it only indirectly, through workflow_resolve_approval_candidates, never inlined into graph-traversal mechanics');
 
 RESET ROLE;
 
