@@ -140,7 +140,10 @@ BEGIN
   -- storage shape (still exactly 16 workflow_ tables;
   -- workflow_approval_positions.section_id already existed since
   -- Phase 2B.2 and is populated here for the first time, not added).
-  IF (SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE 'workflow\_%' ESCAPE '\') <> 16
+  -- CAP-002 Phase 5.3 legitimately added 8 new tables on top of
+  -- this milestone's own baseline of 16 -- this check is updated to
+  -- the new, superseding total of 24, not defective.
+  IF (SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE 'workflow\_%' ESCAPE '\') <> 24
   THEN v_missing := v_missing || 'unexpected-table-count '; END IF;
 
   IF EXISTS (

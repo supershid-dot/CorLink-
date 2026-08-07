@@ -34,8 +34,10 @@ BEGIN
   END LOOP;
 
   -- Overall workflow table count: the Phase 1-4.3 baseline of 12 plus
-  -- these 4 new tables.
-  IF (SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE 'workflow\_%' ESCAPE '\') <> 16
+  -- these 4 new tables -- CAP-002 Phase 5.3 legitimately added 8
+  -- more on top of that (16 -> 24); this check is updated to the
+  -- new, superseding total, not defective.
+  IF (SELECT count(*) FROM pg_tables WHERE schemaname = 'public' AND tablename LIKE 'workflow\_%' ESCAPE '\') <> 24
   THEN v_missing := v_missing || 'unexpected-table-count '; END IF;
 
   -- No direct write grant to anon/authenticated on any workflow

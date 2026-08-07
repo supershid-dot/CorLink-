@@ -108,7 +108,7 @@ RESET ROLE;
 --    Phase 1+2B.2's storage shape unchanged. ───────────────────────
 DO $$
 BEGIN
-  IF (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'workflow\_%' ESCAPE '\') <> 16 THEN -- CAP-002 Phase 5.1 legitimately added 4 tables
+  IF (SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename LIKE 'workflow\_%' ESCAPE '\') <> 24 THEN -- CAP-002 Phase 5.1 added 4 tables (12->16), Phase 5.3 added 8 more (16->24)
     RAISE EXCEPTION 'unexpected workflow table count';
   END IF;
 END $$;
