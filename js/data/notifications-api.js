@@ -3,6 +3,17 @@
 // org_supervisor_user_ids() RPC helpers (supabase/notifications.sql)
 // that requests-api.js/prisoner-letters-api.js call to figure out who
 // to notify at each workflow transition.
+//
+// notify() creates rows via the create_legacy_notification() RPC
+// (supabase/patch-legacy-notification-insert-rls-fix.sql), not a raw
+// table insert — the table's own INSERT policy was removed because it
+// only checked the caller was authenticated, letting any authenticated
+// user fabricate a notification for any other user. The RPC validates
+// every recipient server-side (same organization as the caller, or a
+// real requests/prisoner_letters row establishing a genuine
+// cross-organization relationship) before inserting anything. This
+// function's own signature and fire-and-forget behavior are unchanged,
+// so every existing caller keeps working without modification.
 
 const NotificationsAPI = (() => {
 
@@ -47,19 +58,26 @@ const NotificationsAPI = (() => {
       if (error) throw error;
     },
 
-    // Best-effort by design: a notification failing to insert (RLS
-    // hiccup, transient network error) should never break the workflow
-    // action it's attached to, so this swallows its own errors rather
-    // than throwing — callers fire-and-forget this after their real
-    // mutation has already succeeded.
+    // Best-effort by design: a notification failing to insert (RLS/
+    // authorization rejection, transient network error) should never
+    // break the workflow action it's attached to, so this swallows its
+    // own errors rather than throwing — callers fire-and-forget this
+    // after their real mutation has already succeeded. The RPC
+    // validates the whole recipient list together; if one recipient in
+    // a batch fails authorization, the whole call is rejected and
+    // logged here rather than partially applied — the same all-or-
+    // nothing behavior the previous single multi-row INSERT already had.
     async notify(userIds, { type, recordType, recordId, message }) {
       if (!userIds || userIds.length === 0) return;
       const db = getSupabase();
-      const rows = [...new Set(userIds)].map(userId => ({
-        user_id: userId, type, record_type: recordType, record_id: recordId, message,
-      }));
-      const { error } = await db.from('notifications').insert(rows);
-      if (error) console.warn('CorLink: failed to insert notifications:', error.message);
+      const { error } = await db.rpc('create_legacy_notification', {
+        p_user_ids: [...new Set(userIds)],
+        p_type: type,
+        p_record_type: recordType,
+        p_record_id: recordId,
+        p_message: message,
+      });
+      if (error) console.warn('CorLink: failed to create notifications:', error.message);
     },
 
     // section_user_ids()/org_supervisor_user_ids() are RETURNS SETOF
