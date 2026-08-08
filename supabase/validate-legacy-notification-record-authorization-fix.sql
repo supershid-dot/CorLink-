@@ -153,16 +153,18 @@ BEGIN
     v_missing := v_missing || 'rpc-unexpectedly-takes-row-locks ';
   END IF;
 
-  -- CAP-003 Phase 1.1 (platform_outbox_events/user_notifications) is a
-  -- separate, later, independently-approved milestone -- their
-  -- existence is expected once that milestone has shipped and is not
-  -- itself evidence this 1.0B correction did anything out of scope.
-  -- notification_intents specifically remains never persisted as its
-  -- own table (docs/78 SS6's own explicit design choice) regardless of
-  -- how many later phases ship, so that check alone stays meaningful.
-  IF to_regclass('public.notification_intents') IS NOT NULL THEN
-    v_missing := v_missing || 'unexpected-cap003-object-created ';
-  END IF;
+  -- CAP-003 Phase 1.1 (platform_outbox_events/user_notifications) and
+  -- Phase 1.2 (notification_intents, docs/82) are separate, later,
+  -- independently-approved milestones -- their existence is expected
+  -- once each has shipped and is not itself evidence this 1.0B
+  -- correction did anything out of scope. docs/78 SS6 originally
+  -- deferred persisting notification intent as its own table pending "a
+  -- genuine need for standalone intent auditing"; Phase 1.2 found that
+  -- need (idempotent per-target-descriptor resolution requires a
+  -- durable, lockable row distinct from both the outbox event and the
+  -- resulting user_notifications) and documented the reconsideration in
+  -- docs/82 -- this 1.0B validator no longer asserts the table's
+  -- absence, only that 1.0B itself never created it.
 
   -- notifications.type CHECK constraint (the 30-value enum) remains
   -- deliberately untouched by this milestone too.
@@ -182,5 +184,5 @@ BEGIN
   IF v_missing <> '' THEN
     RAISE EXCEPTION 'Legacy notification RECORD-authorization correction structural check FAILED: %', v_missing;
   END IF;
-  RAISE NOTICE 'Legacy notification RECORD-authorization correction structural check PASSED (unconditional same-org bypass genuinely removed from create_legacy_notification''s body, closed record_type allowlist + per-record-type dispatch to notif_request/entry/prisoner_letter_legitimate_recipient present, record-existence check present, caller-authorization check present, closed (record_type,type) allowlist present and used, all generalized explicit-user helpers present and SECURITY DEFINER, preserved cross-organization party-org columns for request/prisoner_letter, notif_select/notif_update/RLS/type-enum/CAP-002 baseline all untouched, no new row-locking surface, zero CAP-003 Phase 1.1 objects created).';
+  RAISE NOTICE 'Legacy notification RECORD-authorization correction structural check PASSED (unconditional same-org bypass genuinely removed from create_legacy_notification''s body, closed record_type allowlist + per-record-type dispatch to notif_request/entry/prisoner_letter_legitimate_recipient present, record-existence check present, caller-authorization check present, closed (record_type,type) allowlist present and used, all generalized explicit-user helpers present and SECURITY DEFINER, preserved cross-organization party-org columns for request/prisoner_letter, notif_select/notif_update/RLS/type-enum/CAP-002 baseline all untouched, no new row-locking surface, this 1.0B correction itself created zero CAP-003 Phase 1.1/1.2 objects -- their presence, if any, is later-milestone territory asserted by their own validators).';
 END $$;
