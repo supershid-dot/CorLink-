@@ -199,24 +199,19 @@ BEGIN
     v_missing := v_missing || 'index-notification-unread-partial-missing ';
   END IF;
 
-  -- ── Scope discipline: nothing beyond the inert foundation exists ──
-  -- No worker/claim/dispatch functions.
-  IF EXISTS (
-    SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace
-      AND proname ILIKE ANY (ARRAY['%outbox%worker%','%outbox%dispatch%','%outbox%claim%','%process_pending_outbox%','%process_platform_outbox%'])
-  ) THEN v_missing := v_missing || 'unexpected-worker-function-exists '; END IF;
-  -- No retry/dead-letter processing worker (distinct from the mere
-  -- presence of the status/attempt_count/dead_letter columns, which
-  -- Phase 1.1 is explicitly required to include).
-  IF EXISTS (
-    SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace
-      AND proname ILIKE ANY (ARRAY['%retry_outbox%','%replay_dead_letter%','%dead_letter_worker%'])
-  ) THEN v_missing := v_missing || 'unexpected-retry-dead-letter-worker-exists '; END IF;
-  -- No recipient-resolution / target-descriptor engine yet.
-  IF EXISTS (
-    SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace
-      AND proname ILIKE ANY (ARRAY['%resolve_recipients%','%resolve_target_descriptor%','%recipient_resolution%'])
-  ) THEN v_missing := v_missing || 'unexpected-recipient-resolution-exists '; END IF;
+  -- ── Scope discipline: nothing beyond the inert foundation PLUS
+  -- later, separately-approved CAP-003 milestones exists ──
+  -- Recipient resolution (Phase 1.2, docs/82) and the outbox worker/
+  -- retry/dead-letter processing (Phase 1.3, docs/83) are both later,
+  -- independently-approved milestones -- their existence is expected
+  -- once each has shipped and is not itself evidence this 1.1
+  -- foundation patch did anything out of its own scope. This
+  -- validator no longer asserts their absence (their own structural
+  -- validators -- validate-notification-recipient-resolution.sql,
+  -- validate-notification-outbox-worker.sql -- own that responsibility
+  -- now), matching the same carve-out precedent
+  -- validate-legacy-notification-record-authorization-fix.sql already
+  -- established for notification_intents.
   -- No Realtime cutover / delivery-channel adapters.
   IF EXISTS (
     SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace
@@ -257,5 +252,5 @@ BEGIN
   IF v_missing <> '' THEN
     RAISE EXCEPTION 'Notification outbox persistence foundation structural check FAILED: %', v_missing;
   END IF;
-  RAISE NOTICE 'Notification outbox persistence foundation structural check PASSED (platform_outbox_events/user_notifications/platform_event_type_registry present with versioned open event-type envelopes, correlation/causation modeled, enqueue-level and notification-level dedup UNIQUE constraints present, business-fact columns immutability-trigger-protected on both tables, user_notifications recipient-scoped SELECT/UPDATE-only RLS with zero INSERT/DELETE policy, outbox fully inaccessible to authenticated/anon with zero policies, both creation primitives SECURITY DEFINER/pinned search_path/service_role-only, list API bounded+keyset-paginated and granted to authenticated, required indexes present, zero worker/retry/dead-letter/recipient-resolution/delivery-adapter/module-integration objects exist yet, CAP-002 and CAP-003 1.0A/1.0B baselines untouched).';
+  RAISE NOTICE 'Notification outbox persistence foundation structural check PASSED (platform_outbox_events/user_notifications/platform_event_type_registry present with versioned open event-type envelopes, correlation/causation modeled, enqueue-level and notification-level dedup UNIQUE constraints present, business-fact columns immutability-trigger-protected on both tables, user_notifications recipient-scoped SELECT/UPDATE-only RLS with zero INSERT/DELETE policy, outbox fully inaccessible to authenticated/anon with zero policies, both creation primitives SECURITY DEFINER/pinned search_path/service_role-only, list API bounded+keyset-paginated and granted to authenticated, required indexes present, zero delivery-adapter/module-integration objects exist yet, this 1.1 foundation itself created zero worker/retry/dead-letter/recipient-resolution objects -- their presence, if any, is later-milestone territory (Phase 1.2/1.3) asserted by their own validators, CAP-002 and CAP-003 1.0A/1.0B baselines untouched).';
 END $$;

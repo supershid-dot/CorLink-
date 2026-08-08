@@ -164,15 +164,19 @@ BEGIN
       AND policyname='notif_select' AND cmd='SELECT' AND qual='(user_id = auth.uid())'
   ) THEN v_missing := v_missing || 'legacy-notif_select-drift '; END IF;
 
-  -- ── Scope discipline: nothing beyond recipient resolution exists ──
-  IF EXISTS (
-    SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace
-      AND proname ILIKE ANY (ARRAY['%outbox%worker%','%outbox%dispatch%','%outbox%claim%','%process_pending_outbox%','%process_platform_outbox%'])
-  ) THEN v_missing := v_missing || 'unexpected-worker-function-exists '; END IF;
-  IF EXISTS (
-    SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace
-      AND proname ILIKE ANY (ARRAY['%retry_outbox%','%replay_dead_letter%','%dead_letter_worker%'])
-  ) THEN v_missing := v_missing || 'unexpected-retry-dead-letter-worker-exists '; END IF;
+  -- ── Scope discipline: nothing beyond recipient resolution PLUS the
+  -- later, separately-approved Phase 1.3 worker exists ──
+  -- The outbox worker/retry/dead-letter processing (Phase 1.3,
+  -- docs/83) is a separate, later, independently-approved milestone --
+  -- its existence is expected once it has shipped and is not itself
+  -- evidence this 1.2 recipient-resolution milestone did anything out
+  -- of its own scope. This validator no longer asserts its absence
+  -- (validate-notification-outbox-worker.sql owns that responsibility
+  -- now), matching the same carve-out precedent
+  -- validate-legacy-notification-record-authorization-fix.sql already
+  -- established for notification_intents and
+  -- validate-notification-outbox-persistence-foundation.sql now
+  -- mirrors for this same worker.
   IF EXISTS (
     SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace
       AND proname ILIKE ANY (ARRAY['%send_email%','%send_push%','%send_sms%','%deliver_notification%','%realtime_cutover%'])
@@ -197,5 +201,5 @@ BEGIN
   IF v_missing <> '' THEN
     RAISE EXCEPTION 'Notification recipient resolution structural check FAILED: %', v_missing;
   END IF;
-  RAISE NOTICE 'Notification recipient resolution structural check PASSED (notification_intents present with closed typed target-descriptor model, structural target-shape/bounded-array constraints, closed source_record_type dispatch fail-closed at creation time, create_notification_intent/resolve_notification_intent both SECURITY DEFINER/pinned search_path/service_role-only, resolve_notification_intent contains genuine authorization revalidation via intent_user_can_view_workflow_instance and reuses org_supervisor_user_ids/section_user_ids/workflow_participants/platform_create_user_notification rather than duplicating them, both intent- and notification-level dedup constraints present, notification_intents zero-policy RLS + immutability trigger, Phase 1.1/1.0A/1.0B baselines all untouched, zero worker/retry/dead-letter/delivery/module-integration objects exist yet, CAP-002 baseline intact).';
+  RAISE NOTICE 'Notification recipient resolution structural check PASSED (notification_intents present with closed typed target-descriptor model, structural target-shape/bounded-array constraints, closed source_record_type dispatch fail-closed at creation time, create_notification_intent/resolve_notification_intent both SECURITY DEFINER/pinned search_path/service_role-only, resolve_notification_intent contains genuine authorization revalidation via intent_user_can_view_workflow_instance and reuses org_supervisor_user_ids/section_user_ids/workflow_participants/platform_create_user_notification rather than duplicating them, both intent- and notification-level dedup constraints present, notification_intents zero-policy RLS + immutability trigger, Phase 1.1/1.0A/1.0B baselines all untouched, zero delivery/module-integration objects exist yet, this 1.2 milestone itself created zero worker/retry/dead-letter objects -- their presence, if any, is Phase 1.3''s own later-milestone territory asserted by its own validator, CAP-002 baseline intact).';
 END $$;
