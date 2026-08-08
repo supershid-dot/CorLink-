@@ -139,7 +139,9 @@ BEGIN
   ) THEN v_missing := v_missing || 'phase1.1-outbox-immutability-trigger-missing '; END IF;
 
   -- ── No notification delivery channel, no Realtime cutover, no
-  -- module integration exists yet ───────────────────────────────────
+  -- module integration beyond CAP-003 Phase 1.4's own explicitly
+  -- approved pilot (assign_task() -- docs/85, its own structural
+  -- validator is validate-notification-module-integration-foundation.sql) ──
   IF EXISTS (
     SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace
       AND proname ILIKE ANY (ARRAY['%send_email%','%send_push%','%send_sms%','%deliver_notification%','%realtime_cutover%'])
@@ -149,7 +151,7 @@ BEGIN
     WHERE pronamespace = 'public'::regnamespace
       AND proname IN (
         'submit_request_for_approval','approve_request','route_request','create_meeting',
-        'assign_task','log_entry','submit_prisoner_letter'
+        'log_entry','submit_prisoner_letter'
       )
       AND pg_get_functiondef(p.oid) ILIKE '%platform_enqueue_outbox_event%'
   ) THEN v_missing := v_missing || 'unexpected-module-integration-detected '; END IF;

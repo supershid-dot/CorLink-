@@ -103,12 +103,15 @@ BEGIN
   IF to_regprocedure('public.replay_dead_lettered_outbox_event(uuid)') IS NULL THEN
     v_missing := v_missing || 'phase1.3-replay_dead_lettered_outbox_event-missing '; END IF;
 
-  -- ── No CAP-003 Phase 1.4 object exists ──
+  -- ── No CAP-003 Phase 1.4 module integration beyond its own
+  -- explicitly approved pilot (assign_task() -- docs/85, its own
+  -- structural validator is
+  -- validate-notification-module-integration-foundation.sql) ──
   IF EXISTS (
     SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace
       AND proname IN (
         'submit_request_for_approval','approve_request','route_request','create_meeting',
-        'assign_task','log_entry','submit_prisoner_letter'
+        'log_entry','submit_prisoner_letter'
       )
       AND (pg_get_functiondef(oid) ILIKE '%create_notification_intent%' OR pg_get_functiondef(oid) ILIKE '%platform_enqueue_outbox_event%')
   ) THEN v_missing := v_missing || 'unexpected-phase1.4-module-integration-detected '; END IF;

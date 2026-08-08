@@ -217,8 +217,13 @@ BEGIN
     SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace
       AND proname ILIKE ANY (ARRAY['%send_email%','%send_push%','%send_sms%','%deliver_notification%'])
   ) THEN v_missing := v_missing || 'unexpected-delivery-adapter-exists '; END IF;
-  -- No module integration (Requests/Meetings/Tasks/Entry/Prisoner
-  -- Letters do not yet call the enqueue helper).
+  -- No module integration beyond CAP-003 Phase 1.4's own explicitly
+  -- approved pilot (assign_task() -- docs/85, its own structural
+  -- validator is validate-notification-module-integration-foundation.sql).
+  -- Requests/Meetings/Entry/Prisoner Letters and every other Tasks RPC
+  -- still do not call the enqueue helper -- matching the same
+  -- carve-out precedent already established above for
+  -- notification_intents/the outbox worker.
   IF EXISTS (
     SELECT 1 FROM pg_proc p
     JOIN pg_depend d ON d.objid = p.oid
@@ -236,7 +241,7 @@ BEGIN
     WHERE pronamespace = 'public'::regnamespace
       AND proname IN (
         'submit_request_for_approval','approve_request','route_request','create_meeting',
-        'assign_task','log_entry','submit_prisoner_letter'
+        'log_entry','submit_prisoner_letter'
       )
       AND pg_get_functiondef(p.oid) ILIKE '%platform_enqueue_outbox_event%'
   ) THEN v_missing := v_missing || 'unexpected-module-integration-detected '; END IF;
