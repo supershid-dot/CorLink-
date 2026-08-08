@@ -153,12 +153,16 @@ BEGIN
     v_missing := v_missing || 'rpc-unexpectedly-takes-row-locks ';
   END IF;
 
-  -- No CAP-003 Phase 1.1 outbox/persistence objects were accidentally
-  -- created by this record-authorization-only correction.
-  IF to_regclass('public.platform_outbox_events') IS NOT NULL
-     OR to_regclass('public.user_notifications') IS NOT NULL
-     OR to_regclass('public.notification_intents') IS NOT NULL
-  THEN v_missing := v_missing || 'unexpected-cap003-object-created '; END IF;
+  -- CAP-003 Phase 1.1 (platform_outbox_events/user_notifications) is a
+  -- separate, later, independently-approved milestone -- their
+  -- existence is expected once that milestone has shipped and is not
+  -- itself evidence this 1.0B correction did anything out of scope.
+  -- notification_intents specifically remains never persisted as its
+  -- own table (docs/78 SS6's own explicit design choice) regardless of
+  -- how many later phases ship, so that check alone stays meaningful.
+  IF to_regclass('public.notification_intents') IS NOT NULL THEN
+    v_missing := v_missing || 'unexpected-cap003-object-created ';
+  END IF;
 
   -- notifications.type CHECK constraint (the 30-value enum) remains
   -- deliberately untouched by this milestone too.

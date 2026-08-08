@@ -96,11 +96,12 @@ BEGIN
     v_missing := v_missing || 'rpc-unexpectedly-takes-row-locks '; -- policy-only correction, no new concurrency surface expected
   END IF;
 
-  -- No CAP-003 outbox/persistence objects were accidentally created by
-  -- this security-only correction milestone.
-  IF to_regclass('public.platform_outbox_events') IS NOT NULL
-     OR to_regclass('public.user_notifications') IS NOT NULL
-  THEN v_missing := v_missing || 'unexpected-cap003-object-created '; END IF;
+  -- CAP-003 Phase 1.1 (platform_outbox_events/user_notifications) is a
+  -- separate, later, independently-approved milestone -- their
+  -- existence (once that milestone has shipped) is expected and is
+  -- not itself evidence this security-only correction did anything
+  -- out of scope. This check intentionally no longer inspects those
+  -- two tables; nothing else needs asserting here for this milestone.
 
   -- notifications.type CHECK constraint (the 30-value enum) is
   -- deliberately untouched by this milestone -- still present, not
@@ -121,5 +122,5 @@ BEGIN
   IF v_missing <> '' THEN
     RAISE EXCEPTION 'Legacy notification INSERT-RLS correction structural check FAILED: %', v_missing;
   END IF;
-  RAISE NOTICE 'Legacy notification INSERT-RLS correction structural check PASSED (insecure notif_insert policy removed with zero INSERT policies remaining -- RLS denies every direct insert regardless of table grants, notif_select/notif_update untouched, no DELETE policy introduced, create_legacy_notification is SECURITY DEFINER/pinned search_path/authenticated-only with genuine active-user validation and no new row-locking surface, notifications.type enum untouched, zero CAP-003 objects created; the function body''s own recipient-validation logic is now record-authoritative per CAP-003 Phase 1.0B and is asserted by validate-legacy-notification-record-authorization-fix.sql).';
+  RAISE NOTICE 'Legacy notification INSERT-RLS correction structural check PASSED (insecure notif_insert policy removed with zero INSERT policies remaining -- RLS denies every direct insert regardless of table grants, notif_select/notif_update untouched, no DELETE policy introduced, create_legacy_notification is SECURITY DEFINER/pinned search_path/authenticated-only with genuine active-user validation and no new row-locking surface, notifications.type enum untouched; the function body''s own recipient-validation logic is now record-authoritative per CAP-003 Phase 1.0B and is asserted by validate-legacy-notification-record-authorization-fix.sql; CAP-003 Phase 1.1''s separate platform_outbox_events/user_notifications tables, once shipped, are asserted by validate-notification-outbox-persistence-foundation.sql).';
 END $$;
