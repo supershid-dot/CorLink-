@@ -1,5 +1,19 @@
 -- CAP-003 Phase 1.0A legacy notification INSERT-RLS correction
 -- structural validator (hard fail)
+--
+-- Updated by CAP-003 Phase 1.0B (docs/80): create_legacy_notification()
+-- is a live, shared function -- 1.0B legitimately CREATE OR REPLACEs
+-- it with a stricter, record-authoritative implementation that no
+-- longer contains the literal "v_recipient_org = v_actor_org"
+-- unconditional same-org bypass this validator used to require, and
+-- moves the cross-organization requests/prisoner_letters checks out of
+-- the top-level function body into per-record-type helper functions.
+-- Those two now-obsolete body-content assertions are removed below;
+-- everything else here (RLS policy shape, grants, enum, no new
+-- row-locking) remains true and unchanged. The current function body's
+-- own correctness is asserted by validate-legacy-notification-
+-- record-authorization-fix.sql, which supersedes this file for that
+-- purpose specifically.
 \set ON_ERROR_STOP on
 
 DO $$
@@ -72,10 +86,12 @@ BEGIN
   SELECT pg_get_functiondef(to_regprocedure('public.create_legacy_notification(uuid[],text,text,uuid,text)')) INTO v_def;
   IF v_def NOT ILIKE '%auth.uid()%' THEN v_missing := v_missing || 'rpc-missing-auth-check '; END IF;
   IF v_def NOT ILIKE '%is_active%' THEN v_missing := v_missing || 'rpc-missing-active-user-check '; END IF;
-  IF v_def NOT ILIKE '%v_recipient_org = v_actor_org%' THEN v_missing := v_missing || 'rpc-missing-same-org-check '; END IF;
-  IF v_def NOT ILIKE '%requests%' OR v_def NOT ILIKE '%prisoner_letters%' THEN
-    v_missing := v_missing || 'rpc-missing-cross-org-table-checks ';
-  END IF;
+  -- The 1.0A-era same-org-unconditional-bypass and inline requests/
+  -- prisoner_letters table checks are deliberately NOT asserted here
+  -- anymore -- 1.0B legitimately removed/relocated them (see header
+  -- comment above). validate-legacy-notification-record-authorization-
+  -- fix.sql is the authoritative check of the function body's current
+  -- (post-1.0B) recipient-validation logic.
   IF v_def ILIKE '%FOR UPDATE%' THEN
     v_missing := v_missing || 'rpc-unexpectedly-takes-row-locks '; -- policy-only correction, no new concurrency surface expected
   END IF;
@@ -105,5 +121,5 @@ BEGIN
   IF v_missing <> '' THEN
     RAISE EXCEPTION 'Legacy notification INSERT-RLS correction structural check FAILED: %', v_missing;
   END IF;
-  RAISE NOTICE 'Legacy notification INSERT-RLS correction structural check PASSED (insecure notif_insert policy removed with zero INSERT policies remaining -- RLS denies every direct insert regardless of table grants, notif_select/notif_update untouched, no DELETE policy introduced, create_legacy_notification is SECURITY DEFINER/pinned search_path/authenticated-only with genuine active-user + same-org + named-cross-org-table validation in its body and no new row-locking surface, notifications.type enum untouched, zero CAP-003 objects created).';
+  RAISE NOTICE 'Legacy notification INSERT-RLS correction structural check PASSED (insecure notif_insert policy removed with zero INSERT policies remaining -- RLS denies every direct insert regardless of table grants, notif_select/notif_update untouched, no DELETE policy introduced, create_legacy_notification is SECURITY DEFINER/pinned search_path/authenticated-only with genuine active-user validation and no new row-locking surface, notifications.type enum untouched, zero CAP-003 objects created; the function body''s own recipient-validation logic is now record-authoritative per CAP-003 Phase 1.0B and is asserted by validate-legacy-notification-record-authorization-fix.sql).';
 END $$;

@@ -2,6 +2,17 @@
 -- focused security/regression suite (12 required scenarios).
 -- Disposable local PostgreSQL only. Runs in one transaction and
 -- leaves no fixtures (rolled back at the end).
+--
+-- Updated by CAP-003 Phase 1.0B (docs/80): scenario 4's fixtures now
+-- give User C and User B a genuine section/role tie to the fixture
+-- request (previously neither had one, relying entirely on 1.0A's own
+-- "same organization is always allowed" rule, which 1.0B deliberately
+-- removed -- see docs/79 "Limitations" / docs/80). This keeps
+-- scenario 4 proving what it always intended to prove -- the
+-- legitimate same-org and real-cross-org paths both still succeed --
+-- against create_legacy_notification()'s current, stricter,
+-- record-authoritative implementation, rather than asserting behavior
+-- that no longer exists. No other scenario or fixture here changed.
 \set ON_ERROR_STOP on
 BEGIN;
 
@@ -26,9 +37,11 @@ INSERT INTO users(id,org_id,service_number,full_name,email,is_active) VALUES
  ('79200000-0001-0000-0000-000000000004','79200000-0000-0000-0000-000000000003','WF79TD-1','User D (org C, unrelated)','userd@wf79t.local',true);
 
 INSERT INTO divisions(id, org_id, name) VALUES
- ('79200000-0004-0000-0000-000000000001', '79200000-0000-0000-0000-000000000001', 'WF79T Division A');
+ ('79200000-0004-0000-0000-000000000001', '79200000-0000-0000-0000-000000000001', 'WF79T Division A'),
+ ('79200000-0004-0000-0000-000000000002', '79200000-0000-0000-0000-000000000002', 'WF79T Division B');
 INSERT INTO sections(id, org_id, division_id, name, code) VALUES
- ('79200000-0002-0000-0000-000000000001', '79200000-0000-0000-0000-000000000001', '79200000-0004-0000-0000-000000000001', 'WF79T Section A', 'SECA');
+ ('79200000-0002-0000-0000-000000000001', '79200000-0000-0000-0000-000000000001', '79200000-0004-0000-0000-000000000001', 'WF79T Section A', 'SECA'),
+ ('79200000-0002-0000-0000-000000000002', '79200000-0000-0000-0000-000000000002', '79200000-0004-0000-0000-000000000002', 'WF79T Section B', 'SECB');
 
 -- A real cross-org request, Org A -> Org B, and a decoy request the
 -- attacker (User A) is not a party to (Org B -> Org C), used to prove
@@ -36,6 +49,16 @@ INSERT INTO sections(id, org_id, division_id, name, code) VALUES
 INSERT INTO requests (id, from_org_id, to_org_id, from_section_id, subject, body, created_by, status)
 VALUES ('79200000-0003-0000-0000-000000000001', '79200000-0000-0000-0000-000000000001', '79200000-0000-0000-0000-000000000002',
         '79200000-0002-0000-0000-000000000001', 'Real request A->B', 'body', '79200000-0001-0000-0000-000000000001', 'sent');
+
+-- 1.0B fixture addition: User C (from_section_id member) and User B
+-- (supervisor at the request's to_org_id) each now have a genuine,
+-- record-authoritative tie to the fixture request above -- required
+-- for scenario 4 below to still exercise "the legitimate path
+-- succeeds" against 1.0B's stricter model instead of the removed
+-- same-org shortcut.
+INSERT INTO user_assignments(user_id, scope_type, scope_id, role, is_active) VALUES
+ ('79200000-0001-0000-0000-000000000003', 'section', '79200000-0002-0000-0000-000000000001', 'staff', true),
+ ('79200000-0001-0000-0000-000000000002', 'section', '79200000-0002-0000-0000-000000000002', 'supervisor', true);
 
 \set USER_A '{"sub":"79200000-0001-0000-0000-000000000001"}'
 \set USER_B '{"sub":"79200000-0001-0000-0000-000000000002"}'
@@ -114,7 +137,7 @@ BEGIN
   SELECT count(*) INTO v_count FROM notifications WHERE message LIKE 'legit %notify%';
   IF v_count <> 2 THEN RAISE EXCEPTION 'expected 2 legitimate notifications to have been created, got %', v_count; END IF;
 END $$;
-INSERT INTO wf79_results VALUES (4,'the legitimate approved notification creation path still works: same-organization notification, and real cross-organization notification backed by an actual request row, both succeed via create_legacy_notification');
+INSERT INTO wf79_results VALUES (4,'the legitimate approved notification creation path still works: a same-organization notification to a recipient with a genuine tie to the record (section member), and a real cross-organization notification to a recipient with a genuine tie (org-level supervisor at the request''s own to_org_id), both succeed via create_legacy_notification -- as of CAP-003 Phase 1.0B, mere same-organization membership without such a tie is no longer sufficient (docs/80)');
 
 -- ── 5: User A can read only their own notification rows ──
 -- One notification addressed to User A themselves (created as
@@ -219,6 +242,14 @@ RESET ROLE;
 INSERT INTO wf79_results VALUES (10,'existing module notification callers (Requests/Entry/Prisoner Letters/Internal Collaboration/review comments, all routed through NotificationsAPI.notify()) continue to work unmodified through the new approved RPC path -- notify()''s own external signature and call shape are unchanged');
 
 -- ── 11: no arbitrary notification type/source spoofing is introduced by the new RPC -- the existing closed type enum is still enforced ──
+-- As of CAP-003 Phase 1.0B, an invalid type is now rejected even
+-- earlier -- by the RPC's own closed (record_type, type) allowlist
+-- (42501/insufficient_privilege), before the row ever reaches the
+-- table's notifications_type_check constraint at all. The table
+-- constraint itself remains present and untouched either way (asserted
+-- directly by both structural validators) -- this scenario now proves
+-- the RPC-level rejection, which is strictly earlier/stronger than
+-- relying on the table constraint alone.
 SET ROLE authenticated;
 SELECT set_config('request.jwt.claims', :'USER_A', false);
 DO $$
@@ -228,12 +259,12 @@ BEGIN
       ARRAY['79200000-0001-0000-0000-000000000003']::UUID[], 'totally_made_up_type', 'request',
       '79200000-0003-0000-0000-000000000001', 'spoofed type attempt');
     RAISE EXCEPTION 'SECURITY HOLE: an invalid/spoofed notification type was accepted by the new RPC';
-  EXCEPTION WHEN check_violation THEN
+  EXCEPTION WHEN check_violation OR insufficient_privilege THEN
     NULL;
   END;
 END $$;
 RESET ROLE;
-INSERT INTO wf79_results VALUES (11,'create_legacy_notification does not introduce any new notification type/source surface -- an invalid type is rejected by the table''s own existing notifications_type_check constraint, exactly as a raw insert would have been rejected before this correction');
+INSERT INTO wf79_results VALUES (11,'create_legacy_notification does not introduce any new notification type/source surface -- an invalid type is rejected (as of 1.0B, by the RPC''s own closed allowlist before the table is even reached; the table''s own notifications_type_check constraint remains present and untouched as a second, independent line of defense)');
 
 -- ── 12: CAP-002 regression is unaffected by this correction -- spot-check that workflow_events/workflow tables and RLS remain completely untouched ──
 DO $$
