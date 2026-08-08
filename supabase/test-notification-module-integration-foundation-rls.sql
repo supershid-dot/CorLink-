@@ -75,7 +75,7 @@ BEGIN
   SELECT id INTO v_event_id FROM platform_outbox_events WHERE event_type='task.assigned.v1' LIMIT 1;
   BEGIN
     PERFORM create_notification_intent(COALESCE(v_event_id, gen_random_uuid()), 'task.assigned.v1','task.assigned','{}'::JSONB,'normal',
-      'specific_users', ARRAY['85100000-0001-0000-0000-000000000002']::UUID[], NULL, NULL, NULL, NULL);
+      'specific_users', ARRAY['85100000-0001-0000-0000-000000000002']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
     RAISE EXCEPTION 'SECURITY HOLE: an ordinary authenticated user could call create_notification_intent() directly';
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;

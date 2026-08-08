@@ -70,17 +70,18 @@ BEGIN
     THEN v_missing := v_missing || 'intent_user_can_view_task-exposed-to-ordinary-roles '; END IF;
   END IF;
 
-  -- ── Closed source_record_type dispatch: extended by exactly one
-  -- literal ('task'), never opened to dynamic SQL or a wildcard ────
+  -- ── Closed source_record_type dispatch: extended by exactly two
+  -- literals ('task', 'meeting') as of Phase 1.4A, never opened to
+  -- dynamic SQL or a wildcard ────────────────────────────────────
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'notification_intents_source_record_type_check'
-      AND pg_get_constraintdef(oid) = 'CHECK ((source_record_type = ANY (ARRAY[''workflow_instance''::text, ''platform''::text, ''task''::text])))'
+      AND pg_get_constraintdef(oid) = 'CHECK ((source_record_type = ANY (ARRAY[''workflow_instance''::text, ''platform''::text, ''task''::text, ''meeting''::text])))'
   ) THEN v_missing := v_missing || 'notification_intents_source_record_type_check-not-extended-exactly-as-expected '; END IF;
 
-  IF to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid)') IS NULL THEN
+  IF to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid,uuid,uuid)') IS NULL THEN
     v_missing := v_missing || 'create_notification_intent-missing ';
   ELSE
-    SELECT pg_get_functiondef(to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid)')) INTO v_def;
+    SELECT pg_get_functiondef(to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid,uuid,uuid)')) INTO v_def;
     IF v_def !~* '''workflow_instance''.*''platform''.*''task''' THEN
       v_missing := v_missing || 'create_notification_intent-dispatch-not-extended-as-expected ';
     END IF;

@@ -81,7 +81,7 @@ BEGIN
     '82200000-0000-0000-0000-000000000001'::UUID,NULL,gen_random_uuid(),NULL,now(),'{}'::JSONB,gen_random_uuid());
   v_intent_id := create_notification_intent(
     v_outbox_id,'workflow.wf82c_race1.v1','x.title','{}'::JSONB,'normal',
-    'workflow_participants',NULL,NULL,NULL,(SELECT id FROM wf82c_ids WHERE name='instance'),NULL);
+    'workflow_participants',NULL,NULL,NULL,(SELECT id FROM wf82c_ids WHERE name='instance'),NULL,NULL,NULL);
   INSERT INTO wf82c_ids VALUES ('race1_intent', v_intent_id);
   INSERT INTO wf82c_ids VALUES ('race1_outbox', v_outbox_id);
 END $$;
@@ -131,10 +131,10 @@ BEGIN
   PERFORM wf82c_connect_worker('c2race2');
 
   PERFORM dblink_send_query('c1race2', format(
-    $q$SELECT create_notification_intent('%s'::uuid,'workflow.wf82c_race2.v1','x.title','{}'::jsonb,'normal','workflow_participants',NULL,NULL,NULL,'%s'::uuid,NULL)$q$,
+    $q$SELECT create_notification_intent('%s'::uuid,'workflow.wf82c_race2.v1','x.title','{}'::jsonb,'normal','workflow_participants',NULL,NULL,NULL,'%s'::uuid,NULL,NULL,NULL)$q$,
     v_outbox_id, (SELECT id FROM wf82c_ids WHERE name='instance')));
   PERFORM dblink_send_query('c2race2', format(
-    $q$SELECT create_notification_intent('%s'::uuid,'workflow.wf82c_race2.v1','x.title','{}'::jsonb,'normal','workflow_participants',NULL,NULL,NULL,'%s'::uuid,NULL)$q$,
+    $q$SELECT create_notification_intent('%s'::uuid,'workflow.wf82c_race2.v1','x.title','{}'::jsonb,'normal','workflow_participants',NULL,NULL,NULL,'%s'::uuid,NULL,NULL,NULL)$q$,
     v_outbox_id, (SELECT id FROM wf82c_ids WHERE name='instance')));
 
   SELECT t.v INTO v_r1 FROM dblink_get_result('c1race2', false) AS t(v TEXT);
@@ -162,7 +162,7 @@ BEGIN
     '82200000-0000-0000-0000-000000000001'::UUID,NULL,gen_random_uuid(),NULL,now(),'{}'::JSONB,gen_random_uuid());
   v_intent_id := create_notification_intent(
     v_outbox_id,'workflow.wf82c_race3.v1','x.title','{}'::JSONB,'normal',
-    'specific_users', ARRAY['82200000-0001-0000-0000-000000000002']::UUID[], NULL, NULL, NULL, NULL);
+    'specific_users', ARRAY['82200000-0001-0000-0000-000000000002']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
   INSERT INTO wf82c_ids VALUES ('race3_intent', v_intent_id);
   INSERT INTO wf82c_ids VALUES ('race3_outbox', v_outbox_id);
 END $$;
@@ -204,7 +204,7 @@ BEGIN
     '82200000-0000-0000-0000-000000000001'::UUID,NULL,gen_random_uuid(),NULL,now(),'{}'::JSONB,gen_random_uuid());
   v_intent_id := create_notification_intent(
     v_outbox_id,'workflow.wf82c_race4.v1','x.title','{}'::JSONB,'normal',
-    'specific_users', ARRAY['82200000-0001-0000-0000-000000000002']::UUID[], NULL, NULL, NULL, NULL);
+    'specific_users', ARRAY['82200000-0001-0000-0000-000000000002']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
   INSERT INTO wf82c_ids VALUES ('race4_intent', v_intent_id);
   INSERT INTO wf82c_ids VALUES ('race4_outbox', v_outbox_id);
 END $$;
@@ -244,10 +244,10 @@ BEGIN
     '82200000-0000-0000-0000-000000000001'::UUID,NULL,gen_random_uuid(),NULL,now(),'{}'::JSONB,gen_random_uuid());
   v_intent1 := create_notification_intent(
     v_outbox_id,'workflow.wf82c_race5.v1','x.title','{}'::JSONB,'normal',
-    'specific_users', ARRAY['82200000-0001-0000-0000-000000000002']::UUID[], NULL, NULL, NULL, NULL);
+    'specific_users', ARRAY['82200000-0001-0000-0000-000000000002']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
   v_intent2 := create_notification_intent(
     v_outbox_id,'workflow.wf82c_race5.v1','x.title','{}'::JSONB,'normal',
-    'workflow_participants', NULL, NULL, NULL, (SELECT id FROM wf82c_ids WHERE name='instance'), NULL);
+    'workflow_participants', NULL, NULL, NULL, (SELECT id FROM wf82c_ids WHERE name='instance'), NULL,NULL,NULL);
   INSERT INTO wf82c_ids VALUES ('race5_intent1', v_intent1);
   INSERT INTO wf82c_ids VALUES ('race5_intent2', v_intent2);
   INSERT INTO wf82c_ids VALUES ('race5_outbox', v_outbox_id);
@@ -296,10 +296,10 @@ BEGIN
     '82200000-0000-0000-0000-000000000001'::UUID,NULL,gen_random_uuid(),NULL,now(),'{}'::JSONB,gen_random_uuid());
   v_intent1 := create_notification_intent(
     v_outbox_id1,'platform.wf82c_race6a.v1','x.title','{}'::JSONB,'normal',
-    'specific_users', ARRAY['82200000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL);
+    'specific_users', ARRAY['82200000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
   v_intent2 := create_notification_intent(
     v_outbox_id2,'platform.wf82c_race6b.v1','x.title','{}'::JSONB,'normal',
-    'specific_users', ARRAY['82200000-0001-0000-0000-000000000002']::UUID[], NULL, NULL, NULL, NULL);
+    'specific_users', ARRAY['82200000-0001-0000-0000-000000000002']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
   INSERT INTO wf82c_ids VALUES ('race6_intent1', v_intent1);
   INSERT INTO wf82c_ids VALUES ('race6_intent2', v_intent2);
 END $$;

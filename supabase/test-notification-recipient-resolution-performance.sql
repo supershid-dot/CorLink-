@@ -181,7 +181,7 @@ BEGIN
     '82300000-0000-0000-0000-000000000001'::UUID,NULL,gen_random_uuid(),NULL,now(),'{}'::JSONB,gen_random_uuid());
   v_intent_id := create_notification_intent(
     v_outbox_id,'platform.wf82p_section.v1','x.title','{}'::JSONB,'normal',
-    'section', NULL, NULL, '82300000-0002-0000-0000-000000000001', NULL, NULL);
+    'section', NULL, NULL, '82300000-0002-0000-0000-000000000001', NULL, NULL,NULL,NULL);
 
   v_start := clock_timestamp();
   SELECT * INTO v_result FROM resolve_notification_intent(v_intent_id);
@@ -214,7 +214,7 @@ BEGIN
     '82300000-0000-0000-0000-000000000001'::UUID,NULL,gen_random_uuid(),NULL,now(),'{}'::JSONB,gen_random_uuid());
   v_intent_id := create_notification_intent(
     v_outbox_id,'workflow.wf82p_participants.v1','x.title','{}'::JSONB,'normal',
-    'workflow_participants', NULL, NULL, NULL, v_instance_id, NULL);
+    'workflow_participants', NULL, NULL, NULL, v_instance_id, NULL,NULL,NULL);
 
   v_start := clock_timestamp();
   SELECT * INTO v_result FROM resolve_notification_intent(v_intent_id);

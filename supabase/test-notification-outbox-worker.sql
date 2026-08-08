@@ -418,7 +418,7 @@ BEGIN
     '{}'::JSONB, gen_random_uuid());
   v_intent_id := create_notification_intent(
     v_outbox, 'platform.wf83_direct_notif.v1','wf83.direct.title','{}'::JSONB,'normal',
-    'specific_users', ARRAY['83000000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL);
+    'specific_users', ARRAY['83000000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
   SELECT status, resolved_count, skipped_count INTO v_status, v_resolved, v_skipped FROM resolve_notification_intent(v_intent_id);
   IF v_status <> 'resolved' OR v_resolved <> 1 OR v_skipped <> 0 THEN
     RAISE EXCEPTION 'scenario 20 failed: direct create_notification_intent/resolve_notification_intent call site no longer behaves as Phase 1.2 established -- status=%, resolved=%, skipped=%', v_status, v_resolved, v_skipped;

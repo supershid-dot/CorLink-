@@ -208,7 +208,7 @@ BEGIN
       'target_user_ids', jsonb_build_array(p_candidate)),
     gen_random_uuid());
   v_intent_id := create_notification_intent(v_event_id, 'task.assigned.v1','task.assigned','{}'::JSONB,'normal',
-    'specific_users', ARRAY[p_candidate]::UUID[], NULL, NULL, NULL, NULL);
+    'specific_users', ARRAY[p_candidate]::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
   SELECT resolved_count INTO v_resolved FROM resolve_notification_intent(v_intent_id);
   RETURN v_resolved = 1;
 END;
@@ -296,7 +296,7 @@ BEGIN
     '85000000-0009-0000-0000-000000000002'::UUID);
 
   v_intent_id := create_notification_intent(v_event_id, 'task.assigned.v1','task.assigned','{}'::JSONB,'normal',
-    'specific_users', ARRAY['85000000-0001-0000-0000-000000000010']::UUID[], NULL, NULL, NULL, NULL);
+    'specific_users', ARRAY['85000000-0001-0000-0000-000000000010']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
 
   -- Revoke the assignment BEFORE resolution runs -- the candidate is
   -- no longer a legitimate recipient by processing time.
@@ -315,22 +315,31 @@ INSERT INTO wf85_results VALUES (17,'Authorization for task-sourced intents is r
 -- ── 18: the closed source_record_type dispatch remains CLOSED --
 -- extended by exactly the one justified literal ('task'), still
 -- rejecting every other unsupported source_record_type ─────────────
+-- NOTE (Phase 1.4A carve-out): this scenario originally used 'meeting' as
+-- its example still-unsupported literal, since meeting_participants did not
+-- exist yet at Phase 1.4. Phase 1.4A legitimately added 'meeting' as a
+-- supported source_record_type (with its own intent_user_can_view_meeting()
+-- authorization dispatch), so 'meeting' is no longer a valid negative-test
+-- example. Only the example literal is updated here, to 'request' (still
+-- genuinely unsupported -- Requests integration remains deferred); the
+-- assertion itself (closed dispatch rejects every unsupported literal) is
+-- unchanged and still enforced.
 DO $$
 DECLARE v_event_id UUID; v_count INTEGER;
 BEGIN
-  v_event_id := platform_enqueue_outbox_event('meeting.created.v1','meetings','meeting',gen_random_uuid(),
+  v_event_id := platform_enqueue_outbox_event('request.created.v1','requests','request',gen_random_uuid(),
     '85000000-0000-0000-0000-000000000001', NULL, gen_random_uuid(), NULL, NOW(), '{}'::JSONB, gen_random_uuid());
   BEGIN
-    PERFORM create_notification_intent(v_event_id, 'meeting.created.v1','meeting.created','{}'::JSONB,'normal',
-      'specific_users', ARRAY['85000000-0001-0000-0000-000000000010']::UUID[], NULL, NULL, NULL, NULL);
-    RAISE EXCEPTION 'SECURITY HOLE: an intent was created for an unsupported source_record_type (meeting)';
+    PERFORM create_notification_intent(v_event_id, 'request.created.v1','request.created','{}'::JSONB,'normal',
+      'specific_users', ARRAY['85000000-0001-0000-0000-000000000010']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
+    RAISE EXCEPTION 'SECURITY HOLE: an intent was created for an unsupported source_record_type (request)';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM NOT LIKE '%has no generic authorization dispatch%' THEN RAISE; END IF;
   END;
   SELECT count(*) INTO v_count FROM notification_intents WHERE outbox_event_id = v_event_id;
   IF v_count <> 0 THEN RAISE EXCEPTION 'an intent row was left behind despite the rejection'; END IF;
 END $$;
-INSERT INTO wf85_results VALUES (18,'The closed source_record_type dispatch remains closed: Phase 1.4 extends it by exactly one evidence-justified literal (''task'') and still deterministically rejects every other unsupported source_record_type (e.g. ''meeting'', deferred pending its own missing meeting_participants target-descriptor kind) at intent-creation time, never silently faking authorization');
+INSERT INTO wf85_results VALUES (18,'The closed source_record_type dispatch remains closed: Phase 1.4 extends it by exactly one evidence-justified literal (''task'') and still deterministically rejects every other unsupported source_record_type (e.g. ''request'', deferred pending its own Requests module integration) at intent-creation time, never silently faking authorization. (Phase 1.4A carve-out: the example literal was changed from ''meeting'' to ''request'' since Phase 1.4A legitimately added ''meeting'' as a supported source_record_type; the assertion itself is unchanged.)');
 
 -- ── 19: the generic event->intent mapping is genuinely data-driven --
 -- registering a brand-new event_type with the envelope flag set makes

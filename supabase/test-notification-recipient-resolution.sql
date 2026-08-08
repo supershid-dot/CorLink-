@@ -119,7 +119,7 @@ DECLARE v_id UUID;
 BEGIN
   v_id := create_notification_intent(
     (SELECT id FROM wf82_ids WHERE name='outbox_wf'), 'workflow.wf82_test.v1','x.title','{}'::JSONB,'normal',
-    'specific_users', ARRAY['82000000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL);
+    'specific_users', ARRAY['82000000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
   IF v_id IS NULL THEN RAISE EXCEPTION 'expected a real intent id'; END IF;
   INSERT INTO wf82_ids VALUES ('scenario1_intent', v_id);
 END $$;
@@ -134,7 +134,7 @@ BEGIN
   BEGIN
     PERFORM create_notification_intent(
       (SELECT id FROM wf82_ids WHERE name='outbox_wf'), 'workflow.wf82_test.v1','x.title','{}'::JSONB,'normal',
-      'specific_users', ARRAY['82000000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL);
+      'specific_users', ARRAY['82000000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
     RAISE EXCEPTION 'SECURITY HOLE: an ordinary authenticated user created a notification intent directly';
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
@@ -149,7 +149,7 @@ BEGIN
   BEGIN
     PERFORM create_notification_intent(
       (SELECT id FROM wf82_ids WHERE name='outbox_wf'), 'workflow.wf82_test.v1','x.title','{}'::JSONB,'normal',
-      'bogus_target_type', NULL, NULL, NULL, (SELECT id FROM wf82_ids WHERE name='instance'), NULL);
+      'bogus_target_type', NULL, NULL, NULL, (SELECT id FROM wf82_ids WHERE name='instance'), NULL,NULL,NULL);
     RAISE EXCEPTION 'SECURITY HOLE: an unknown target_type was accepted';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM NOT ILIKE '%Unsupported target_type%' THEN RAISE; END IF;
@@ -178,7 +178,7 @@ DECLARE v_intent_id UUID; v_result RECORD;
 BEGIN
   v_intent_id := create_notification_intent(
     (SELECT id FROM wf82_ids WHERE name='outbox_wf'), 'workflow.wf82_test.v1','x.title','{}'::JSONB,'normal',
-    'specific_users', ARRAY['82000000-0001-0000-0000-000000000006']::UUID[], NULL, NULL, NULL, NULL);
+    'specific_users', ARRAY['82000000-0001-0000-0000-000000000006']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
   SELECT * INTO v_result FROM resolve_notification_intent(v_intent_id);
   IF v_result.resolved_count <> 0 OR v_result.skipped_count <> 1 OR v_result.status <> 'failed' THEN
     RAISE EXCEPTION 'expected the inactive user to be skipped entirely, got status=%, resolved=%, skipped=%', v_result.status, v_result.resolved_count, v_result.skipped_count;
@@ -199,10 +199,10 @@ BEGIN
   -- being a candidate from two independent intents.
   v_intent1 := create_notification_intent(
     (SELECT id FROM wf82_ids WHERE name='outbox_wf'), 'workflow.wf82_test.v1','x.title','{}'::JSONB,'normal',
-    'specific_users', ARRAY['82000000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL);
+    'specific_users', ARRAY['82000000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
   v_intent2 := create_notification_intent(
     (SELECT id FROM wf82_ids WHERE name='outbox_wf'), 'workflow.wf82_test.v1','x.title','{}'::JSONB,'normal',
-    'workflow_participants', NULL, NULL, NULL, (SELECT id FROM wf82_ids WHERE name='instance'), NULL);
+    'workflow_participants', NULL, NULL, NULL, (SELECT id FROM wf82_ids WHERE name='instance'), NULL,NULL,NULL);
   PERFORM resolve_notification_intent(v_intent1);
   PERFORM resolve_notification_intent(v_intent2);
   SELECT count(*) INTO v_notif_count FROM user_notifications
@@ -229,7 +229,7 @@ BEGIN
   -- as-is, not redefined) -- not a Phase 1.2 defect.
   v_intent_id := create_notification_intent(
     (SELECT id FROM wf82_ids WHERE name='outbox_platform'), 'platform.wf82_notice.v1','x.title','{}'::JSONB,'normal',
-    'section', NULL, NULL, '82000000-0002-0000-0000-000000000001', NULL, NULL);
+    'section', NULL, NULL, '82000000-0002-0000-0000-000000000001', NULL, NULL,NULL,NULL);
   SELECT * INTO v_result FROM resolve_notification_intent(v_intent_id);
   -- Platform-sourced: no record-visibility revalidation beyond active
   -- status, so all three (Admin via org-wide scope, Section Member,
@@ -255,7 +255,7 @@ BEGIN
     '82000000-0000-0000-0000-000000000001'::UUID,NULL,gen_random_uuid(),NULL,now(),'{}'::JSONB,gen_random_uuid());
   v_intent_id := create_notification_intent(
     v_outbox_id, 'platform.wf82_notice2.v1','x.title','{}'::JSONB,'normal',
-    'section_leadership', NULL, NULL, '82000000-0002-0000-0000-000000000001', NULL, NULL);
+    'section_leadership', NULL, NULL, '82000000-0002-0000-0000-000000000001', NULL, NULL,NULL,NULL);
   SELECT * INTO v_result FROM resolve_notification_intent(v_intent_id);
   -- Admin (org-wide authority_admin) and Section Leader (supervisor)
   -- both carry a notify-role; Section Member (plain staff) does not.
@@ -287,7 +287,7 @@ BEGIN
   -- correct semantics (reused as-is), not a Phase 1.2 defect.
   v_intent_id := create_notification_intent(
     (SELECT id FROM wf82_ids WHERE name='outbox_platform'), 'platform.wf82_notice.v1','x.title','{}'::JSONB,'normal',
-    'org_admins', NULL, '82000000-0000-0000-0000-000000000001', NULL, NULL, NULL);
+    'org_admins', NULL, '82000000-0000-0000-0000-000000000001', NULL, NULL, NULL,NULL,NULL);
   SELECT * INTO v_result FROM resolve_notification_intent(v_intent_id);
   IF v_result.resolved_count <> 2 THEN
     RAISE EXCEPTION 'expected 2 org-level notify-role users (Admin, Section Leader) to resolve, got resolved=%', v_result.resolved_count;
@@ -303,7 +303,7 @@ DECLARE v_intent_id UUID; v_result RECORD;
 BEGIN
   v_intent_id := create_notification_intent(
     (SELECT id FROM wf82_ids WHERE name='outbox_wf'), 'workflow.wf82_test.v1','x.title','{}'::JSONB,'normal',
-    'workflow_participants', NULL, NULL, NULL, (SELECT id FROM wf82_ids WHERE name='instance'), NULL);
+    'workflow_participants', NULL, NULL, NULL, (SELECT id FROM wf82_ids WHERE name='instance'), NULL,NULL,NULL);
   SELECT * INTO v_result FROM resolve_notification_intent(v_intent_id);
   -- Participants: owner (Admin), Extra Participant (viewer), Inactive
   -- Participant (skipped for inactivity), Work Item Assignee
@@ -322,7 +322,7 @@ DECLARE v_intent_id UUID; v_result RECORD;
 BEGIN
   v_intent_id := create_notification_intent(
     (SELECT id FROM wf82_ids WHERE name='outbox_wf'), 'workflow.wf82_test.v1','x.title','{}'::JSONB,'normal',
-    'work_item_assignee', NULL, NULL, NULL, NULL, '82000000-0006-0000-0000-000000000001');
+    'work_item_assignee', NULL, NULL, NULL, NULL, '82000000-0006-0000-0000-000000000001',NULL,NULL);
   SELECT * INTO v_result FROM resolve_notification_intent(v_intent_id);
   IF v_result.resolved_count <> 1 THEN
     RAISE EXCEPTION 'expected exactly 1 (the work item''s own assignee) to resolve, got resolved=%', v_result.resolved_count;
@@ -356,7 +356,7 @@ BEGIN
   -- they are a real, active, same-organization user.
   v_intent_id := create_notification_intent(
     (SELECT id FROM wf82_ids WHERE name='outbox_wf'), 'workflow.wf82_test.v1','x.title','{}'::JSONB,'normal',
-    'specific_users', ARRAY['82000000-0001-0000-0000-000000000008']::UUID[], NULL, NULL, NULL, NULL);
+    'specific_users', ARRAY['82000000-0001-0000-0000-000000000008']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
   SELECT * INTO v_result FROM resolve_notification_intent(v_intent_id);
   IF v_result.resolved_count <> 0 OR v_result.skipped_count <> 1 THEN
     RAISE EXCEPTION 'expected the non-participant to be skipped at authorization revalidation, got resolved=%, skipped=%', v_result.resolved_count, v_result.skipped_count;
@@ -376,7 +376,7 @@ DECLARE v_intent_id UUID; v_result RECORD; v_count INTEGER;
 BEGIN
   v_intent_id := create_notification_intent(
     (SELECT id FROM wf82_ids WHERE name='outbox_wf'), 'workflow.wf82_test.v1','x.title','{}'::JSONB,'normal',
-    'org_admins', NULL, '82000000-0000-0000-0000-000000000002', NULL, NULL, NULL);
+    'org_admins', NULL, '82000000-0000-0000-0000-000000000002', NULL, NULL, NULL,NULL,NULL);
   SELECT * INTO v_result FROM resolve_notification_intent(v_intent_id);
   IF v_result.resolved_count <> 0 THEN
     RAISE EXCEPTION 'SECURITY HOLE: a cross-org org_admins target resolved recipients for a workflow instance their organization is not party to, resolved=%', v_result.resolved_count;
@@ -394,7 +394,7 @@ BEGIN
   BEGIN
     PERFORM create_notification_intent(
       (SELECT id FROM wf82_ids WHERE name='outbox_unsupported'), 'request.wf82_test.v1','x.title','{}'::JSONB,'normal',
-      'specific_users', ARRAY['82000000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL);
+      'specific_users', ARRAY['82000000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
     RAISE EXCEPTION 'SECURITY HOLE: an intent was created for an unsupported source_record_type (request)';
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
@@ -409,7 +409,7 @@ DECLARE v_intent_id UUID; v_r1 RECORD; v_r2 RECORD; v_r3 RECORD; v_count INTEGER
 BEGIN
   v_intent_id := create_notification_intent(
     (SELECT id FROM wf82_ids WHERE name='outbox_platform'), 'platform.wf82_notice.v1','x.title','{}'::JSONB,'normal',
-    'specific_users', ARRAY['82000000-0001-0000-0000-000000000005']::UUID[], NULL, NULL, NULL, NULL);
+    'specific_users', ARRAY['82000000-0001-0000-0000-000000000005']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
   SELECT * INTO v_r1 FROM resolve_notification_intent(v_intent_id);
   SELECT * INTO v_r2 FROM resolve_notification_intent(v_intent_id);
   SELECT * INTO v_r3 FROM resolve_notification_intent(v_intent_id);
@@ -447,7 +447,7 @@ BEGIN
     PERFORM create_notification_intent(
       (SELECT id FROM wf82_ids WHERE name='outbox_platform'), 'platform.wf82_notice.v1','x.title',
       jsonb_build_object('blob', repeat('x', 5000)),'normal',
-      'specific_users', ARRAY['82000000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL);
+      'specific_users', ARRAY['82000000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
     RAISE EXCEPTION 'SECURITY HOLE: an oversized (>4KB) template_params was accepted';
   EXCEPTION WHEN check_violation THEN NULL;
   END;
@@ -455,7 +455,7 @@ BEGIN
     PERFORM create_notification_intent(
       (SELECT id FROM wf82_ids WHERE name='outbox_platform'), 'platform.wf82_notice.v1','x.title',
       '[1,2,3]'::JSONB,'normal',
-      'specific_users', ARRAY['82000000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL);
+      'specific_users', ARRAY['82000000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
     RAISE EXCEPTION 'SECURITY HOLE: a non-object JSON template_params was accepted';
   EXCEPTION WHEN check_violation THEN NULL;
   END;
@@ -464,7 +464,7 @@ BEGIN
       (SELECT id FROM wf82_ids WHERE name='outbox_platform'), 'platform.wf82_notice.v1','x.title','{}'::JSONB,'normal',
       'specific_users',
       (SELECT array_agg(gen_random_uuid()) FROM generate_series(1,51)),
-      NULL, NULL, NULL, NULL);
+      NULL, NULL, NULL, NULL,NULL,NULL);
     RAISE EXCEPTION 'SECURITY HOLE: a specific_users target with 51 user ids (over the 50-id bound) was accepted';
   EXCEPTION WHEN check_violation THEN NULL;
   END;

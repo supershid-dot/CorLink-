@@ -163,7 +163,7 @@ BEGIN
       'target_user_ids', jsonb_build_array('85200000-0001-0000-0000-000000000003')),
     gen_random_uuid());
   v_intent_id := create_notification_intent(v_event_id, 'task.assigned.v1','task.assigned','{}'::JSONB,'normal',
-    'specific_users', ARRAY['85200000-0001-0000-0000-000000000003']::UUID[], NULL, NULL, NULL, NULL);
+    'specific_users', ARRAY['85200000-0001-0000-0000-000000000003']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
 
   INSERT INTO wf85c_ids VALUES ('race4_intent', v_intent_id);
 END $$;

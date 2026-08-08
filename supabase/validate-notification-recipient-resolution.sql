@@ -31,20 +31,20 @@ BEGIN
   ) THEN v_missing := v_missing || 'source-record-type-not-closed '; END IF;
 
   -- ── Intent creation is internal/service-only ────────────────────
-  IF to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid)') IS NULL THEN
+  IF to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid,uuid,uuid)') IS NULL THEN
     v_missing := v_missing || 'create_notification_intent-missing ';
   ELSE
     IF NOT EXISTS (
-      SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid)')
+      SELECT 1 FROM pg_proc p WHERE p.oid = to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid,uuid,uuid)')
         AND p.prosecdef AND p.proconfig @> ARRAY['search_path=public, pg_temp']::TEXT[]
     ) THEN v_missing := v_missing || 'create_notification_intent-security-drift '; END IF;
-    IF has_function_privilege('authenticated', to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid)'), 'EXECUTE')
-       OR has_function_privilege('anon', to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid)'), 'EXECUTE')
+    IF has_function_privilege('authenticated', to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid,uuid,uuid)'), 'EXECUTE')
+       OR has_function_privilege('anon', to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid,uuid,uuid)'), 'EXECUTE')
     THEN v_missing := v_missing || 'create_notification_intent-exposed-to-ordinary-roles '; END IF;
-    IF NOT has_function_privilege('service_role', to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid)'), 'EXECUTE') THEN
+    IF NOT has_function_privilege('service_role', to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid,uuid,uuid)'), 'EXECUTE') THEN
       v_missing := v_missing || 'create_notification_intent-not-granted-to-service_role ';
     END IF;
-    SELECT pg_get_functiondef(to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid)')) INTO v_def;
+    SELECT pg_get_functiondef(to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid,uuid,uuid)')) INTO v_def;
     IF v_def NOT ILIKE '%workflow_instance%' OR v_def NOT ILIKE '%platform%' THEN
       v_missing := v_missing || 'create_notification_intent-missing-source-type-dispatch ';
     END IF;
@@ -97,8 +97,8 @@ BEGIN
   -- confirm the function body actually raises for an unsupported
   -- source_record_type at creation time rather than silently
   -- accepting it. ──────────────────────────────────────────────────
-  IF to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid)') IS NOT NULL THEN
-    SELECT pg_get_functiondef(to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid)')) INTO v_def;
+  IF to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid,uuid,uuid)') IS NOT NULL THEN
+    SELECT pg_get_functiondef(to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid,uuid,uuid)')) INTO v_def;
     IF v_def NOT ILIKE '%NOT IN (%workflow_instance%platform%)%' THEN
       v_missing := v_missing || 'create_notification_intent-missing-fail-closed-source-type-check ';
     END IF;

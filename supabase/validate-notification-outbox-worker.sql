@@ -169,7 +169,7 @@ BEGIN
   IF to_regclass('public.platform_outbox_events') IS NULL THEN v_missing := v_missing || 'phase1.1-platform_outbox_events-missing '; END IF;
   IF to_regclass('public.user_notifications') IS NULL THEN v_missing := v_missing || 'phase1.1-user_notifications-missing '; END IF;
   IF to_regclass('public.notification_intents') IS NULL THEN v_missing := v_missing || 'phase1.2-notification_intents-missing '; END IF;
-  IF to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid)') IS NULL THEN
+  IF to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid,uuid,uuid)') IS NULL THEN
     v_missing := v_missing || 'phase1.2-create_notification_intent-missing '; END IF;
   IF to_regprocedure('public.resolve_notification_intent(uuid)') IS NULL THEN
     v_missing := v_missing || 'phase1.2-resolve_notification_intent-missing '; END IF;

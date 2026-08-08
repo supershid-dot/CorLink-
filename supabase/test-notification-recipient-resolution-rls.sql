@@ -30,7 +30,7 @@ BEGIN
     '82100000-0000-0000-0000-000000000001'::UUID,NULL,gen_random_uuid(),NULL,now(),'{}'::JSONB,gen_random_uuid());
   v_intent_id := create_notification_intent(
     v_outbox_id, 'platform.wf82r_test.v1','x.title','{}'::JSONB,'normal',
-    'specific_users', ARRAY['82100000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL);
+    'specific_users', ARRAY['82100000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
   SELECT * INTO v_result FROM resolve_notification_intent(v_intent_id);
   INSERT INTO wf82r_ids VALUES ('outbox', v_outbox_id);
   INSERT INTO wf82r_ids VALUES ('intent', v_intent_id);
@@ -81,7 +81,7 @@ BEGIN
   BEGIN
     PERFORM create_notification_intent(
       (SELECT id FROM wf82r_ids WHERE name='outbox'), 'platform.wf82r_test.v1','x.title','{}'::JSONB,'normal',
-      'specific_users', ARRAY['82100000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL);
+      'specific_users', ARRAY['82100000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
     RAISE EXCEPTION 'SECURITY HOLE: an ordinary authenticated user created a notification intent';
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
@@ -156,7 +156,7 @@ BEGIN
   BEGIN
     PERFORM create_notification_intent(
       (SELECT id FROM wf82r_ids WHERE name='outbox'), 'platform.wf82r_test.v1','x.title','{}'::JSONB,'normal',
-      'specific_users', ARRAY['82100000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL);
+      'specific_users', ARRAY['82100000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
     RAISE EXCEPTION 'SECURITY HOLE: anon created a notification intent';
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
