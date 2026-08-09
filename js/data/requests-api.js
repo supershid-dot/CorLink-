@@ -1,7 +1,14 @@
 // ─── Requests Data API ─────────────────────────────────────────
-// Wraps all Supabase queries for the Requests & Responses workflow
-// (Phase 3). RLS policies (supabase/rls.sql) are the real enforcement
-// layer — these calls simply shape the requests/responses for the UI.
+// Read queries (list/detail/timeline) remain direct Supabase table
+// reads, shaped for the UI, protected by RLS (supabase/rls.sql) —
+// unchanged by CAP-003 Phase 1.6A. Every WRITE below (compose/submit
+// through acknowledgeAndClose) instead calls a server-authoritative
+// RPC (supabase/patch-requests-server-mutation-foundation.sql):
+// authorization, state-transition validation, reference-number
+// generation, approvals/audit_logs rows, and atomicity for composed
+// commands are all enforced inside the RPC's own transaction, not
+// assembled here from several separate direct-write calls the way they
+// used to be. See docs/89 for the full migration record.
 //
 // Status flow (requests):  draft -> pending_approval -> sent -> received -> responded -> closed
 // Status flow (responses): draft -> pending_approval -> sent
@@ -11,22 +18,13 @@
 
 const RequestsAPI = (() => {
 
-  async function logAudit(action, recordType, recordId, notes) {
-    const db = getSupabase();
-    const session = await Auth.getSession();
-    if (!session) return;
-    await db.from('audit_logs').insert({
-      user_id: session.user.id,
-      action, record_type: recordType, record_id: recordId, notes,
-    });
-  }
-
-  // Every workflow-transition call below does .update(...).eq('id',
-  // id).select().single() — if RLS silently filters the row to zero
-  // matches (e.g. someone else already approved/returned it a moment
-  // ago, or the caller's permission changed), .single() throws
-  // PostgREST's generic "0 rows" error (PGRST116). Surface something a
-  // user can actually act on instead of that raw message.
+  // Read queries below still do .select().single() — if RLS silently
+  // filters the row to zero matches (e.g. the caller's permission
+  // changed since the page loaded), .single() throws PostgREST's
+  // generic "0 rows" error (PGRST116). Surface something a user can
+  // actually act on instead of that raw message. Write calls (RPCs)
+  // don't need this: a rejected mutation raises its own clear message
+  // directly from the RPC body, already the right one to show as-is.
   function wrapRowError(error) {
     if (error && error.code === 'PGRST116') {
       return new Error('This item may have already been updated by someone else, or you may no longer have permission. Refresh and try again.');
@@ -383,30 +381,49 @@ const RequestsAPI = (() => {
     },
 
     // ── Compose / submit ─────────────────────────────────────────
+    // CAP-003 Phase 1.6A: every function in this section now calls the
+    // server-authoritative RPC (supabase/patch-requests-server-
+    // mutation-foundation.sql) instead of a direct table write —
+    // authorization, state-transition validation, reference-number
+    // generation, approvals/audit_logs rows, and (where the RPC is a
+    // composed command) atomicity are all enforced inside the RPC's own
+    // transaction now, not assembled here from several separate calls.
+    // logAudit()/direct `approvals`/`requests`/`responses` writes are
+    // gone from this file for exactly that reason — writing them here
+    // too would duplicate what the RPC already writes atomically.
+    // Legacy-notification calls (NotificationsAPI.notify()) are
+    // deliberately UNCHANGED — Phase 1.6A is the mutation-boundary
+    // migration only; Requests notifications stay legacy until a future
+    // milestone integrates CAP-003 for this module.
+    //
     // parentRequestId links a follow-up request to the same "case" —
     // conversation_request_ids() walks this chain both directions so
     // getConversation() can render every round-trip as one thread.
+    // fromOrgId is accepted for call-site compatibility but no longer
+    // sent to the server — create_request() derives the sender's
+    // organization from the caller's own session, never a client-
+    // supplied value.
     async createRequest({ fromOrgId, fromSectionId, toOrgId, subject, subjectLanguage, body, language, deadline, parentRequestId }) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      const { data, error } = await db.from('requests').insert({
-        from_org_id: fromOrgId, to_org_id: toOrgId, from_section_id: fromSectionId,
-        created_by: session.user.id, subject, subject_language: subjectLanguage || 'en',
-        body: RichEditor.sanitize(body), language: language || 'en',
-        deadline: deadline || null, status: 'draft',
-        parent_request_id: parentRequestId || null,
-      }).select().single();
+      const { data, error } = await db.rpc('create_request', {
+        p_from_section_id: fromSectionId, p_to_org_id: toOrgId,
+        p_subject: subject, p_body: RichEditor.sanitize(body),
+        p_subject_language: subjectLanguage || 'en', p_language: language || 'en',
+        p_deadline: deadline || null, p_parent_request_id: parentRequestId || null,
+      }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('created', 'request', data.id, `Created request "${subject}"`);
       return data;
     },
 
     async updateRequestDraft(id, patch) {
       const db = getSupabase();
-      if (patch.body != null) patch = { ...patch, body: RichEditor.sanitize(patch.body) };
-      const { data, error } = await db.from('requests').update(patch).eq('id', id).select().single();
+      const { data, error } = await db.rpc('update_request_draft', {
+        p_request_id: id,
+        p_subject: patch.subject, p_subject_language: patch.subject_language || 'en',
+        p_body: RichEditor.sanitize(patch.body), p_language: patch.language || 'en',
+        p_deadline: patch.deadline || null,
+      }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('edited', 'request', id, 'Edited request draft');
       return data;
     },
 
@@ -420,10 +437,8 @@ const RequestsAPI = (() => {
     // approver was chosen (e.g. none exist for that section yet).
     async submitRequest(id, approverId) {
       const db = getSupabase();
-      const { data, error } = await db.from('requests')
-        .update({ status: 'pending_approval', pending_approval_by: approverId || null }).eq('id', id).select().single();
+      const { data, error } = await db.rpc('submit_request', { p_request_id: id, p_approver_id: approverId || null }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('submitted', 'request', id, 'Submitted request for approval');
       const recipients = approverId
         ? [approverId]
         : await NotificationsAPI.sectionUserIds(data.from_section_id, ['mcs_admin', 'authority_admin', 'supervisor']);
@@ -435,20 +450,13 @@ const RequestsAPI = (() => {
     },
 
     // ── Approval (supervisor, requesting org) ───────────────────────
-    async approveRequest(id, fromSectionId, comment) {
+    // fromSectionId is no longer accepted — approve_request() reads the
+    // request's own from_section_id server-side for the reference
+    // number, rather than trusting a client-supplied section.
+    async approveRequest(id, comment) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      const { data: refNumber, error: rpcErr } = await db.rpc('generate_reference_number', { p_section_id: fromSectionId, p_record_type: 'request' });
-      if (rpcErr) throw rpcErr;
-      const { data, error } = await db.from('requests')
-        .update({ status: 'sent', is_locked: true, reference_number: refNumber })
-        .eq('id', id).select().single();
+      const { data, error } = await db.rpc('approve_request', { p_request_id: id, p_comment: comment || null }).single();
       if (error) throw wrapRowError(error);
-      await db.from('approvals').insert({
-        record_type: 'request', record_id: id, reviewed_by: session.user.id,
-        decision: 'approved', comment: comment || null,
-      });
-      await logAudit('approved', 'request', id, 'Approved and sent request');
       const recipients = await NotificationsAPI.orgSupervisorUserIds(data.to_org_id);
       await NotificationsAPI.notify(recipients, {
         type: 'new_request', recordType: 'request', recordId: id,
@@ -459,15 +467,8 @@ const RequestsAPI = (() => {
 
     async returnRequest(id, comment) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      const { data, error } = await db.from('requests')
-        .update({ status: 'draft' }).eq('id', id).select().single();
+      const { data, error } = await db.rpc('return_request', { p_request_id: id, p_comment: comment || null }).single();
       if (error) throw wrapRowError(error);
-      await db.from('approvals').insert({
-        record_type: 'request', record_id: id, reviewed_by: session.user.id,
-        decision: 'returned', comment: comment || null,
-      });
-      await logAudit('returned', 'request', id, 'Returned request for changes');
       await NotificationsAPI.notify([data.created_by], {
         type: 'draft_returned', recordType: 'request', recordId: id,
         message: `"${data.subject}" was returned for changes`,
@@ -483,28 +484,18 @@ const RequestsAPI = (() => {
     // decided which section should own it.
     async markRequestReceived(id) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      const { data, error } = await db.from('requests')
-        .update({ status: 'received', received_by: session.user.id, received_at: new Date().toISOString() })
-        .eq('id', id).select().single();
+      const { data, error } = await db.rpc('mark_request_received', { p_request_id: id }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('received', 'request', id, 'Marked request as received');
       return data;
     },
 
     // ── Routing (receiving org, supervisor/admin/assigned_receiver) ────
     // Only reachable once status = 'received' (see requests.js's
     // needsRouting check), i.e. after markRequestReceived() has already
-    // set received_by = the acting user — which is exactly what keeps
-    // this .select() working: Postgres requires an UPDATE's resulting
-    // row to remain visible under the table's SELECT policy for every
-    // UPDATE (not only when RETURNING is used), so a default-section
-    // assigned_receiver routing to a DIFFERENT section they hold no
-    // assignment in would otherwise lose requests_select visibility the
-    // instant to_section_id changes. requests_select's `received_by =
-    // auth.uid()` clause (rls.sql) is what keeps them able to see (and
-    // thus this UPDATE...RETURNING able to return) a row they formally
-    // received, regardless of where it gets routed afterward.
+    // set received_by = the acting user. route_request() also now
+    // validates server-side that toSectionId actually belongs to the
+    // request's own receiving organization — a check no RLS policy
+    // previously made explicit (see docs/89).
     // notifySection: false skips the whole-section broadcast — used by
     // receiveAndRoute() when a specific assignee was picked in the same
     // step, so only that person is notified (same either/or convention
@@ -512,37 +503,16 @@ const RequestsAPI = (() => {
     // broadcast default.
     async routeRequest(id, toSectionId, { notifySection = true } = {}) {
       const db = getSupabase();
-      // Read subject BEFORE moving the row, and update WITHOUT
-      // requesting it back (.select()) — a section supervisor whose
-      // visibility is scoped to only their OWN section legitimately
-      // loses SELECT access to this row the moment it's routed
-      // elsewhere (requests_select has no blanket "any supervisor in
-      // my org" fallback, unlike internal_requests_select). Postgres
-      // RLS requires an UPDATE...RETURNING row to also pass the SELECT
-      // policy, so keeping .select().single() here would abort the
-      // entire routing UPDATE for exactly that supervisor — the one
-      // person who legitimately loses visibility by handing the case
-      // off is also the one this bug would have blocked from handing
-      // it off at all.
-      const { data: before, error: beforeErr } = await db.from('requests').select('subject').eq('id', id).single();
-      if (beforeErr) throw wrapRowError(beforeErr);
-      // assigned_to is cleared on every route — for first-time routing
-      // it's already null, and on a RE-route the previous section's
-      // assignee must not stay attached; the new section assigns its own.
-      const { error } = await db.from('requests')
-        .update({ to_section_id: toSectionId, status: 'in_progress', assigned_to: null }).eq('id', id);
+      const { data, error } = await db.rpc('route_request', { p_request_id: id, p_to_section_id: toSectionId }).single();
       if (error) throw wrapRowError(error);
-      const { data: section, error: sectionErr } = await db.from('sections').select('name').eq('id', toSectionId).single();
-      if (sectionErr) console.warn('CorLink: failed to look up section name for routing audit log:', sectionErr.message);
-      await logAudit('routed', 'request', id, `Routed to ${section?.name || 'a section'}`);
       if (notifySection) {
         const recipients = await NotificationsAPI.sectionUserIds(toSectionId);
         await NotificationsAPI.notify(recipients, {
           type: 'new_request', recordType: 'request', recordId: id,
-          message: `"${before.subject}" has been routed to your section`,
+          message: `"${data.subject}" has been routed to your section`,
         });
       }
-      return before;
+      return data;
     },
 
     // ── Return to Sender Section ─────────────────────────────────────
@@ -551,29 +521,21 @@ const RequestsAPI = (() => {
     // see supabase/schema.sql's track_previous_section trigger). Not a
     // fixed org default — the wrongly-routed section sends it back to
     // its actual immediate predecessor, which may itself be a mid-chain
-    // section, not the org's front desk. previousSectionId is passed in
-    // by the caller (already in memory from getConversation()) rather
-    // than re-fetched here.
-    async returnToPreviousSection(id, previousSectionId, comment) {
+    // section, not the org's front desk. previousSectionId is no longer
+    // accepted as a parameter — return_request_to_previous_section()
+    // derives it server-side from the request's own previous_section_id
+    // column rather than trusting a client-supplied value (see docs/89).
+    async returnToPreviousSection(id, comment) {
       const db = getSupabase();
-      // Same RLS/RETURNING trap as routeRequest above, and even more
-      // certain to hit it here — returning a request necessarily moves
-      // it OUT of the section the actor supervises, straight into a
-      // section they typically have no other visibility into at all.
-      const { data: before, error: beforeErr } = await db.from('requests').select('subject').eq('id', id).single();
-      if (beforeErr) throw wrapRowError(beforeErr);
-      const { error } = await db.from('requests')
-        .update({ to_section_id: previousSectionId, status: 'in_progress', assigned_to: null })
-        .eq('id', id);
+      const { data, error } = await db.rpc('return_request_to_previous_section', { p_request_id: id, p_comment: comment || null }).single();
       if (error) throw wrapRowError(error);
+      const recipients = await NotificationsAPI.sectionUserIds(data.to_section_id);
       const note = (comment || '').replace(/<[^>]+>/g, '').trim().slice(0, 200);
-      await logAudit('returned_to_sender', 'request', id, `Sent back to previous section${note ? ': ' + note : ''}`);
-      const recipients = await NotificationsAPI.sectionUserIds(previousSectionId);
       await NotificationsAPI.notify(recipients, {
         type: 'new_request', recordType: 'request', recordId: id,
-        message: `"${before.subject}" was sent back to your section${note ? ': ' + note : ''}`,
+        message: `"${data.subject}" was sent back to your section${note ? ': ' + note : ''}`,
       });
-      return before;
+      return data;
     },
 
     // ── Assignment (section supervisor/assigned_receiver) ───────────
@@ -581,16 +543,8 @@ const RequestsAPI = (() => {
     // owning section — mirrors prisoner_letters.assigned_to.
     async assignRequest(id, userId) {
       const db = getSupabase();
-      const { data, error } = await db.from('requests')
-        .update({ assigned_to: userId }).eq('id', id).select().single();
+      const { data, error } = await db.rpc('assign_request', { p_request_id: id, p_user_id: userId || null }).single();
       if (error) throw wrapRowError(error);
-      let note = 'Unassigned';
-      if (userId) {
-        const { data: staff, error: staffErr } = await db.from('users').select('full_name').eq('id', userId).single();
-        if (staffErr) console.warn('CorLink: failed to look up staff name for assignment audit log:', staffErr.message);
-        note = `Assigned to ${staff?.full_name || 'a staff member'}`;
-      }
-      await logAudit('assigned', 'request', id, note);
       if (userId) {
         await NotificationsAPI.notify([userId], {
           type: 'new_request', recordType: 'request', recordId: id,
@@ -602,21 +556,30 @@ const RequestsAPI = (() => {
 
     // ── Receive & Route (one user action, composed) ─────────────────
     // The receiving front desk used to click "Mark Received" and then
-    // "Route" as two separate steps gated by the same permission — this
-    // merges them into one action while keeping the receipt, the
-    // sent → received → in_progress state chain (the transition trigger
-    // and requests_update_assigned_receiver's receive-first RLS
-    // visibility both depend on that order — see routeRequest's comment
-    // above), and every audit entry each conceptual step already wrote.
-    // currentStatus 'received' means a legacy half-done row (received
-    // but never routed) — the receive step is skipped on that retry.
+    // "Route" as two separate steps gated by the same permission — now
+    // one atomic RPC call (receive_and_route_request) instead of the
+    // previous client-side composition of up to three separate network
+    // round trips, which could leave a request received-but-unrouted or
+    // routed-but-unassigned if a later step failed. currentStatus is no
+    // longer forwarded — the RPC derives whether a receive step is
+    // needed from the row's own current status.
     async receiveAndRoute(id, { currentStatus, toSectionId, assignedTo }) {
-      if (currentStatus === 'sent') {
-        await this.markRequestReceived(id);
-      }
-      let data = await this.routeRequest(id, toSectionId, { notifySection: !assignedTo });
+      const db = getSupabase();
+      const { data, error } = await db.rpc('receive_and_route_request', {
+        p_request_id: id, p_to_section_id: toSectionId, p_assigned_to: assignedTo || null,
+      }).single();
+      if (error) throw wrapRowError(error);
       if (assignedTo) {
-        data = await this.assignRequest(id, assignedTo);
+        await NotificationsAPI.notify([assignedTo], {
+          type: 'new_request', recordType: 'request', recordId: id,
+          message: `"${data.subject}" was assigned to you`,
+        });
+      } else {
+        const recipients = await NotificationsAPI.sectionUserIds(toSectionId);
+        await NotificationsAPI.notify(recipients, {
+          type: 'new_request', recordType: 'request', recordId: id,
+          message: `"${data.subject}" has been routed to your section`,
+        });
       }
       return data;
     },
@@ -624,22 +587,19 @@ const RequestsAPI = (() => {
     // ── Response ─────────────────────────────────────────────────
     async createResponse({ requestId, body, language }) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      const { data, error } = await db.from('responses').insert({
-        request_id: requestId, created_by: session.user.id,
-        body: RichEditor.sanitize(body), language: language || 'en', status: 'draft',
-      }).select().single();
+      const { data, error } = await db.rpc('create_response', {
+        p_request_id: requestId, p_body: RichEditor.sanitize(body), p_language: language || 'en',
+      }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('created', 'response', data.id, 'Drafted response');
       return data;
     },
 
     async updateResponseDraft(id, patch) {
       const db = getSupabase();
-      if (patch.body != null) patch = { ...patch, body: RichEditor.sanitize(patch.body) };
-      const { data, error } = await db.from('responses').update(patch).eq('id', id).select().single();
+      const { data, error } = await db.rpc('update_response_draft', {
+        p_response_id: id, p_body: RichEditor.sanitize(patch.body), p_language: patch.language || null,
+      }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('edited', 'response', id, 'Edited response draft');
       return data;
     },
 
@@ -649,12 +609,8 @@ const RequestsAPI = (() => {
     // [Designation]" back on the responding org's side.
     async markResponseReceived(id) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      const { data, error } = await db.from('responses')
-        .update({ received_by: session.user.id, received_at: new Date().toISOString() })
-        .eq('id', id).select().single();
+      const { data, error } = await db.rpc('mark_response_received', { p_response_id: id }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('received', 'response', id, 'Marked response as received');
       return data;
     },
 
@@ -663,50 +619,37 @@ const RequestsAPI = (() => {
     // (request.to_section_id) eligible supervisors.
     async submitResponse(id, approverId) {
       const db = getSupabase();
-      const { data, error } = await db.from('responses')
-        .update({ status: 'pending_approval', pending_approval_by: approverId || null }).eq('id', id)
-        .select('*, request:requests(subject, to_section_id)').single();
+      const { data, error } = await db.rpc('submit_response', { p_response_id: id, p_approver_id: approverId || null }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('submitted', 'response', id, 'Submitted response for approval');
+      const { data: reqRow, error: reqErr } = await db.from('requests').select('subject, to_section_id').eq('id', data.request_id).single();
+      if (reqErr) console.warn('CorLink: failed to look up request for submit-response notification:', reqErr.message);
       const recipients = approverId
         ? [approverId]
-        : await NotificationsAPI.sectionUserIds(data.request?.to_section_id, ['mcs_admin', 'authority_admin', 'supervisor']);
+        : await NotificationsAPI.sectionUserIds(reqRow?.to_section_id, ['mcs_admin', 'authority_admin', 'supervisor']);
       await NotificationsAPI.notify(recipients, {
         type: 'approval_requested', recordType: 'request', recordId: data.request_id,
-        message: `A response to "${data.request?.subject}" needs your approval`,
+        message: `A response to "${reqRow?.subject}" needs your approval`,
       });
       return data;
     },
 
     // ── Approval (supervisor, responding org) ───────────────────────
+    // Atomic on the server: responses status/lock/reference-number +
+    // approvals row + requests.status='responded' + audit, all one
+    // transaction inside approve_response() — the previous two-call
+    // client composition (update responses, then separately update
+    // requests) could leave a response marked 'sent' with its parent
+    // request never advancing if the second call failed.
     async approveResponse(id, requestId, comment) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      // Reference number keyed off the RESPONDING section (the request's
-      // own to_section_id — the section actually drafting/sending this
-      // reply), symmetric to approveRequest() keying off the sender's
-      // from_section_id. Always "RES-" prefixed by the RPC itself, and
-      // tracked on its own per-section-per-year sequence, so it never
-      // collides with (or looks like) the request's own reference number.
-      const { data: reqRow, error: reqErr } = await db.from('requests')
-        .select('to_section_id').eq('id', requestId).single();
-      if (reqErr) throw wrapRowError(reqErr);
-      const { data: refNumber, error: rpcErr } = await db.rpc('generate_reference_number', { p_section_id: reqRow.to_section_id, p_record_type: 'response' });
-      if (rpcErr) throw rpcErr;
-      const { data, error } = await db.from('responses')
-        .update({ status: 'sent', is_locked: true, reference_number: refNumber }).eq('id', id)
-        .select('*, request:requests(subject, created_by)').single();
+      const { data, error } = await db.rpc('approve_response', { p_response_id: id, p_comment: comment || null }).single();
       if (error) throw wrapRowError(error);
-      await db.from('approvals').insert({
-        record_type: 'response', record_id: id, reviewed_by: session.user.id,
-        decision: 'approved', comment: comment || null,
-      });
-      await db.from('requests').update({ status: 'responded' }).eq('id', requestId);
-      await logAudit('approved', 'response', id, 'Approved and sent response');
-      if (data.request?.created_by) {
-        await NotificationsAPI.notify([data.request.created_by], {
+      const { data: reqRow, error: reqErr } = await db.from('requests').select('subject, created_by').eq('id', requestId).single();
+      if (reqErr) console.warn('CorLink: failed to look up request for approve-response notification:', reqErr.message);
+      if (reqRow?.created_by) {
+        await NotificationsAPI.notify([reqRow.created_by], {
           type: 'new_response', recordType: 'request', recordId: requestId,
-          message: `You received a response to "${data.request.subject}"`,
+          message: `You received a response to "${reqRow.subject}"`,
         });
       }
       return data;
@@ -714,19 +657,13 @@ const RequestsAPI = (() => {
 
     async returnResponse(id, comment) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      const { data, error } = await db.from('responses')
-        .update({ status: 'draft' }).eq('id', id)
-        .select('*, request:requests(subject)').single();
+      const { data, error } = await db.rpc('return_response', { p_response_id: id, p_comment: comment || null }).single();
       if (error) throw wrapRowError(error);
-      await db.from('approvals').insert({
-        record_type: 'response', record_id: id, reviewed_by: session.user.id,
-        decision: 'returned', comment: comment || null,
-      });
-      await logAudit('returned', 'response', id, 'Returned response for changes');
+      const { data: reqRow, error: reqErr } = await db.from('requests').select('subject').eq('id', data.request_id).single();
+      if (reqErr) console.warn('CorLink: failed to look up request for return-response notification:', reqErr.message);
       await NotificationsAPI.notify([data.created_by], {
         type: 'draft_returned', recordType: 'request', recordId: data.request_id,
-        message: `Your response to "${data.request?.subject}" was returned for changes`,
+        message: `Your response to "${reqRow?.subject}" was returned for changes`,
       });
       return data;
     },
@@ -734,10 +671,8 @@ const RequestsAPI = (() => {
     // ── Close ────────────────────────────────────────────────────
     async closeRequest(id) {
       const db = getSupabase();
-      const { data, error } = await db.from('requests')
-        .update({ status: 'closed' }).eq('id', id).select().single();
+      const { data, error } = await db.rpc('close_request', { p_request_id: id }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('edited', 'request', id, 'Closed request');
       const recipients = new Set(await NotificationsAPI.sectionUserIds(data.from_section_id));
       recipients.add(data.created_by);
       await NotificationsAPI.notify([...recipients], {
@@ -749,24 +684,13 @@ const RequestsAPI = (() => {
 
     // ── Cancel ───────────────────────────────────────────────────────
     // Creator or a supervisor of the SENDING section can pull a request
-    // back any time before a response has actually been sent (RLS —
-    // requests_update_cancel — enforces the same status window and
-    // actor scope). is_locked is forced true here (not just implied by
-    // reaching 'sent') to also close a narrow case: a request that went
-    // pending_approval -> overdue and gets cancelled before ever
-    // reaching 'sent' would otherwise still have is_locked = FALSE.
+    // back any time before a response has actually been sent — cancel_
+    // request() enforces the same status window and actor scope
+    // server-side that requests_update_cancel RLS already did.
     async cancelRequest(id, reason) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      const { data, error } = await db.from('requests')
-        .update({
-          status: 'cancelled', is_locked: true,
-          cancelled_by: session.user.id, cancelled_at: new Date().toISOString(),
-          cancellation_reason: reason,
-        })
-        .eq('id', id).select().single();
+      const { data, error } = await db.rpc('cancel_request', { p_request_id: id, p_reason: reason }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('cancelled', 'request', id, `Cancelled request: ${reason}`);
       // Only notify the receiving side if it was ever actually approved
       // + sent (reference_number is the tell) — a request cancelled
       // while still pending_approval/overdue-from-pending_approval has
@@ -785,17 +709,22 @@ const RequestsAPI = (() => {
 
     // ── Acknowledge & Close (one user action, composed) ─────────────
     // The originating org used to click "Mark Received" on the response
-    // and then "Mark Closed" on the request as two separate steps — the
-    // receipt gates nothing else, so a supervisor can do both at once.
-    // Receipt columns/audit entries are identical to the two-step path;
-    // responseAlreadyReceived covers the case where a non-supervisor
-    // receiver already stamped the receipt and the supervisor is only
-    // closing.
+    // and then "Mark Closed" on the request as two separate steps — now
+    // one atomic RPC call (acknowledge_and_close). responseAlreadyReceived
+    // is no longer forwarded to the server — the RPC derives whether a
+    // receive step is needed from the response row's own received_by
+    // column rather than trusting a client-supplied flag.
     async acknowledgeAndClose(responseId, requestId, { responseAlreadyReceived = false } = {}) {
-      if (!responseAlreadyReceived) {
-        await this.markResponseReceived(responseId);
-      }
-      return this.closeRequest(requestId);
+      const db = getSupabase();
+      const { data, error } = await db.rpc('acknowledge_and_close', { p_response_id: responseId, p_request_id: requestId }).single();
+      if (error) throw wrapRowError(error);
+      const recipients = new Set(await NotificationsAPI.sectionUserIds(data.from_section_id));
+      recipients.add(data.created_by);
+      await NotificationsAPI.notify([...recipients], {
+        type: 'new_response', recordType: 'request', recordId: requestId,
+        message: `"${data.subject}" was closed`,
+      });
+      return data;
     },
 
     // ── Case timeline ────────────────────────────────────────────

@@ -316,7 +316,10 @@ BEGIN
   SELECT status INTO v_task_status_before FROM tasks WHERE id = v_task_id;
 
   PERFORM set_config('request.jwt.claims', '{"sub":"' || (SELECT supervisor FROM test_ids) || '"}', false);
-  UPDATE requests SET status = 'cancelled' WHERE id = v_req_id AND status IN ('sent','received','in_progress','overdue');
+  -- CAP-003 Phase 1.6A: direct client UPDATE on requests is no longer
+  -- granted to authenticated (patch-requests-server-mutation-
+  -- foundation.sql) -- cancel_request() is the authoritative path now.
+  PERFORM cancel_request(v_req_id, 'test cancellation');
 
   IF (SELECT status FROM requests WHERE id = v_req_id) <> 'cancelled' THEN
     RAISE EXCEPTION 'TEST 9 FAILED: request should be cancelled, is %', (SELECT status FROM requests WHERE id = v_req_id);

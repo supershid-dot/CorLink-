@@ -1653,8 +1653,7 @@ const RequestDetailView = {
 
     main.querySelectorAll('[data-approve-request]').forEach(btn => {
       btn.addEventListener('click', () => this._openCommentModal('Approve Request', 'Approve', async (comment) => {
-        const entry = this._conversation.find(e => e.request.id === btn.dataset.approveRequest);
-        await RequestsAPI.approveRequest(btn.dataset.approveRequest, entry.request.from_section_id, comment);
+        await RequestsAPI.approveRequest(btn.dataset.approveRequest, comment);
       }));
     });
 
@@ -1702,7 +1701,7 @@ const RequestDetailView = {
         const entry = this._conversation.find(e => e.request.id === id);
         if (!entry || !entry.request.previous_section_id) return;
         this._openCommentModal('Return to Sender Section', 'Return', async (comment) => {
-          await RequestsAPI.returnToPreviousSection(id, entry.request.previous_section_id, comment);
+          await RequestsAPI.returnToPreviousSection(id, comment);
         }, true);
       });
     });
