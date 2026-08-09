@@ -336,7 +336,13 @@ const AppShell = {
     document.getElementById('notif-mark-all')?.addEventListener('click', async (e) => {
       e.stopPropagation();
       try {
-        await NotificationsAPI.markAllRead();
+        // Marks both sources read — from the user's perspective this is
+        // one bell with one "Mark all read" action, regardless of which
+        // table backs any given item in the merged list above.
+        await Promise.all([
+          NotificationsAPI.markAllRead(),
+          NotificationsAPI.markAllNotificationsRead(),
+        ]);
         await this.loadNotifications();
       } catch (err) {
         console.error('CorLink: failed to mark notifications read', err);
@@ -451,14 +457,52 @@ const AppShell = {
     });
   },
 
+  // CAP-003 Phase 1.5: merges the legacy `notifications` table with
+  // CAP-003's `user_notifications` into one feed for the coexistence
+  // period documented in docs/88 (option A — a merged feed — chosen
+  // over a separate CAP-003-only center, since every notification the
+  // Task/Meeting modules currently produce is still legacy-eligible and
+  // a split view would just make the same bell icon show two different
+  // lists depending on module). Every read stays bounded and goes
+  // through its own source's authorized API: NotificationsAPI.listMine/
+  // countUnread for legacy, NotificationsAPI.listNotifications/
+  // getUnreadCount (list_my_notifications/count_my_unread_notifications)
+  // for CAP-003 — never a raw cross-table query. Dedup only ever hides
+  // a LEGACY row once its CAP-003 counterpart is confirmed present
+  // (NotificationsAPI.dedupeLegacyAgainstCap003); it never touches
+  // CAP-003 rows or writes to either table.
   async loadNotifications() {
     try {
-      const [items, unread] = await Promise.all([
+      const [legacyItems, legacyUnreadItems, cap003Items, cap003UnreadItems, cap003UnreadCount] = await Promise.all([
         NotificationsAPI.listMine(15),
-        NotificationsAPI.countUnread(),
+        NotificationsAPI.listUnreadLegacy(100),
+        NotificationsAPI.listNotifications({ limit: 20 }),
+        NotificationsAPI.listNotifications({ limit: 100, unreadOnly: true }),
+        NotificationsAPI.getUnreadCount(),
       ]);
-      this._renderNotifBadge(unread);
-      this._renderNotifList(items);
+
+      // Unread badge: dedup only the bounded unread-only sets (both
+      // already index-backed and bounded to 100 — see notifications-
+      // api.js), then add the CAP-003 side's true server-computed
+      // count rather than this bounded sample's length, so the badge
+      // stays exact even when a user has more than 100 unread CAP-003
+      // notifications. A user with more than 100 unread LEGACY
+      // notifications for a migrated event type is the one case this
+      // can slightly over-count (a legacy duplicate beyond the 100
+      // most-recent-unread isn't checked for a CAP-003 match) — see
+      // docs/88's known limitations; still bounded, never unbounded.
+      const dedupedUnreadLegacy = NotificationsAPI.dedupeLegacyAgainstCap003(legacyUnreadItems, cap003UnreadItems);
+      this._renderNotifBadge(dedupedUnreadLegacy.length + cap003UnreadCount);
+
+      const dedupedLegacy = NotificationsAPI.dedupeLegacyAgainstCap003(legacyItems, cap003Items);
+      const merged = [
+        ...dedupedLegacy.map(NotificationsAPI.normalizeLegacyNotification),
+        ...cap003Items.map(NotificationsAPI.normalizeCap003Notification),
+      ].sort((a, b) => {
+        const byTime = new Date(b.createdAt) - new Date(a.createdAt);
+        return byTime !== 0 ? byTime : String(b.id).localeCompare(String(a.id));
+      });
+      this._renderNotifList(merged.slice(0, 15));
     } catch (err) {
       console.error('CorLink: failed to load notifications', err);
       const list = document.getElementById('notif-list');
@@ -473,6 +517,11 @@ const AppShell = {
     badge.classList.toggle('hidden', unread === 0);
   },
 
+  // items are the merged, normalized shape from loadNotifications():
+  // { source: 'legacy'|'cap003', id, isRead, createdAt, message,
+  // recordType, recordId }. CAP-003 items' `message` is already the
+  // safe, escaped-at-render template output (renderNotificationTemplate
+  // in notifications-api.js) — never raw source-record content.
   _renderNotifList(items) {
     const list = document.getElementById('notif-list');
     if (!list) return;
@@ -483,11 +532,11 @@ const AppShell = {
     }
 
     list.innerHTML = items.map(n => `
-      <button class="notif-item${n.is_read ? '' : ' notif-item--unread'}" data-notif-id="${n.id}" data-record-type="${n.record_type}" data-record-id="${n.record_id}">
+      <button class="notif-item${n.isRead ? '' : ' notif-item--unread'}" data-notif-id="${n.id}" data-notif-source="${n.source}" data-record-type="${n.recordType}" data-record-id="${n.recordId}">
         <span class="notif-item-dot"></span>
         <span class="notif-item-body">
           <span class="notif-item-message">${this._escapeHtml(n.message)}</span>
-          <span class="notif-item-time">${new Date(n.created_at).toLocaleString()}</span>
+          <span class="notif-item-time">${new Date(n.createdAt).toLocaleString()}</span>
         </span>
       </button>
     `).join('');
@@ -495,8 +544,10 @@ const AppShell = {
     list.querySelectorAll('[data-notif-id]').forEach(btn => {
       btn.addEventListener('click', async () => {
         document.getElementById('notif-dropdown')?.classList.add('hidden');
+        const isCap003 = btn.dataset.notifSource === 'cap003';
         try {
-          await NotificationsAPI.markRead(btn.dataset.notifId);
+          if (isCap003) await NotificationsAPI.markNotificationRead(btn.dataset.notifId);
+          else await NotificationsAPI.markRead(btn.dataset.notifId);
         } catch (err) {
           console.error('CorLink: failed to mark notification read', err);
         }
@@ -505,14 +556,25 @@ const AppShell = {
         // value it's already at (e.g. clicking a notification for the
         // request you're already viewing) doesn't fire hashchange, so
         // nothing else would refresh the badge/list in that case.
-        //
-        // meeting_room_booking and meeting are both special cases:
-        // neither has a dedicated "-detail" route (rooms.js and
-        // meetings.js are both single-route, multi-tab views), so each
-        // navigates to its own single route with an id param instead —
-        // the view itself opens that record's detail modal directly on
-        // load, same pattern for both.
-        if (btn.dataset.recordType === 'meeting_room_booking') {
+        if (isCap003) {
+          // CAP-003 only ever produces 'task'/'meeting' source records
+          // today (docs/87) — CAP003_ROUTES has no fallback branch on
+          // purpose, since inventing one for a record type CAP-003
+          // never actually emits would be indistinguishable from a bug.
+          // The notification row is never treated as proof of access:
+          // the destination view still enforces its own RLS on load.
+          const routeFor = NotificationsAPI.CAP003_ROUTES[btn.dataset.recordType];
+          if (routeFor) {
+            const { route, params } = routeFor(btn.dataset.recordId);
+            Router.navigate(route, params);
+          }
+        } else if (btn.dataset.recordType === 'meeting_room_booking') {
+          // meeting_room_booking and meeting are both special cases:
+          // neither has a dedicated "-detail" route (rooms.js and
+          // meetings.js are both single-route, multi-tab views), so each
+          // navigates to its own single route with an id param instead —
+          // the view itself opens that record's detail modal directly on
+          // load, same pattern for both.
           Router.navigate('rooms', { bookingId: btn.dataset.recordId });
         } else if (btn.dataset.recordType === 'meeting') {
           Router.navigate('meetings', { meetingId: btn.dataset.recordId });
@@ -558,7 +620,14 @@ const AppShell = {
 
   // Bound once per SPA session (not per render, same reasoning as the
   // document click listener above) — otherwise every navigation between
-  // views would open a duplicate Realtime channel/listener.
+  // views would open a duplicate Realtime channel/listener. CAP-003
+  // Phase 1.5 adds a second channel on user_notifications alongside the
+  // existing legacy one, under the same guard, so both are bound
+  // exactly once per session and neither is ever duplicated by a
+  // re-render or re-navigation. Both channels are pure signals per
+  // docs/78 §16: the payload is never read, only used as a trigger to
+  // re-run loadNotifications(), which re-fetches from the durable,
+  // RLS-scoped source of truth in both tables.
   _subscribeRealtime() {
     if (this._realtimeBound) return;
     this._realtimeBound = true;
@@ -575,6 +644,9 @@ const AppShell = {
           this.loadNotifications();
         })
         .subscribe();
+      NotificationsAPI.subscribeToNotificationChanges(session.user.id, () => {
+        this.loadNotifications();
+      });
     })();
   },
 };
