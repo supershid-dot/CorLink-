@@ -102,22 +102,33 @@ BEGIN
     THEN v_missing := v_missing || 'process_platform_outbox_batch-exposed-to-ordinary-roles '; END IF;
   END IF;
 
-  -- ── No new domain event producer / registry row was added.
-  -- task.assigned.v1 remains the only Phase 1.4 pilot event; no
-  -- task.completed/meetings.* event type was registered ────────────
+  -- ── No new domain event producer / registry row was added BEYOND
+  -- what Phase 1.4B legitimately, separately approved. This scenario
+  -- originally asserted task.assigned.v1 as the sole pilot with zero
+  -- Task/Meeting event producers; Phase 1.4B (a later, separately
+  -- approved milestone) legitimately added exactly three more
+  -- (task.completed.v1, meetings.rescheduled.v1, meetings.cancelled.v1)
+  -- -- carve-out: only the exact registered-event-type list is updated
+  -- here to reflect that approved addition; task.review_requested.v1/
+  -- task.returned.v1/meetings.scheduled.v1 remain deferred and must
+  -- still be absent, exactly as Phase 1.4B's own scope required ──────
   IF EXISTS (
     SELECT 1 FROM platform_event_type_registry
-    WHERE event_type IN ('task.completed.v1','task.review_requested.v1','task.returned.v1',
-      'meetings.scheduled.v1','meetings.rescheduled.v1','meetings.cancelled.v1')
+    WHERE event_type IN ('task.review_requested.v1','task.returned.v1','meetings.scheduled.v1')
   ) THEN v_missing := v_missing || 'unexpected-new-domain-event-registered '; END IF;
   IF NOT EXISTS (
     SELECT 1 FROM platform_event_type_registry WHERE event_type = 'task.assigned.v1'
   ) THEN v_missing := v_missing || 'phase1.4-pilot-event-missing '; END IF;
 
-  -- ── No Task/Meeting lifecycle semantics changed: complete_task,
-  -- assign_task, watch_task, unwatch_task, create_meeting,
-  -- cancel_meeting bodies untouched by this milestone (only
-  -- assign_task's own Phase 1.4 body, not touched again here) ──────
+  -- ── No Task/Meeting lifecycle semantics changed beyond the exact,
+  -- separately-approved Phase 1.4B atomic enqueue additions to
+  -- complete_task()/update_meeting()/cancel_meeting(). watch_task,
+  -- unwatch_task, create_meeting, assign_task remain untouched by any
+  -- notification-producer addition -- carve-out: only the specific
+  -- function list this check scans is updated to exclude the two
+  -- Phase 1.4B-approved producers; the assertion itself (no OTHER
+  -- Task/Meeting mutation gained a notification producer) is unchanged
+  -- and still enforced ────────────────────────────────────────────────
   IF to_regprocedure('public.watch_task(uuid)') IS NULL OR to_regprocedure('public.unwatch_task(uuid)') IS NULL THEN
     v_missing := v_missing || 'task-watcher-lifecycle-rpcs-missing '; END IF;
   IF to_regprocedure('public.can_view_meeting(uuid)') IS NULL THEN
@@ -125,7 +136,7 @@ BEGIN
   END IF;
   IF EXISTS (
     SELECT 1 FROM pg_proc WHERE pronamespace='public'::regnamespace
-      AND proname IN ('watch_task','unwatch_task','complete_task','create_meeting','cancel_meeting')
+      AND proname IN ('watch_task','unwatch_task','create_meeting')
       AND (pg_get_functiondef(oid) ILIKE '%platform_enqueue_outbox_event%' OR pg_get_functiondef(oid) ILIKE '%create_notification_intent%')
   ) THEN v_missing := v_missing || 'unexpected-task-meeting-lifecycle-mutation-now-enqueues-a-new-event-producer '; END IF;
 
@@ -159,5 +170,5 @@ BEGIN
   IF v_missing <> '' THEN
     RAISE EXCEPTION 'Notification target expansion structural validation FAILED: %', v_missing;
   END IF;
-  RAISE NOTICE 'Notification target expansion structural validation PASSED (task_watchers and meeting_participants target kinds present with correct shape validation, source_record_type dispatch extended by exactly meeting (task_watchers reuses task), intent_user_can_view_meeting() present and locked down, worker remains generic with zero target/module-specific branches, no new domain event registered, task.assigned.v1 remains the sole pilot, Task/Meeting lifecycle RPCs untouched, CAP-003 1.0B-1.4 and CAP-002 baselines all completely unaffected, Phase 1.5 not started).';
+  RAISE NOTICE 'Notification target expansion structural validation PASSED (task_watchers and meeting_participants target kinds present with correct shape validation, source_record_type dispatch extended by exactly meeting (task_watchers reuses task), intent_user_can_view_meeting() present and locked down, worker remains generic with zero target/module-specific branches, no domain event beyond Phase 1.4B''s own separately-approved additions is registered, task.assigned.v1 remains present, Task/Meeting lifecycle RPCs untouched beyond Phase 1.4B''s own separately-approved complete_task/update_meeting/cancel_meeting enqueue additions, CAP-003 1.0B-1.4A and CAP-002 baselines all completely unaffected, Phase 1.5 not started).';
 END $$;

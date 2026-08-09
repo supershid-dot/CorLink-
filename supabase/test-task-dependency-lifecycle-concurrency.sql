@@ -103,6 +103,20 @@ DO $$ BEGIN IF (SELECT count(*) FROM t3f2_concurrency_results)<>5 THEN RAISE EXC
 
 DELETE FROM notifications WHERE user_id='f6000000-0001-0000-0000-000000000001' OR record_id::text LIKE 'f6000000-%';
 DELETE FROM audit_logs WHERE user_id='f6000000-0001-0000-0000-000000000001' OR record_id::text LIKE 'f6000000-%';
+-- CAP-003 Phase 1.4B: complete_task()/assign_task() now atomically
+-- enqueue platform_outbox_events (task.completed.v1/task.assigned.v1)
+-- as immutable business evidence (docs/78 Sec19 -- never deleted in
+-- production; deleted here only because this disposable local test
+-- harness's own fixture teardown hard-deletes its users afterward).
+-- user_notifications (recipient_user_id) must be cleared first since
+-- it references users(id) directly; platform_outbox_events
+-- (actor_id) and notification_intents (via outbox_event_id) follow.
+DELETE FROM user_notifications WHERE recipient_user_id='f6000000-0001-0000-0000-000000000001'
+  OR outbox_event_id IN (SELECT id FROM platform_outbox_events WHERE actor_id='f6000000-0001-0000-0000-000000000001' OR source_record_id::text LIKE 'f6000000-%');
+DELETE FROM notification_intents WHERE outbox_event_id IN (
+  SELECT id FROM platform_outbox_events WHERE actor_id='f6000000-0001-0000-0000-000000000001' OR source_record_id::text LIKE 'f6000000-%'
+);
+DELETE FROM platform_outbox_events WHERE actor_id='f6000000-0001-0000-0000-000000000001' OR source_record_id::text LIKE 'f6000000-%';
 DELETE FROM task_dependency_waivers WHERE dependency_id IN (SELECT id FROM task_dependencies WHERE dependent_task_id::text LIKE 'f6000000-%');
 DELETE FROM task_dependencies WHERE dependent_task_id::text LIKE 'f6000000-%' OR prerequisite_task_id::text LIKE 'f6000000-%';
 DELETE FROM tasks WHERE id::text LIKE 'f6000000-%';
