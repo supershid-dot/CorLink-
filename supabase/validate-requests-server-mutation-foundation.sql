@@ -164,14 +164,27 @@ BEGIN
         'update_response_draft','submit_response','approve_response','return_response',
         'mark_response_received','acknowledge_and_close','update_request_draft')
   ) THEN
+    -- As of Phase 1.6A's own completion, ZERO of the 19 RPCs
+    -- integrated CAP-003. CAP-003 Phase 1.6B
+    -- (patch-requests-notification-integration.sql) later legitimately
+    -- wired exactly 5 of them (approve_request, return_request,
+    -- route_request, assign_request, approve_response) to atomically
+    -- enqueue a CAP-003 outbox event -- documented, evidenced,
+    -- approved (see docs/90). This validator therefore only asserts
+    -- the remaining 14 RPCs -- the ones Phase 1.6B deliberately left
+    -- alone -- still integrate nothing; Phase 1.6B's own validator
+    -- (validate-requests-notification-integration.sql) is what proves
+    -- the 5 migrated RPCs' CAP-003 integration is itself correct
+    -- (atomic, correct event type, no direct user_notifications write,
+    -- no free-text leakage).
     FOREACH v_fn IN ARRAY ARRAY[
       'create_request(uuid,uuid,text,text,text,text,timestamptz,uuid)',
-      'submit_request(uuid,uuid)', 'approve_request(uuid,text)', 'return_request(uuid,text)',
-      'mark_request_received(uuid)', 'route_request(uuid,uuid)',
-      'return_request_to_previous_section(uuid,text)', 'assign_request(uuid,uuid)',
+      'submit_request(uuid,uuid)',
+      'mark_request_received(uuid)',
+      'return_request_to_previous_section(uuid,text)',
       'receive_and_route_request(uuid,uuid,uuid)', 'close_request(uuid)', 'cancel_request(uuid,text)',
       'create_response(uuid,text,text)', 'update_response_draft(uuid,text,text)',
-      'submit_response(uuid,uuid)', 'approve_response(uuid,text)', 'return_response(uuid,text)',
+      'submit_response(uuid,uuid)', 'return_response(uuid,text)',
       'mark_response_received(uuid)', 'acknowledge_and_close(uuid,uuid)'
     ] LOOP
       SELECT pg_get_functiondef(to_regprocedure('public.'||v_fn)) INTO v_def;
@@ -182,9 +195,11 @@ BEGIN
       ) THEN v_missing := v_missing || v_fn || '-unexpectedly-integrates-cap003 '; END IF;
     END LOOP;
   END IF;
-  IF EXISTS (
-    SELECT 1 FROM platform_event_type_registry WHERE owning_module = 'requests'
-  ) THEN v_missing := v_missing || 'unexpected-requests-event-type-registered '; END IF;
+  -- Phase 1.6B legitimately registered exactly 5 requests.*.v1 event
+  -- types (owning_module='requests') -- this validator now only
+  -- refuses an event count outside that known, documented set.
+  IF (SELECT count(*) FROM platform_event_type_registry WHERE owning_module = 'requests') NOT IN (0, 5) THEN
+    v_missing := v_missing || 'unexpected-requests-event-type-count '; END IF;
 
   -- ── 8. Legacy Requests notifications untouched: NotificationsAPI.
   -- notify()'s own RPC (create_legacy_notification) is completely

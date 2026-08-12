@@ -141,7 +141,16 @@ BEGIN
   -- ── No notification delivery channel, no Realtime cutover, no
   -- module integration beyond CAP-003 Phase 1.4's own explicitly
   -- approved pilot (assign_task() -- docs/85, its own structural
-  -- validator is validate-notification-module-integration-foundation.sql) ──
+  -- validator is validate-notification-module-integration-foundation.sql)
+  -- and, later, CAP-003 Phase 1.6B's own explicitly approved Requests
+  -- integration (approve_request/return_request/route_request/
+  -- assign_request/approve_response -- docs/90, its own structural
+  -- validator is validate-requests-notification-integration.sql) --
+  -- 'approve_request'/'route_request' were this validator's own
+  -- original placeholder examples of a hypothetically not-yet-approved
+  -- future module integration; Phase 1.6B made that integration real
+  -- and approved, so they are removed from this negative check below
+  -- (still checked, correctly, by Phase 1.6B's own validator instead). ──
   IF EXISTS (
     SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace
       AND proname ILIKE ANY (ARRAY['%send_email%','%send_push%','%send_sms%','%deliver_notification%','%realtime_cutover%'])
@@ -150,7 +159,7 @@ BEGIN
     SELECT 1 FROM pg_proc p
     WHERE pronamespace = 'public'::regnamespace
       AND proname IN (
-        'submit_request_for_approval','approve_request','route_request','create_meeting',
+        'submit_request_for_approval','create_meeting',
         'log_entry','submit_prisoner_letter'
       )
       AND pg_get_functiondef(p.oid) ILIKE '%platform_enqueue_outbox_event%'

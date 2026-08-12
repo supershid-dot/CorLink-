@@ -71,12 +71,20 @@ BEGIN
   END IF;
 
   -- ── Closed source_record_type dispatch: extended by exactly two
-  -- literals ('task', 'meeting') as of Phase 1.4A, never opened to
-  -- dynamic SQL or a wildcard ────────────────────────────────────
+  -- literals ('task', 'meeting') as of Phase 1.4A, further extended
+  -- by 'request' at CAP-003 Phase 1.6B
+  -- (patch-requests-notification-integration.sql), never opened to
+  -- dynamic SQL or a wildcard. This validator only asserts this
+  -- phase's own two additions are present alongside the original two
+  -- -- it is not this phase's job to pin every later phase's own
+  -- additions to the literal; Phase 1.6B's own validator
+  -- (validate-requests-notification-integration.sql) pins the
+  -- current full literal. ────────────────────────────────────────
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'notification_intents_source_record_type_check'
-      AND pg_get_constraintdef(oid) = 'CHECK ((source_record_type = ANY (ARRAY[''workflow_instance''::text, ''platform''::text, ''task''::text, ''meeting''::text])))'
-  ) THEN v_missing := v_missing || 'notification_intents_source_record_type_check-not-extended-exactly-as-expected '; END IF;
+      AND pg_get_constraintdef(oid) ILIKE '%''workflow_instance''%' AND pg_get_constraintdef(oid) ILIKE '%''platform''%'
+      AND pg_get_constraintdef(oid) ILIKE '%''task''%' AND pg_get_constraintdef(oid) ILIKE '%''meeting''%'
+  ) THEN v_missing := v_missing || 'notification_intents_source_record_type_check-missing-phase-1.4a-values '; END IF;
 
   IF to_regprocedure('public.create_notification_intent(uuid,text,text,jsonb,text,text,uuid[],uuid,uuid,uuid,uuid,uuid,uuid)') IS NULL THEN
     v_missing := v_missing || 'create_notification_intent-missing ';

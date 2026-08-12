@@ -61,6 +61,27 @@ const MIGRATED_EVENT_MAP = {
   // exactly as-is by dedupeLegacyAgainstCap003() below, so this
   // broader legacy event type is never wrongly suppressed.
   meeting_updated:   { cap003Type: 'meetings.rescheduled.v1', recordType: 'meeting' },
+  // ─── CAP-003 Phase 1.6B — Requests ───────────────────────────────
+  // cap003Type may be an ARRAY here (the only entries that need it):
+  // js/data/requests-api.js reuses the single legacy type 'new_request'
+  // for three structurally different transitions (approveRequest,
+  // routeRequest/receiveAndRoute's section branch, assignRequest/
+  // receiveAndRoute's assignee branch) — the (record_id, time-window)
+  // match below still disambiguates correctly, since only ONE of the
+  // three possible CAP-003 events is ever actually enqueued near a
+  // given legacy row's own timestamp for a given request. 'draft_
+  // returned' and 'new_response' are similarly reused by additional,
+  // NOT-migrated call sites (returnResponse; closeRequest/
+  // acknowledgeAndClose) — those legacy rows simply never find a
+  // requests.returned.v1/requests.response_sent.v1 match (since no
+  // such CAP-003 event was ever enqueued for that request near that
+  // time, this milestone implementing only return_request()/
+  // approve_response()) and survive undeduped, exactly the same
+  // "no match, no suppression" safety the meeting_updated entry above
+  // already relies on.
+  new_request:       { cap003Type: ['requests.sent.v1', 'requests.routed.v1', 'requests.assigned.v1'], recordType: 'request' },
+  draft_returned:    { cap003Type: 'requests.returned.v1',       recordType: 'request' },
+  new_response:      { cap003Type: 'requests.response_sent.v1',  recordType: 'request' },
 };
 const DEDUP_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
@@ -74,11 +95,23 @@ const DEDUP_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 // unrecognized template key (future notification types outside this
 // phase's four migrated events) falls back to a generic, safe string
 // rather than guessing at param shapes or throwing.
+// requests.* templates deliberately never reference p.subject — the
+// Requests producers (patch-requests-notification-integration.sql)
+// never persist it into template_params in the first place (docs/89
+// never affirmatively confirms subject as non-confidential, so it is
+// treated conservatively as potentially sensitive and excluded from
+// the payload entirely — see docs/90). Only reference_number (an
+// explicitly safe structural identifier) is ever interpolated.
 const NOTIFICATION_TEMPLATES = {
   'task.assigned':        p => `You were assigned to task "${p.task_title || 'Untitled task'}"`,
   'task.completed':       p => `Task "${p.task_title || 'Untitled task'}" was completed`,
   'meetings.rescheduled': p => `Meeting "${p.meeting_title || 'Untitled meeting'}" was rescheduled`,
   'meetings.cancelled':   p => `Meeting "${p.meeting_title || 'Untitled meeting'}" was cancelled`,
+  'requests.sent':          p => `A request was sent to your organization${p.reference_number ? ' (' + p.reference_number + ')' : ''}`,
+  'requests.returned':      () => 'Your request draft was returned for changes',
+  'requests.routed':        () => 'A request was routed to your section',
+  'requests.assigned':      () => 'A request was assigned to you',
+  'requests.response_sent': p => `You received a response to a request${p.reference_number ? ' (' + p.reference_number + ')' : ''}`,
 };
 function renderNotificationTemplate(templateKey, templateParams) {
   const fn = NOTIFICATION_TEMPLATES[templateKey];
@@ -88,17 +121,30 @@ function renderNotificationTemplate(templateKey, templateParams) {
 // Deep-link routing for CAP-003 source records. deep_link_module/
 // deep_link_params on user_notifications are always NULL today (no
 // current producer populates them), so routing is derived directly
-// from source_record_type/source_record_id instead. Only 'task' and
-// 'meeting' are populated by any current producer; both destination
-// views enforce their own RLS on load (TaskDetailView already renders
-// a "not found" state for an inaccessible task — see task-detail.js —
-// and the meetings view resolves visibility the same way rooms/
-// meetings navigation already does elsewhere in shell.js), so a stale
-// or since-revoked notification can never be used as a substitute for
-// the module's own authorization check.
+// from source_record_type/source_record_id instead. 'task', 'meeting',
+// and (CAP-003 Phase 1.6B) 'request' are the only source_record_types
+// any current producer populates; every destination view enforces its
+// own RLS on load (TaskDetailView already renders a "not found" state
+// for an inaccessible task — see task-detail.js — the meetings view
+// resolves visibility the same way rooms/meetings navigation already
+// does elsewhere in shell.js, and RequestDetailView's own
+// getConversation() call (request-detail.js) resolves to an empty
+// conversation when requests_select denies the row — its recursive
+// walk (conversation_request_ids(), supabase/rls.sql) runs under the
+// CALLER's own privileges and yields nothing past a step it cannot
+// see — so the notification only ever supplies an id to navigate to,
+// never a substitute for that RLS check), so a stale or since-revoked notification can
+// never be used as a substitute for the module's own authorization
+// check. requests.response_sent.v1 also routes here (source_record_id
+// is always the PARENT request, never a separate response id — see
+// approve_response() in patch-requests-notification-integration.sql —
+// because request-detail.js already renders a request's responses
+// inline on the same page; there is no separate response route to
+// route to).
 const CAP003_ROUTES = {
   task:    recordId => ({ route: 'task-detail', params: { id: recordId } }),
   meeting: recordId => ({ route: 'meetings', params: { meetingId: recordId } }),
+  request: recordId => ({ route: 'request-detail', params: { id: recordId } }),
 };
 
 // Structural-identity match: (mapped type, record type, record id),
@@ -118,9 +164,13 @@ function dedupeLegacyAgainstCap003(legacyItems, cap003Items) {
     let bestDelta = Infinity;
     if (mapping && legacy.record_type === mapping.recordType && legacy.record_id != null) {
       const legacyTime = new Date(legacy.created_at).getTime();
+      // cap003Type may be a single string or (Phase 1.6B's 'new_request'
+      // entry) an array of several possible CAP-003 event types that all
+      // share one legacy type — see MIGRATED_EVENT_MAP's own comment.
+      const cap003Types = Array.isArray(mapping.cap003Type) ? mapping.cap003Type : [mapping.cap003Type];
       for (const n of cap003Items || []) {
         if (usedCap003Ids.has(n.id)) continue;
-        if (n.notification_type !== mapping.cap003Type) continue;
+        if (!cap003Types.includes(n.notification_type)) continue;
         if (n.source_record_type !== mapping.recordType) continue;
         if (String(n.source_record_id) !== String(legacy.record_id)) continue;
         const delta = Math.abs(new Date(n.created_at).getTime() - legacyTime);

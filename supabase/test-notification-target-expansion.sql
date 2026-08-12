@@ -352,23 +352,28 @@ END $$;
 INSERT INTO wf86_results VALUES (22,'A meeting_participants-typed intent cannot reference a task: passing target_task_id without target_meeting_id is rejected at creation time');
 
 -- ── 23: source authorization remains mandatory (a task_watchers
--- target whose source_record_type is the unsupported ''meeting'' type
--- mismatched against a task source id is still gated by the closed
--- dispatcher -- proven already by scenario 8/19''s source/target
--- mismatch; this scenario proves the table-level CHECK is the FIRST
--- gate, before any resolution logic runs) ──
+-- target whose source_record_type is genuinely unsupported is still
+-- gated by the closed dispatcher -- proven already by scenario 8/19''s
+-- source/target mismatch; this scenario proves the table-level CHECK
+-- is the FIRST gate, before any resolution logic runs). NOTE (Phase
+-- 1.6B carve-out): this scenario originally used ''request'' as its
+-- example still-unsupported literal; CAP-003 Phase 1.6B
+-- (patch-requests-notification-integration.sql) legitimately added
+-- ''request'' as a supported source_record_type, so the example
+-- literal is updated here to ''internal_collaboration_thread'' (still
+-- genuinely unsupported); the assertion itself is unchanged. ──
 DO $$
 DECLARE v_event_id UUID;
 BEGIN
-  v_event_id := platform_enqueue_outbox_event('wf86.d23.v1','requests','request',gen_random_uuid(),'86000000-0000-0000-0000-000000000001',NULL,gen_random_uuid(),NULL,NOW(),'{}'::JSONB,gen_random_uuid());
+  v_event_id := platform_enqueue_outbox_event('wf86.d23.v1','internal_collaboration','internal_collaboration_thread',gen_random_uuid(),'86000000-0000-0000-0000-000000000001',NULL,gen_random_uuid(),NULL,NOW(),'{}'::JSONB,gen_random_uuid());
   BEGIN
     PERFORM create_notification_intent(v_event_id,'wf86.d23.v1','x','{}'::JSONB,'normal','task_watchers',NULL,NULL,NULL,NULL,NULL,'86000000-0007-0000-0000-000000000001'::UUID,NULL);
-    RAISE EXCEPTION 'SECURITY HOLE: a task_watchers target was accepted for an unsupported source_record_type (request)';
+    RAISE EXCEPTION 'SECURITY HOLE: a task_watchers target was accepted for an unsupported source_record_type (internal_collaboration_thread)';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM NOT LIKE '%has no generic authorization dispatch%' THEN RAISE; END IF;
   END;
 END $$;
-INSERT INTO wf86_results VALUES (23,'Source authorization remains mandatory and structurally closed: a task_watchers target on an outbox event whose source_record_type is not in the closed allowlist ({workflow_instance, platform, task, meeting}) is rejected at creation time -- a valid target descriptor never bypasses source-type dispatch');
+INSERT INTO wf86_results VALUES (23,'Source authorization remains mandatory and structurally closed: a task_watchers target on an outbox event whose source_record_type is not in the closed allowlist ({workflow_instance, platform, task, meeting, request}) is rejected at creation time -- a valid target descriptor never bypasses source-type dispatch');
 
 -- ── 24: no sensitive payload copied -- target descriptors carry only
 -- structural identifiers, never Task/Meeting content ──

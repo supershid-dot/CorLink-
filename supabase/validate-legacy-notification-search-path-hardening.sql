@@ -106,11 +106,18 @@ BEGIN
   -- ── No CAP-003 Phase 1.4 module integration beyond its own
   -- explicitly approved pilot (assign_task() -- docs/85, its own
   -- structural validator is
-  -- validate-notification-module-integration-foundation.sql) ──
+  -- validate-notification-module-integration-foundation.sql), and no
+  -- integration beyond CAP-003 Phase 1.6B's own later, explicitly
+  -- approved Requests integration (approve_request/route_request/etc
+  -- -- docs/90, its own structural validator is
+  -- validate-requests-notification-integration.sql) -- 'approve_request'/
+  -- 'route_request' were this validator's own original placeholder
+  -- examples of a hypothetically not-yet-approved future integration;
+  -- Phase 1.6B made that integration real and approved. ────────────
   IF EXISTS (
     SELECT 1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace
       AND proname IN (
-        'submit_request_for_approval','approve_request','route_request','create_meeting',
+        'submit_request_for_approval','create_meeting',
         'log_entry','submit_prisoner_letter'
       )
       AND (pg_get_functiondef(oid) ILIKE '%create_notification_intent%' OR pg_get_functiondef(oid) ILIKE '%platform_enqueue_outbox_event%')

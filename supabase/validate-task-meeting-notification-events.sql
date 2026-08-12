@@ -41,12 +41,20 @@ BEGIN
       AND pg_get_constraintdef(oid) = 'CHECK ((target_type = ANY (ARRAY[''specific_users''::text, ''org_admins''::text, ''section''::text, ''section_leadership''::text, ''workflow_participants''::text, ''work_item_assignee''::text, ''task_watchers''::text, ''meeting_participants''::text])))'
   ) THEN v_missing := v_missing || 'notification_intents_target_type_check-unexpectedly-changed '; END IF;
 
-  -- ── 4. Closed source_record_type dispatch unaffected -- still
-  -- exactly the 4 values from Phase 1.4A, no new source type added ──
+  -- ── 4. Closed source_record_type dispatch: unaffected BY THIS
+  -- MILESTONE (Phase 1.4B added no source type of its own) -- still
+  -- contains the 4 values from Phase 1.4A. CAP-003 Phase 1.6B
+  -- (patch-requests-notification-integration.sql) later legitimately
+  -- extended the same closed list with 'request' -- this validator
+  -- only asserts Phase 1.4A's own 4 values remain present, not that
+  -- nothing was ever added after Phase 1.4B; Phase 1.6B's own
+  -- validator (validate-requests-notification-integration.sql) pins
+  -- the current full literal. ────────────────────────────────────
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'notification_intents_source_record_type_check'
-      AND pg_get_constraintdef(oid) = 'CHECK ((source_record_type = ANY (ARRAY[''workflow_instance''::text, ''platform''::text, ''task''::text, ''meeting''::text])))'
-  ) THEN v_missing := v_missing || 'notification_intents_source_record_type_check-unexpectedly-changed '; END IF;
+      AND pg_get_constraintdef(oid) ILIKE '%''workflow_instance''%' AND pg_get_constraintdef(oid) ILIKE '%''platform''%'
+      AND pg_get_constraintdef(oid) ILIKE '%''task''%' AND pg_get_constraintdef(oid) ILIKE '%''meeting''%'
+  ) THEN v_missing := v_missing || 'notification_intents_source_record_type_check-missing-phase-1.4a-values '; END IF;
 
   -- ── 5. create_notification_intent()/resolve_notification_intent()/
   -- process_platform_outbox_batch() are completely untouched by this
@@ -73,13 +81,19 @@ BEGIN
     v_missing := v_missing || 'resolve_notification_intent-unexpectedly-references-new-event-type ';
   END IF;
 
-  -- No new authorization adapter -- exactly intent_user_can_view_task
-  -- (Phase 1.4) and intent_user_can_view_meeting (Phase 1.4A) exist,
-  -- both still internal-only (no grant to any role).
+  -- No new authorization adapter added BY THIS MILESTONE -- exactly
+  -- intent_user_can_view_task (Phase 1.4) and intent_user_can_view_meeting
+  -- (Phase 1.4A) exist as of Phase 1.4B, both still internal-only (no
+  -- grant to any role). CAP-003 Phase 1.6B later legitimately added
+  -- intent_user_can_view_request -- this validator only asserts no
+  -- adapter BEYOND the known set (Phase 1.4/1.4A's own two plus Phase
+  -- 1.6B's own one) exists; Phase 1.6B's own validator
+  -- (validate-requests-notification-integration.sql) pins its exact
+  -- posture (internal-only, no grant).
   IF EXISTS (
     SELECT 1 FROM information_schema.routines
     WHERE routine_schema = 'public' AND routine_name ILIKE 'intent_user_can_view_%'
-      AND routine_name NOT IN ('intent_user_can_view_workflow_instance', 'intent_user_can_view_task', 'intent_user_can_view_meeting')
+      AND routine_name NOT IN ('intent_user_can_view_workflow_instance', 'intent_user_can_view_task', 'intent_user_can_view_meeting', 'intent_user_can_view_request')
   ) THEN v_missing := v_missing || 'unexpected-new-authorization-adapter '; END IF;
 
   IF has_function_privilege('authenticated', 'intent_user_can_view_task(uuid,uuid)', 'EXECUTE')

@@ -22,11 +22,20 @@ BEGIN
   ) THEN v_missing := v_missing || 'target_meeting_id-column-missing '; END IF;
 
   -- ── Closed source_record_type dispatch extended by exactly
-  -- 'meeting' (task_watchers reuses the existing 'task' entry) ──────
+  -- 'meeting' (task_watchers reuses the existing 'task' entry) at
+  -- Phase 1.4A -- further extended by 'request' at CAP-003 Phase
+  -- 1.6B (patch-requests-notification-integration.sql); this
+  -- validator only asserts 'meeting' is present and 'task'/
+  -- 'workflow_instance'/'platform' remain, not the full literal,
+  -- since it isn't this phase's job to pin every later phase's own
+  -- additions -- Phase 1.6B's own validator
+  -- (validate-requests-notification-integration.sql) is what pins
+  -- the current full literal. ────────────────────────────────────
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'notification_intents_source_record_type_check'
-      AND pg_get_constraintdef(oid) = 'CHECK ((source_record_type = ANY (ARRAY[''workflow_instance''::text, ''platform''::text, ''task''::text, ''meeting''::text])))'
-  ) THEN v_missing := v_missing || 'notification_intents_source_record_type_check-not-extended-exactly-as-expected '; END IF;
+      AND pg_get_constraintdef(oid) ILIKE '%''workflow_instance''%' AND pg_get_constraintdef(oid) ILIKE '%''platform''%'
+      AND pg_get_constraintdef(oid) ILIKE '%''task''%' AND pg_get_constraintdef(oid) ILIKE '%''meeting''%'
+  ) THEN v_missing := v_missing || 'notification_intents_source_record_type_check-missing-phase-1.4a-values '; END IF;
 
   -- ── Target-shape structural validation exists for both new kinds ──
   IF NOT EXISTS (

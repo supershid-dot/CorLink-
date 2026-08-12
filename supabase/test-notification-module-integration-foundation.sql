@@ -315,31 +315,36 @@ INSERT INTO wf85_results VALUES (17,'Authorization for task-sourced intents is r
 -- ── 18: the closed source_record_type dispatch remains CLOSED --
 -- extended by exactly the one justified literal ('task'), still
 -- rejecting every other unsupported source_record_type ─────────────
--- NOTE (Phase 1.4A carve-out): this scenario originally used 'meeting' as
--- its example still-unsupported literal, since meeting_participants did not
--- exist yet at Phase 1.4. Phase 1.4A legitimately added 'meeting' as a
--- supported source_record_type (with its own intent_user_can_view_meeting()
--- authorization dispatch), so 'meeting' is no longer a valid negative-test
--- example. Only the example literal is updated here, to 'request' (still
--- genuinely unsupported -- Requests integration remains deferred); the
--- assertion itself (closed dispatch rejects every unsupported literal) is
--- unchanged and still enforced.
+-- NOTE (Phase 1.4A carve-out, then Phase 1.6B carve-out): this
+-- scenario originally used 'meeting' as its example still-unsupported
+-- literal; Phase 1.4A legitimately added 'meeting' as a supported
+-- source_record_type, so the example literal was changed to 'request'.
+-- CAP-003 Phase 1.6B (patch-requests-notification-integration.sql)
+-- has now legitimately added 'request' as a supported source_record_type
+-- too (with its own intent_user_can_view_request() authorization
+-- dispatch -- docs/90), so 'request' is no longer a valid negative-test
+-- example either. Only the example literal is updated here, to
+-- 'internal_collaboration_thread' (still genuinely unsupported --
+-- Internal Collaboration module CAP-003 integration remains deferred,
+-- per every CAP-003 phase's own explicit out-of-scope list); the
+-- assertion itself (closed dispatch rejects every unsupported literal)
+-- is unchanged and still enforced.
 DO $$
 DECLARE v_event_id UUID; v_count INTEGER;
 BEGIN
-  v_event_id := platform_enqueue_outbox_event('request.created.v1','requests','request',gen_random_uuid(),
+  v_event_id := platform_enqueue_outbox_event('internal_collab.created.v1','internal_collaboration','internal_collaboration_thread',gen_random_uuid(),
     '85000000-0000-0000-0000-000000000001', NULL, gen_random_uuid(), NULL, NOW(), '{}'::JSONB, gen_random_uuid());
   BEGIN
-    PERFORM create_notification_intent(v_event_id, 'request.created.v1','request.created','{}'::JSONB,'normal',
+    PERFORM create_notification_intent(v_event_id, 'internal_collab.created.v1','internal_collab.created','{}'::JSONB,'normal',
       'specific_users', ARRAY['85000000-0001-0000-0000-000000000010']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
-    RAISE EXCEPTION 'SECURITY HOLE: an intent was created for an unsupported source_record_type (request)';
+    RAISE EXCEPTION 'SECURITY HOLE: an intent was created for an unsupported source_record_type (internal_collaboration_thread)';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM NOT LIKE '%has no generic authorization dispatch%' THEN RAISE; END IF;
   END;
   SELECT count(*) INTO v_count FROM notification_intents WHERE outbox_event_id = v_event_id;
   IF v_count <> 0 THEN RAISE EXCEPTION 'an intent row was left behind despite the rejection'; END IF;
 END $$;
-INSERT INTO wf85_results VALUES (18,'The closed source_record_type dispatch remains closed: Phase 1.4 extends it by exactly one evidence-justified literal (''task'') and still deterministically rejects every other unsupported source_record_type (e.g. ''request'', deferred pending its own Requests module integration) at intent-creation time, never silently faking authorization. (Phase 1.4A carve-out: the example literal was changed from ''meeting'' to ''request'' since Phase 1.4A legitimately added ''meeting'' as a supported source_record_type; the assertion itself is unchanged.)');
+INSERT INTO wf85_results VALUES (18,'The closed source_record_type dispatch remains closed: Phase 1.4 extends it by exactly one evidence-justified literal (''task'') and still deterministically rejects every other unsupported source_record_type (e.g. ''internal_collaboration_thread'', deferred pending its own module integration) at intent-creation time, never silently faking authorization. (Phase 1.4A carve-out: the example literal was changed from ''meeting'' to ''request'' since Phase 1.4A legitimately added ''meeting'' as a supported source_record_type; Phase 1.6B carve-out: changed again from ''request'' to ''internal_collaboration_thread'' since Phase 1.6B legitimately added ''request'' as a supported source_record_type; the assertion itself is unchanged.)');
 
 -- ── 19: the generic event->intent mapping is genuinely data-driven --
 -- registering a brand-new event_type with the envelope flag set makes

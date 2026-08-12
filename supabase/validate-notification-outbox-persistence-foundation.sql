@@ -236,11 +236,18 @@ BEGIN
     -- is the textual scan below.
     NULL;
   END IF;
+  -- 'approve_request'/'route_request' were this validator's own
+  -- original placeholder examples of a hypothetically not-yet-approved
+  -- future module integration; CAP-003 Phase 1.6B
+  -- (patch-requests-notification-integration.sql) later made that
+  -- integration real and explicitly approved (docs/90, its own
+  -- structural validator is validate-requests-notification-integration.sql),
+  -- so they are removed from this negative check.
   IF EXISTS (
     SELECT 1 FROM pg_proc p
     WHERE pronamespace = 'public'::regnamespace
       AND proname IN (
-        'submit_request_for_approval','approve_request','route_request','create_meeting',
+        'submit_request_for_approval','create_meeting',
         'log_entry','submit_prisoner_letter'
       )
       AND pg_get_functiondef(p.oid) ILIKE '%platform_enqueue_outbox_event%'

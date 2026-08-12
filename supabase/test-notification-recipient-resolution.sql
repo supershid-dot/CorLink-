@@ -100,10 +100,16 @@ BEGIN
     gen_random_uuid(),NULL,now(),'{}'::JSONB,gen_random_uuid());
   INSERT INTO wf82_ids VALUES ('outbox_platform', v_outbox_id);
 
-  -- Unsupported-source-type outbox event (record_type='request', not
-  -- in Phase 1.2's closed dispatch set) -- for scenario 15.
+  -- Unsupported-source-type outbox event -- for scenario 15. NOTE
+  -- (Phase 1.6B carve-out): this originally used record_type='request'
+  -- as the example still-unsupported literal; CAP-003 Phase 1.6B
+  -- (patch-requests-notification-integration.sql) legitimately added
+  -- 'request' as a supported source_record_type (docs/90), so the
+  -- example is updated here to 'internal_collaboration_thread' (still
+  -- genuinely unsupported -- Internal Collaboration CAP-003
+  -- integration remains deferred); the assertion itself is unchanged.
   v_outbox_id := platform_enqueue_outbox_event(
-    'request.wf82_test.v1','requests','request',gen_random_uuid(),
+    'internal_collab.wf82_test.v1','internal_collaboration','internal_collaboration_thread',gen_random_uuid(),
     '82000000-0000-0000-0000-000000000001'::UUID,NULL,
     gen_random_uuid(),NULL,now(),'{}'::JSONB,gen_random_uuid());
   INSERT INTO wf82_ids VALUES ('outbox_unsupported', v_outbox_id);
@@ -393,14 +399,14 @@ DO $$
 BEGIN
   BEGIN
     PERFORM create_notification_intent(
-      (SELECT id FROM wf82_ids WHERE name='outbox_unsupported'), 'request.wf82_test.v1','x.title','{}'::JSONB,'normal',
+      (SELECT id FROM wf82_ids WHERE name='outbox_unsupported'), 'internal_collab.wf82_test.v1','x.title','{}'::JSONB,'normal',
       'specific_users', ARRAY['82000000-0001-0000-0000-000000000001']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);
-    RAISE EXCEPTION 'SECURITY HOLE: an intent was created for an unsupported source_record_type (request)';
+    RAISE EXCEPTION 'SECURITY HOLE: an intent was created for an unsupported source_record_type (internal_collaboration_thread)';
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
 END $$;
 RESET ROLE;
-INSERT INTO wf82_results VALUES (15,'An outbox event whose source_record_type is not in Phase 1.2''s closed generic dispatch set (record_type=request) is rejected at intent-creation time -- fails closed, remains deferred to a future module-adapter phase, never faked');
+INSERT INTO wf82_results VALUES (15,'An outbox event whose source_record_type is not in the closed generic dispatch set (record_type=internal_collaboration_thread) is rejected at intent-creation time -- fails closed, remains deferred to a future module-adapter phase, never faked. (Phase 1.6B carve-out: the example literal was changed from ''request'' to ''internal_collaboration_thread'' since CAP-003 Phase 1.6B legitimately added ''request'' as a supported source_record_type; the assertion itself is unchanged.)');
 
 -- ── 16: Duplicate resolution is idempotent ──
 SET ROLE service_role;
