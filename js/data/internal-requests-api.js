@@ -15,14 +15,13 @@
 
 const InternalRequestsAPI = (() => {
 
-  async function logAudit(action, recordId, notes) {
-    const db = getSupabase();
-    const session = await Auth.getSession();
-    if (!session) return;
-    await db.from('audit_logs').insert({
-      user_id: session.user.id,
-      action, record_type: 'internal_request', record_id: recordId, notes,
-    });
+  // See requests-api.js for why this exists — .single() on an
+  // RLS-filtered zero-row RPC call throws PostgREST's generic PGRST116.
+  function wrapRowError(error) {
+    if (error && error.code === 'PGRST116') {
+      return new Error('This internal request may have already been updated by someone else, or you may no longer have permission. Refresh and try again.');
+    }
+    return error;
   }
 
   // Resolves which parent an internal_requests row is anchored to (an
@@ -201,21 +200,26 @@ const InternalRequestsAPI = (() => {
     },
 
     // deadline is capped at the parent's own deadline — enforced
-    // server-side too (internal_requests_insert's WITH CHECK, see
-    // supabase/rls.sql), this is just the UX-level pass-through. Exactly
-    // one of parentRequestId/parentEntryId must be set (mirrors the
-    // table's own internal_requests_one_parent CHECK constraint).
+    // server-side (create_internal_request's own internal_requests_
+    // parent_deadline_ok() check). Exactly one of parentRequestId/
+    // parentEntryId must be set (mirrors the table's own internal_
+    // requests_one_parent CHECK constraint). create_internal_request()
+    // is a server-authoritative RPC (CAP-003 Phase 1.8A, supabase/patch-
+    // internal-collaboration-server-mutation-foundation.sql) — it
+    // derives created_by from the caller's own session, independently
+    // re-checks from_section_id membership and to_section_id's org
+    // boundary server-side, and writes the audit row, all in one
+    // transaction.
     async create({ parentRequestId, parentEntryId, fromSectionId, toSectionId, subject, subjectLanguage, body, language, deadline }) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      const { data, error } = await db.from('internal_requests').insert({
-        parent_request_id: parentRequestId || null, parent_entry_id: parentEntryId || null,
-        from_section_id: fromSectionId, to_section_id: toSectionId,
-        created_by: session.user.id, subject, subject_language: subjectLanguage || 'en',
-        body: RichEditor.sanitize(body), language: language || 'en', deadline: deadline || null,
-      }).select().single();
-      if (error) throw error;
-      await logAudit('created', data.id, `Created internal request "${subject}"`);
+      const { data, error } = await db.rpc('create_internal_request', {
+        p_from_section_id: fromSectionId, p_to_section_id: toSectionId,
+        p_subject: subject, p_body: RichEditor.sanitize(body),
+        p_parent_request_id: parentRequestId || null, p_parent_entry_id: parentEntryId || null,
+        p_subject_language: subjectLanguage || 'en', p_language: language || 'en',
+        p_deadline: deadline || null,
+      }).single();
+      if (error) throw wrapRowError(error);
       const recipients = await NotificationsAPI.sectionUserIds(toSectionId);
       await NotificationsAPI.notify(recipients, {
         type: 'new_request', ...parentRef(data),
@@ -226,12 +230,8 @@ const InternalRequestsAPI = (() => {
 
     async markReceived(id) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      const { data, error } = await db.from('internal_requests')
-        .update({ status: 'received', received_by: session.user.id, received_at: new Date().toISOString() })
-        .eq('id', id).select().single();
-      if (error) throw error;
-      await logAudit('received', id, 'Marked internal request as received');
+      const { data, error } = await db.rpc('mark_internal_request_received', { p_internal_request_id: id }).single();
+      if (error) throw wrapRowError(error);
       return data;
     },
 
@@ -241,15 +241,10 @@ const InternalRequestsAPI = (() => {
     // like a fresh arrival.
     async reroute(id, toSectionId) {
       const db = getSupabase();
-      const { data, error } = await db.from('internal_requests')
-        .update({
-          to_section_id: toSectionId, status: 'sent',
-          received_by: null, received_at: null, assigned_to: null,
-        })
-        .eq('id', id).select().single();
-      if (error) throw error;
-      const { data: section } = await db.from('sections').select('name').eq('id', toSectionId).single();
-      await logAudit('routed', id, `Re-routed internal request to ${section?.name || 'another section'}`);
+      const { data, error } = await db.rpc('reroute_internal_request', {
+        p_internal_request_id: id, p_to_section_id: toSectionId,
+      }).single();
+      if (error) throw wrapRowError(error);
       const recipients = await NotificationsAPI.sectionUserIds(toSectionId);
       await NotificationsAPI.notify(recipients, {
         type: 'new_request', ...parentRef(data),
@@ -263,18 +258,19 @@ const InternalRequestsAPI = (() => {
     // reroute() above, so it already IS the "who sent this to me"
     // pointer with no extra column needed). Resets the receiving side
     // exactly like reroute(), and notifies the whole origin section
-    // (not just the original drafter) since anyone there may re-triage it.
+    // (not just the original drafter) since anyone there may re-triage
+    // it. return_internal_request_to_sender()'s own server-side
+    // authorization is narrower than the general update policy — only
+    // the CURRENT to_section holder may return it, not a supervisor
+    // bypass or the from_section side, matching the evidenced UI gate
+    // this replaces exactly (CAP-003 Phase 1.8A).
     async returnToSender(id, internalRequest, comment) {
       const db = getSupabase();
-      const { data, error } = await db.from('internal_requests')
-        .update({
-          to_section_id: internalRequest.from_section_id, status: 'sent',
-          received_by: null, received_at: null, assigned_to: null,
-        })
-        .eq('id', id).select().single();
-      if (error) throw error;
+      const { data, error } = await db.rpc('return_internal_request_to_sender', {
+        p_internal_request_id: id, p_comment: comment || null,
+      }).single();
+      if (error) throw wrapRowError(error);
       const note = (comment || '').replace(/<[^>]+>/g, '').trim().slice(0, 200);
-      await logAudit('returned_to_sender', id, `Sent back to originating section${note ? ': ' + note : ''}`);
       const recipients = await NotificationsAPI.sectionUserIds(internalRequest.from_section_id);
       await NotificationsAPI.notify(recipients, {
         type: 'new_request', ...parentRef(data),
@@ -288,17 +284,10 @@ const InternalRequestsAPI = (() => {
     // drops back to 'received'.
     async assign(id, userId) {
       const db = getSupabase();
-      const { data, error } = await db.from('internal_requests')
-        .update({ assigned_to: userId, status: userId ? 'in_progress' : 'received' })
-        .eq('id', id).select().single();
-      if (error) throw error;
-      let note = 'Unassigned';
-      if (userId) {
-        const { data: staff, error: staffErr } = await db.from('users').select('full_name').eq('id', userId).single();
-        if (staffErr) console.warn('CorLink: failed to look up staff name for assignment audit log:', staffErr.message);
-        note = `Assigned to ${staff?.full_name || 'a staff member'}`;
-      }
-      await logAudit('assigned', id, note);
+      const { data, error } = await db.rpc('assign_internal_request', {
+        p_internal_request_id: id, p_user_id: userId || null,
+      }).single();
+      if (error) throw wrapRowError(error);
       if (userId) {
         await NotificationsAPI.notify([userId], {
           type: 'new_request', ...parentRef(data),
@@ -311,22 +300,19 @@ const InternalRequestsAPI = (() => {
     // ── Reply lifecycle: draft -> pending_approval -> sent ─────────
     async draftReply({ internalRequestId, body, language }) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      const { data, error } = await db.from('internal_request_replies').insert({
-        internal_request_id: internalRequestId, created_by: session.user.id,
-        body: RichEditor.sanitize(body), language: language || 'en', status: 'draft',
-      }).select().single();
-      if (error) throw error;
-      await logAudit('created', internalRequestId, 'Drafted a reply to an internal request');
+      const { data, error } = await db.rpc('draft_internal_request_reply', {
+        p_internal_request_id: internalRequestId, p_body: RichEditor.sanitize(body), p_language: language || 'en',
+      }).single();
+      if (error) throw wrapRowError(error);
       return data;
     },
 
     async updateReplyDraft(id, { body, language }) {
       const db = getSupabase();
-      const { data, error } = await db.from('internal_request_replies')
-        .update({ body: RichEditor.sanitize(body), language: language || 'en' })
-        .eq('id', id).select().single();
-      if (error) throw error;
+      const { data, error } = await db.rpc('update_internal_request_reply_draft', {
+        p_reply_id: id, p_body: RichEditor.sanitize(body), p_language: language || 'en',
+      }).single();
+      if (error) throw wrapRowError(error);
       return data;
     },
 
@@ -335,11 +321,10 @@ const InternalRequestsAPI = (() => {
     // same non-exclusive semantics as external submitRequest/submitResponse.
     async submitReplyForApproval(id, approverId, internalRequest) {
       const db = getSupabase();
-      const { data, error } = await db.from('internal_request_replies')
-        .update({ status: 'pending_approval', pending_approval_by: approverId || null })
-        .eq('id', id).select().single();
-      if (error) throw error;
-      await logAudit('submitted', internalRequest.id, 'Submitted internal reply for approval');
+      const { data, error } = await db.rpc('submit_internal_request_reply', {
+        p_reply_id: id, p_approver_id: approverId || null,
+      }).single();
+      if (error) throw wrapRowError(error);
       const recipients = approverId
         ? [approverId]
         : await NotificationsAPI.sectionUserIds(internalRequest.to_section_id, ['mcs_admin', 'authority_admin', 'supervisor']);
@@ -353,15 +338,14 @@ const InternalRequestsAPI = (() => {
     // comment is optional here (Approve doesn't require a reason, unlike
     // Return below) — plain text only, stripped of any markup and
     // truncated before it goes into the notification message.
+    // approve_internal_request_reply() atomically flips the reply to
+    // 'sent' AND the parent thread to 'responded' in one transaction
+    // (CAP-003 Phase 1.8A) — replaces the previous two separate,
+    // non-atomic UPDATEs.
     async approveReply(id, internalRequest, comment) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      const { data, error } = await db.from('internal_request_replies')
-        .update({ status: 'sent', approved_by: session.user.id, approved_at: new Date().toISOString() })
-        .eq('id', id).select().single();
-      if (error) throw error;
-      await db.from('internal_requests').update({ status: 'responded' }).eq('id', internalRequest.id);
-      await logAudit('approved', internalRequest.id, 'Approved and sent internal reply');
+      const { data, error } = await db.rpc('approve_internal_request_reply', { p_reply_id: id }).single();
+      if (error) throw wrapRowError(error);
       const askingSide = new Set(await NotificationsAPI.sectionUserIds(internalRequest.from_section_id));
       askingSide.add(internalRequest.created_by);
       const note = (comment || '').replace(/<[^>]+>/g, '').trim().slice(0, 200);
@@ -374,14 +358,15 @@ const InternalRequestsAPI = (() => {
 
     // comment is required by the UI (js/views/request-detail.js's
     // _openCommentModal) so a returned drafter always gets a reason,
-    // matching the external side's returnResponse/returnRequest.
+    // matching the external side's returnResponse/returnRequest. Not
+    // passed to the RPC (return_internal_request_reply takes no
+    // p_comment — Internal Collaboration never persists reply-return
+    // comments anywhere, only surfaces them in the notification
+    // message, same as before this migration).
     async returnReply(id, internalRequest, comment) {
       const db = getSupabase();
-      const { data, error } = await db.from('internal_request_replies')
-        .update({ status: 'draft', pending_approval_by: null })
-        .eq('id', id).select().single();
-      if (error) throw error;
-      await logAudit('returned', internalRequest.id, 'Returned internal reply for changes');
+      const { data, error } = await db.rpc('return_internal_request_reply', { p_reply_id: id }).single();
+      if (error) throw wrapRowError(error);
       const note = (comment || '').replace(/<[^>]+>/g, '').trim().slice(0, 200);
       await NotificationsAPI.notify([data.created_by], {
         type: 'draft_returned', ...parentRef(internalRequest),
@@ -392,10 +377,8 @@ const InternalRequestsAPI = (() => {
 
     async close(id) {
       const db = getSupabase();
-      const { data, error } = await db.from('internal_requests')
-        .update({ status: 'closed' }).eq('id', id).select().single();
-      if (error) throw error;
-      await logAudit('edited', id, 'Closed internal request');
+      const { data, error } = await db.rpc('close_internal_request', { p_internal_request_id: id }).single();
+      if (error) throw wrapRowError(error);
       return data;
     },
 

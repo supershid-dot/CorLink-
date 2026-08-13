@@ -504,7 +504,11 @@ BEGIN
   END IF;
   SELECT status INTO v_task_status_before FROM tasks WHERE id = v_task2_id;
 
-  UPDATE internal_requests SET status = 'in_progress', assigned_to = (SELECT assignee FROM test_ids) WHERE id = v_thread2;
+  -- CAP-003 Phase 1.8A: internal_requests is no longer directly
+  -- writable by authenticated (patch-internal-collaboration-server-
+  -- mutation-foundation.sql) -- assign_internal_request() reproduces
+  -- this exact effect (assigned_to + status='in_progress') atomically.
+  PERFORM assign_internal_request(v_thread2, (SELECT assignee FROM test_ids));
 
   IF (SELECT status FROM internal_requests WHERE id = v_thread2) <> 'in_progress' THEN
     RAISE EXCEPTION 'TEST 10 FAILED: thread2 status update did not take effect (fixture/RLS problem, not the thing under test)';

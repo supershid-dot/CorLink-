@@ -160,16 +160,23 @@ END $$;
 DO $$
 BEGIN
   -- TEST 11: internal_requests (Internal Collaboration) direct INSERT
-  -- still works exactly as before -- proves this milestone did not
-  -- touch that module's own client-write path at all.
+  -- is now REJECTED -- narrow, established carve-out: this assertion
+  -- originally proved Phase 1.6A did not touch Internal Collaboration's
+  -- own client-write path. CAP-003 Phase 1.8A subsequently migrated
+  -- Internal Collaboration to its own server-authoritative RPCs and
+  -- closed its direct-write grant, exactly the same class of sibling
+  -- update already applied elsewhere in this repository when a later
+  -- milestone migrates a module an earlier milestone's test used as its
+  -- "still direct-write" control. This does not weaken any security
+  -- assertion -- it tightens it, matching the real current posture.
   PERFORM set_config('request.jwt.claims','{"sub":"16b00000-0001-0000-0000-000000000001"}',true);
   BEGIN
     INSERT INTO internal_requests (parent_request_id, from_section_id, to_section_id, created_by, subject, body)
     VALUES ('16b00000-0009-0000-0000-000000000001', '16b00000-0002-0000-0000-000000000001',
       '16b00000-0002-0000-0000-000000000001', '16b00000-0001-0000-0000-000000000001', 'still direct-write', 'body');
-    RAISE NOTICE 'RLS TEST 11 PASSED: internal_requests direct client INSERT still works unchanged (Internal Collaboration not migrated)';
+    RAISE EXCEPTION 'RLS TEST 11 FAILED: internal_requests direct INSERT should now be rejected (CAP-003 Phase 1.8A direct-write closure)';
   EXCEPTION WHEN insufficient_privilege THEN
-    RAISE EXCEPTION 'RLS TEST 11 FAILED: internal_requests direct write was unexpectedly revoked by this milestone';
+    RAISE NOTICE 'RLS TEST 11 PASSED: internal_requests direct client INSERT is now rejected, matching CAP-003 Phase 1.8A''s direct-write closure';
   END;
 END $$;
 

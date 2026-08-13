@@ -210,17 +210,24 @@ SET ROLE authenticated;
 DO $$
 BEGIN
   -- TEST 12: internal_requests (Internal Collaboration) direct INSERT
-  -- anchored to an Entry case via parent_entry_id still works exactly
-  -- as before -- proves this milestone did not touch that integration
-  -- point at all.
+  -- anchored to an Entry case via parent_entry_id is now REJECTED --
+  -- narrow, established carve-out: this assertion originally proved
+  -- Phase 1.7A did not touch Internal Collaboration's own integration
+  -- point. CAP-003 Phase 1.8A subsequently migrated Internal
+  -- Collaboration to its own server-authoritative RPCs and closed its
+  -- direct-write grant, exactly the same class of sibling update
+  -- already applied elsewhere in this repository when a later
+  -- milestone migrates a module an earlier milestone's test used as its
+  -- "still direct-write" control. This does not weaken any security
+  -- assertion -- it tightens it, matching the real current posture.
   PERFORM set_config('request.jwt.claims','{"sub":"17b00000-0001-0000-0000-000000000002"}',true);
   BEGIN
     INSERT INTO internal_requests (parent_entry_id, from_section_id, to_section_id, created_by, subject, body)
     VALUES ('17b00000-0009-0000-0000-000000000002', '17b00000-0002-0000-0000-000000000002',
       '17b00000-0002-0000-0000-000000000002', '17b00000-0001-0000-0000-000000000002', 'still direct-write', 'body');
-    RAISE NOTICE 'RLS TEST 12 PASSED: internal_requests direct client INSERT (anchored via parent_entry_id) still works unchanged';
+    RAISE EXCEPTION 'RLS TEST 12 FAILED: internal_requests direct INSERT should now be rejected (CAP-003 Phase 1.8A direct-write closure)';
   EXCEPTION WHEN insufficient_privilege THEN
-    RAISE EXCEPTION 'RLS TEST 12 FAILED: internal_requests direct write was unexpectedly revoked by this milestone';
+    RAISE NOTICE 'RLS TEST 12 PASSED: internal_requests direct client INSERT (anchored via parent_entry_id) is now rejected, matching CAP-003 Phase 1.8A''s direct-write closure';
   END;
 END $$;
 
