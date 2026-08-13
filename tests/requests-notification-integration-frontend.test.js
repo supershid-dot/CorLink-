@@ -44,22 +44,35 @@ async function check(name, fn) {
 
   // ─── MIGRATED_EVENT_MAP: the five new Requests entries ────────────
 
-  await check('MIGRATED_EVENT_MAP: new_request maps to an ARRAY of the three ambiguous CAP-003 event types', async () => {
-    const mapping = await page.evaluate(() => window.NotificationsAPI.MIGRATED_EVENT_MAP.new_request);
-    assert(Array.isArray(mapping.cap003Type), 'expected cap003Type to be an array for new_request');
-    assert.deepStrictEqual(mapping.cap003Type.slice().sort(), ['requests.assigned.v1', 'requests.routed.v1', 'requests.sent.v1']);
-    assert.strictEqual(mapping.recordType, 'request');
+  await check('MIGRATED_EVENT_MAP: every value is an array of candidate mapping objects (CAP-003 Phase 1.7B generalization, required once draft_returned became shared with Entry)', async () => {
+    const keys = await page.evaluate(() => Object.keys(window.NotificationsAPI.MIGRATED_EVENT_MAP));
+    for (const key of keys) {
+      const isArray = await page.evaluate(k => Array.isArray(window.NotificationsAPI.MIGRATED_EVENT_MAP[k]), key);
+      assert(isArray, `expected MIGRATED_EVENT_MAP.${key} to be an array`);
+    }
   });
 
-  await check('MIGRATED_EVENT_MAP: draft_returned/new_response map to requests.returned.v1/requests.response_sent.v1', async () => {
-    const [returned, responseSent] = await page.evaluate(() => [
-      window.NotificationsAPI.MIGRATED_EVENT_MAP.draft_returned,
-      window.NotificationsAPI.MIGRATED_EVENT_MAP.new_response,
-    ]);
-    assert.strictEqual(returned.cap003Type, 'requests.returned.v1');
-    assert.strictEqual(returned.recordType, 'request');
-    assert.strictEqual(responseSent.cap003Type, 'requests.response_sent.v1');
-    assert.strictEqual(responseSent.recordType, 'request');
+  await check('MIGRATED_EVENT_MAP: new_request maps to a single-candidate array whose cap003Type is itself an ARRAY of the three ambiguous CAP-003 event types', async () => {
+    const candidates = await page.evaluate(() => window.NotificationsAPI.MIGRATED_EVENT_MAP.new_request);
+    assert.strictEqual(candidates.length, 1);
+    assert(Array.isArray(candidates[0].cap003Type), 'expected cap003Type to be an array for new_request');
+    assert.deepStrictEqual(candidates[0].cap003Type.slice().sort(), ['requests.assigned.v1', 'requests.routed.v1', 'requests.sent.v1']);
+    assert.strictEqual(candidates[0].recordType, 'request');
+  });
+
+  await check('MIGRATED_EVENT_MAP: new_response maps to requests.response_sent.v1', async () => {
+    const candidates = await page.evaluate(() => window.NotificationsAPI.MIGRATED_EVENT_MAP.new_response);
+    assert.strictEqual(candidates.length, 1);
+    assert.strictEqual(candidates[0].cap003Type, 'requests.response_sent.v1');
+    assert.strictEqual(candidates[0].recordType, 'request');
+  });
+
+  await check('MIGRATED_EVENT_MAP: draft_returned holds TWO candidates (Requests + CAP-003 Phase 1.7B Entry), disambiguated by recordType', async () => {
+    const candidates = await page.evaluate(() => window.NotificationsAPI.MIGRATED_EVENT_MAP.draft_returned);
+    assert.strictEqual(candidates.length, 2, 'expected exactly 2 candidates sharing the draft_returned legacy type');
+    const byRecordType = Object.fromEntries(candidates.map(c => [c.recordType, c.cap003Type]));
+    assert.strictEqual(byRecordType.request, 'requests.returned.v1');
+    assert.strictEqual(byRecordType.external_correspondence, 'entry.reply_returned.v1');
   });
 
   // ─── dedupeLegacyAgainstCap003: array-valued matching ──────────────

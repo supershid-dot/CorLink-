@@ -58,11 +58,21 @@ BEGIN
   ) THEN v_missing := v_missing || 'notification_intents_target_type_check-unexpectedly-changed '; END IF;
 
   -- ── 4. Closed source_record_type dispatch: extended by exactly
-  -- 'request'. No 'response' source type introduced. ─────────────────
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'notification_intents_source_record_type_check'
-      AND pg_get_constraintdef(oid) = 'CHECK ((source_record_type = ANY (ARRAY[''workflow_instance''::text, ''platform''::text, ''task''::text, ''meeting''::text, ''request''::text])))'
-  ) THEN v_missing := v_missing || 'notification_intents_source_record_type_check-not-extended-correctly '; END IF;
+  -- 'request'. No 'response' source type introduced. A later phase
+  -- (CAP-003 Phase 1.7B) legitimately extends this constraint further
+  -- with 'external_correspondence' -- this check is therefore a
+  -- positive-membership assertion (this milestone's own value is
+  -- still present) rather than an exact-equality pin, matching the
+  -- same reconciliation Phase 1.4A's own addition of 'meeting' already
+  -- required of earlier validators (see docs/90's own "Sibling
+  -- structural-validator reconciliation" section). 'response' is still
+  -- asserted absent. ───────────────────────────────────────────────
+  SELECT pg_get_constraintdef(oid) INTO v_def FROM pg_constraint WHERE conname = 'notification_intents_source_record_type_check';
+  IF v_def IS NULL THEN v_missing := v_missing || 'notification_intents_source_record_type_check-missing ';
+  ELSE
+    IF v_def NOT ILIKE '%''request''%' THEN v_missing := v_missing || 'notification_intents_source_record_type_check-missing-request '; END IF;
+    IF v_def ILIKE '%''response''%' THEN v_missing := v_missing || 'notification_intents_source_record_type_check-unexpectedly-has-response '; END IF;
+  END IF;
 
   -- ── 5. create_notification_intent()/process_platform_outbox_batch()
   -- keep their exact pre-1.6B signatures (only create_notification_
@@ -103,14 +113,17 @@ BEGIN
     END IF;
   END IF;
 
-  -- Exactly one new authorization adapter -- intent_user_can_view_request
-  -- -- no response-specific adapter was introduced (see docs/90 for why).
+  -- Exactly one new authorization adapter added BY THIS MILESTONE --
+  -- intent_user_can_view_request -- no response-specific adapter was
+  -- introduced (see docs/90 for why). CAP-003 Phase 1.7B later
+  -- legitimately adds intent_user_can_view_entry -- allowed here too,
+  -- same reconciliation as validate-task-meeting-notification-events.sql.
   IF EXISTS (
     SELECT 1 FROM information_schema.routines
     WHERE routine_schema = 'public' AND routine_name ILIKE 'intent_user_can_view_%'
       AND routine_name NOT IN (
         'intent_user_can_view_workflow_instance', 'intent_user_can_view_task',
-        'intent_user_can_view_meeting', 'intent_user_can_view_request'
+        'intent_user_can_view_meeting', 'intent_user_can_view_request', 'intent_user_can_view_entry'
       )
   ) THEN v_missing := v_missing || 'unexpected-new-authorization-adapter '; END IF;
 
@@ -265,7 +278,10 @@ BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('external_correspondence','internal_collaboration_threads','prisoner_letters')) THEN
     NULL; -- their presence is fine (unrelated pre-existing modules); this check exists only to document they are untouched, not to assert absence.
   END IF;
-  IF EXISTS (SELECT 1 FROM platform_event_type_registry WHERE owning_module IN ('entry','internal_collaboration','prisoner_letters')) THEN
+  -- 'entry' is no longer out-of-scope as of CAP-003 Phase 1.7B
+  -- (validate-entry-notification-integration.sql owns that assertion
+  -- now) -- Internal Collaboration/Prisoner Letters remain deferred.
+  IF EXISTS (SELECT 1 FROM platform_event_type_registry WHERE owning_module IN ('internal_collaboration','prisoner_letters')) THEN
     v_missing := v_missing || 'unexpected-out-of-scope-module-event-registered ';
   END IF;
 

@@ -32,7 +32,7 @@
 // `recipient_user_id = auth.uid()` USING/WITH CHECK clause the same
 // way `markRead()` relies on the legacy table's own RLS.
 //
-// Only four migrated events currently get deduped against their legacy
+// Only four migrated events originally got deduped against their legacy
 // counterpart (docs/87's per-event equivalence review found a genuine
 // semantic gap in all four — late authorization revalidation for the
 // two Task events, no actor-self-exclusion for the two Meeting events
@@ -49,10 +49,24 @@
 // window trades a small false-negative risk (an outlier-slow worker
 // run leaves a legacy row briefly un-deduped) for near-zero false
 // positives (never collapsing two genuinely different events).
+//
+// Each value is an ARRAY of candidate mapping objects, not a single
+// object — required since CAP-003 Phase 1.7B: Entry's own legacy
+// 'draft_returned' type (js/data/entry-api.js returnReply()) reuses the
+// exact same legacy type string as Requests' own 'draft_returned'
+// (js/data/requests-api.js returnRequest()), but the two are genuinely
+// different events with different recordType values ('external_
+// correspondence' vs 'request') and different CAP-003 counterparts
+// (entry.reply_returned.v1 vs requests.returned.v1). A single-object
+// value per key cannot represent two distinct candidates sharing one
+// key, so every entry is normalized to an array — dedupeLegacyAgainstCap003()
+// below filters candidates by legacy.record_type === candidate.recordType
+// before ever considering a CAP-003 match, so the two 'draft_returned'
+// candidates never cross-match each other's rows.
 const MIGRATED_EVENT_MAP = {
-  task_assigned:     { cap003Type: 'task.assigned.v1',        recordType: 'task' },
-  task_completed:    { cap003Type: 'task.completed.v1',       recordType: 'task' },
-  meeting_cancelled: { cap003Type: 'meetings.cancelled.v1',   recordType: 'meeting' },
+  task_assigned:     [{ cap003Type: 'task.assigned.v1',        recordType: 'task' }],
+  task_completed:    [{ cap003Type: 'task.completed.v1',       recordType: 'task' }],
+  meeting_cancelled: [{ cap003Type: 'meetings.cancelled.v1',   recordType: 'meeting' }],
   // Legacy 'meeting_updated' also fires for title/location-only edits,
   // which have no CAP-003 counterpart (meetings.rescheduled.v1 is
   // enqueued only when the meeting's time actually changed — see
@@ -60,28 +74,39 @@ const MIGRATED_EVENT_MAP = {
   // Rows that don't find a match within DEDUP_WINDOW_MS are left
   // exactly as-is by dedupeLegacyAgainstCap003() below, so this
   // broader legacy event type is never wrongly suppressed.
-  meeting_updated:   { cap003Type: 'meetings.rescheduled.v1', recordType: 'meeting' },
+  meeting_updated:   [{ cap003Type: 'meetings.rescheduled.v1', recordType: 'meeting' }],
   // ─── CAP-003 Phase 1.6B — Requests ───────────────────────────────
-  // cap003Type may be an ARRAY here (the only entries that need it):
-  // js/data/requests-api.js reuses the single legacy type 'new_request'
-  // for three structurally different transitions (approveRequest,
-  // routeRequest/receiveAndRoute's section branch, assignRequest/
-  // receiveAndRoute's assignee branch) — the (record_id, time-window)
-  // match below still disambiguates correctly, since only ONE of the
-  // three possible CAP-003 events is ever actually enqueued near a
-  // given legacy row's own timestamp for a given request. 'draft_
-  // returned' and 'new_response' are similarly reused by additional,
-  // NOT-migrated call sites (returnResponse; closeRequest/
-  // acknowledgeAndClose) — those legacy rows simply never find a
-  // requests.returned.v1/requests.response_sent.v1 match (since no
-  // such CAP-003 event was ever enqueued for that request near that
-  // time, this milestone implementing only return_request()/
-  // approve_response()) and survive undeduped, exactly the same
-  // "no match, no suppression" safety the meeting_updated entry above
-  // already relies on.
-  new_request:       { cap003Type: ['requests.sent.v1', 'requests.routed.v1', 'requests.assigned.v1'], recordType: 'request' },
-  draft_returned:    { cap003Type: 'requests.returned.v1',       recordType: 'request' },
-  new_response:      { cap003Type: 'requests.response_sent.v1',  recordType: 'request' },
+  // cap003Type may itself be an ARRAY within a candidate (the only
+  // candidates that need it): js/data/requests-api.js reuses the single
+  // legacy type 'new_request' for three structurally different
+  // transitions (approveRequest, routeRequest/receiveAndRoute's section
+  // branch, assignRequest/receiveAndRoute's assignee branch) — the
+  // (record_id, time-window) match below still disambiguates correctly,
+  // since only ONE of the three possible CAP-003 events is ever
+  // actually enqueued near a given legacy row's own timestamp for a
+  // given request. 'new_response' is similarly reused by an additional,
+  // NOT-migrated call site (closeRequest/acknowledgeAndClose) — that
+  // legacy row simply never finds a requests.response_sent.v1 match
+  // and survives undeduped, the same "no match, no suppression" safety
+  // the meeting_updated entry above already relies on.
+  new_request:       [{ cap003Type: ['requests.sent.v1', 'requests.routed.v1', 'requests.assigned.v1'], recordType: 'request' }],
+  new_response:      [{ cap003Type: 'requests.response_sent.v1',  recordType: 'request' }],
+  // ─── CAP-003 Phase 1.7B — Entry / External Correspondence ────────
+  // js/data/entry-api.js's route()/assign() both reuse the single
+  // legacy type 'new_external_correspondence' for two structurally
+  // different transitions (route() with no assignee vs. route()/
+  // assign() with one), exactly mirroring 'new_request''s own
+  // multi-candidate CAP-003 array above.
+  new_external_correspondence: [{ cap003Type: ['entry.routed.v1', 'entry.assigned.v1'], recordType: 'external_correspondence' }],
+  external_correspondence_replied: [{ cap003Type: 'entry.reply_sent.v1', recordType: 'external_correspondence' }],
+  // 'draft_returned': TWO candidates sharing one legacy type string —
+  // Requests' own return_request() (existing, Phase 1.6B) and Entry's
+  // own returnReply() (new, Phase 1.7B). Disambiguated purely by
+  // legacy.record_type, never by guessing from message text.
+  draft_returned: [
+    { cap003Type: 'requests.returned.v1',      recordType: 'request' },
+    { cap003Type: 'entry.reply_returned.v1',   recordType: 'external_correspondence' },
+  ],
 };
 const DEDUP_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
@@ -112,6 +137,17 @@ const NOTIFICATION_TEMPLATES = {
   'requests.routed':        () => 'A request was routed to your section',
   'requests.assigned':      () => 'A request was assigned to you',
   'requests.response_sent': p => `You received a response to a request${p.reference_number ? ' (' + p.reference_number + ')' : ''}`,
+  // entry.* templates deliberately never reference the correspondence's
+  // own subject/sender identity — patch-entry-notification-integration.sql
+  // never persists them into template_params (docs/92 treats subject as
+  // potentially sensitive by default, same conservative fallback
+  // Requests' own requests.* templates above already use), so only
+  // reference_number (an explicitly safe structural identifier) is ever
+  // interpolated.
+  'entry.routed':          () => 'A logged entry was routed to your section',
+  'entry.assigned':        () => 'A logged entry was assigned to you',
+  'entry.reply_sent':      p => `A reply was sent${p.reference_number ? ' (' + p.reference_number + ')' : ''}`,
+  'entry.reply_returned':  () => 'Your reply draft was returned for changes',
 };
 function renderNotificationTemplate(templateKey, templateParams) {
   const fn = NOTIFICATION_TEMPLATES[templateKey];
@@ -140,11 +176,19 @@ function renderNotificationTemplate(templateKey, templateParams) {
 // approve_response() in patch-requests-notification-integration.sql —
 // because request-detail.js already renders a request's responses
 // inline on the same page; there is no separate response route to
-// route to).
+// route to). CAP-003 Phase 1.7B adds 'external_correspondence', using
+// the existing Entry detail route (shell.js's own routes.external_
+// correspondence: 'entry-detail' deep-link convention, already used by
+// the legacy notifications table) — entry.reply_sent.v1/entry.reply_
+// returned.v1 also route here since both are sourced from the PARENT
+// entry, never a separate reply id (see patch-entry-notification-
+// integration.sql), because entry-detail.js already renders every
+// reply inline on the entry's own page.
 const CAP003_ROUTES = {
   task:    recordId => ({ route: 'task-detail', params: { id: recordId } }),
   meeting: recordId => ({ route: 'meetings', params: { meetingId: recordId } }),
   request: recordId => ({ route: 'request-detail', params: { id: recordId } }),
+  external_correspondence: recordId => ({ route: 'entry-detail', params: { id: recordId } }),
 };
 
 // Structural-identity match: (mapped type, record type, record id),
@@ -159,22 +203,29 @@ function dedupeLegacyAgainstCap003(legacyItems, cap003Items) {
   const usedCap003Ids = new Set();
   const survivors = [];
   for (const legacy of legacyItems || []) {
-    const mapping = MIGRATED_EVENT_MAP[legacy.type];
+    const candidates = MIGRATED_EVENT_MAP[legacy.type];
     let best = null;
     let bestDelta = Infinity;
-    if (mapping && legacy.record_type === mapping.recordType && legacy.record_id != null) {
+    if (candidates && legacy.record_id != null) {
       const legacyTime = new Date(legacy.created_at).getTime();
-      // cap003Type may be a single string or (Phase 1.6B's 'new_request'
-      // entry) an array of several possible CAP-003 event types that all
-      // share one legacy type — see MIGRATED_EVENT_MAP's own comment.
-      const cap003Types = Array.isArray(mapping.cap003Type) ? mapping.cap003Type : [mapping.cap003Type];
-      for (const n of cap003Items || []) {
-        if (usedCap003Ids.has(n.id)) continue;
-        if (!cap003Types.includes(n.notification_type)) continue;
-        if (n.source_record_type !== mapping.recordType) continue;
-        if (String(n.source_record_id) !== String(legacy.record_id)) continue;
-        const delta = Math.abs(new Date(n.created_at).getTime() - legacyTime);
-        if (delta <= DEDUP_WINDOW_MS && delta < bestDelta) { best = n; bestDelta = delta; }
+      // A legacy type may map to several candidates (e.g. 'draft_returned'
+      // — Requests vs Entry) — only the candidate whose recordType
+      // matches this specific legacy row's own record_type is ever
+      // considered, so the two never cross-match each other's rows.
+      for (const mapping of candidates) {
+        if (legacy.record_type !== mapping.recordType) continue;
+        // cap003Type may itself be a single string or an array of
+        // several possible CAP-003 event types that all share one
+        // legacy type — see MIGRATED_EVENT_MAP's own comment.
+        const cap003Types = Array.isArray(mapping.cap003Type) ? mapping.cap003Type : [mapping.cap003Type];
+        for (const n of cap003Items || []) {
+          if (usedCap003Ids.has(n.id)) continue;
+          if (!cap003Types.includes(n.notification_type)) continue;
+          if (n.source_record_type !== mapping.recordType) continue;
+          if (String(n.source_record_id) !== String(legacy.record_id)) continue;
+          const delta = Math.abs(new Date(n.created_at).getTime() - legacyTime);
+          if (delta <= DEDUP_WINDOW_MS && delta < bestDelta) { best = n; bestDelta = delta; }
+        }
       }
     }
     if (best) { usedCap003Ids.add(best.id); continue; }

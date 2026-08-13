@@ -137,16 +137,25 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- ── 7. Zero CAP-003 integration -- this is the isolation proof the
-  -- governing spec explicitly requires: none of the 12 new Entry RPCs
-  -- may reference any CAP-003 outbox/notification-intent primitive.
-  -- Phase 1.7B (not started) is the only milestone allowed to add it ──
+  -- ── 7. Zero CAP-003 integration for the 8 commands CAP-003 Phase
+  -- 1.7B deliberately left deferred -- this was originally written, at
+  -- Phase 1.7A's own completion, as a blanket isolation proof across
+  -- all 12 RPCs ("Phase 1.7B, not started, is the only milestone
+  -- allowed to add it"). CAP-003 Phase 1.7B has since legitimately
+  -- integrated exactly 4 of the 12 (route_entry/assign_entry/
+  -- approve_entry_reply/return_entry_reply) -- reconciled the same way
+  -- validate-requests-server-mutation-foundation.sql was reconciled for
+  -- Phase 1.6B's own analogous, legitimate extension (see docs/90's own
+  -- "Sibling structural-validator reconciliation" section): narrowed to
+  -- the 8 RPCs still genuinely deferred; validate-entry-notification-
+  -- integration.sql now owns the positive assertion that the other 4
+  -- correctly DO integrate. ──────────────────────────────────────────
   FOREACH v_fn IN ARRAY ARRAY[
     'create_entry(text,text,text,text,text,text,text,uuid,text,text,text,date,date)',
     'update_entry_draft(uuid,text,text,text,text,date)',
-    'route_entry(uuid,uuid,uuid)', 'mark_entry_received(uuid)', 'assign_entry(uuid,uuid,date)',
+    'mark_entry_received(uuid)',
     'close_entry(uuid)', 'draft_entry_reply(uuid,text,text)', 'update_entry_reply_draft(uuid,text,text)',
-    'submit_entry_reply(uuid,uuid)', 'approve_entry_reply(uuid)', 'return_entry_reply(uuid,text)',
+    'submit_entry_reply(uuid,uuid)',
     'mark_entry_reply_sent(uuid,text)'
   ] LOOP
     SELECT pg_get_functiondef(to_regprocedure('public.'||v_fn)) INTO v_def;
@@ -157,8 +166,9 @@ BEGIN
       OR v_def ILIKE '%user_notifications%'
     ) THEN v_missing := v_missing || v_fn || '-unexpectedly-integrates-cap003 '; END IF;
   END LOOP;
-  IF (SELECT count(*) FROM platform_event_type_registry WHERE owning_module = 'entry') <> 0 THEN
-    v_missing := v_missing || 'unexpected-entry-event-type-registered '; END IF;
+  -- 0 (pre-1.7B) or exactly 4 (Phase 1.7B's own approved event count).
+  IF (SELECT count(*) FROM platform_event_type_registry WHERE owning_module = 'entry') NOT IN (0, 4) THEN
+    v_missing := v_missing || 'unexpected-entry-event-type-count '; END IF;
 
   -- ── 8. Legacy Entry notifications untouched: entry-api.js's own
   -- NotificationsAPI.notify() plumbing (create_legacy_notification) is
