@@ -20,16 +20,6 @@
 
 const EntryAPI = (() => {
 
-  async function logAudit(action, recordId, notes) {
-    const db = getSupabase();
-    const session = await Auth.getSession();
-    if (!session) return;
-    await db.from('audit_logs').insert({
-      user_id: session.user.id,
-      action, record_type: 'external_correspondence', record_id: recordId, notes,
-    });
-  }
-
   // See requests-api.js for why this exists — .single() on an
   // RLS-filtered zero-row update throws PostgREST's generic PGRST116.
   function wrapRowError(error) {
@@ -158,57 +148,58 @@ const EntryAPI = (() => {
     },
 
     // ── Log (Entry staff) ────────────────────────────────────────
+    // create_entry() is a server-authoritative RPC (CAP-003 Phase
+    // 1.7A, supabase/patch-entry-server-mutation-foundation.sql) — it
+    // derives org_id/entered_by from the caller's own session, checks
+    // is_entry_staff() server-side, generates the reference number, and
+    // writes the audit row, all in one transaction. orgId is still
+    // accepted for call-site compatibility but is no longer sent to the
+    // server.
     async create({
       orgId, sourceChannel, senderCategory, senderName, senderContact,
       externalOfficeName, prisoner, subject, subjectLanguage, body, language,
       receivedDate, deadline,
     }) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      const { data: refNumber, error: rpcErr } = await db.rpc('generate_entry_reference', { p_org_id: orgId });
-      if (rpcErr) throw wrapRowError(rpcErr);
-      const { data, error } = await db.from('external_correspondence').insert({
-        org_id: orgId, source_channel: sourceChannel, sender_category: senderCategory,
-        sender_name: senderName, sender_contact: senderContact || null,
-        external_office_name: externalOfficeName || null,
-        prisoner_ref: prisoner ? prisoner.id : null,
-        prisoner_name: prisoner ? prisoner.full_name : null,
-        subject, subject_language: subjectLanguage || 'en',
-        body: RichEditor.sanitize(body), language: language || 'en',
-        received_date: receivedDate || new Date().toISOString().slice(0, 10),
-        deadline: deadline || null,
-        entered_by: session.user.id, status: 'logged',
-        reference_number: refNumber,
-      }).select().single();
+      const { data, error } = await db.rpc('create_entry', {
+        p_source_channel: sourceChannel, p_sender_category: senderCategory,
+        p_sender_name: senderName, p_subject: subject, p_body: RichEditor.sanitize(body),
+        p_sender_contact: senderContact || null,
+        p_external_office_name: externalOfficeName || null,
+        p_prisoner_ref: prisoner ? prisoner.id : null,
+        p_prisoner_name: prisoner ? prisoner.full_name : null,
+        p_subject_language: subjectLanguage || 'en', p_language: language || 'en',
+        p_received_date: receivedDate || new Date().toISOString().slice(0, 10),
+        p_deadline: deadline || null,
+      }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('created', data.id, `Logged external correspondence from ${senderName}`);
       return data;
     },
 
     // Edit the logged entry itself — available while it's still
     // unrouted (entry-detail.js only shows the Edit Draft button at
-    // status 'logged'; external_correspondence_update_entry RLS doesn't
-    // itself narrow by status, same "UI is the courtesy gate" shape as
-    // elsewhere in this app).
+    // status 'logged'; update_entry_draft's own server-side check
+    // doesn't narrow by status either, same "UI is the courtesy gate"
+    // shape as elsewhere in this app — see docs/91).
     async updateDraft(id, patch) {
       const db = getSupabase();
-      if (patch.body != null) patch = { ...patch, body: RichEditor.sanitize(patch.body) };
-      const { data, error } = await db.from('external_correspondence').update(patch).eq('id', id).select().single();
+      const { data, error } = await db.rpc('update_entry_draft', {
+        p_entry_id: id,
+        p_subject: patch.subject, p_subject_language: patch.subject_language || 'en',
+        p_body: RichEditor.sanitize(patch.body), p_language: patch.language || 'en',
+        p_deadline: patch.deadline || null,
+      }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('edited', id, 'Edited entry draft');
       return data;
     },
 
     // ── Route (Entry staff) ──────────────────────────────────────
     async route(id, { toSectionId, assignedTo }) {
       const db = getSupabase();
-      const patch = { to_section_id: toSectionId, status: 'routed' };
-      if (assignedTo) patch.assigned_to = assignedTo;
-      const { data, error } = await db.from('external_correspondence')
-        .update(patch).eq('id', id)
-        .select('*, to_section:sections!external_correspondence_to_section_id_fkey(name)').single();
+      const { data, error } = await db.rpc('route_entry', {
+        p_entry_id: id, p_to_section_id: toSectionId, p_assigned_to: assignedTo || null,
+      }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('routed', id, `Routed to ${data.to_section?.name || 'a section'}`);
       if (assignedTo) {
         await NotificationsAPI.notify([assignedTo], {
           type: 'new_external_correspondence', recordType: 'external_correspondence', recordId: id,
@@ -226,18 +217,13 @@ const EntryAPI = (() => {
 
     // The receiving section acknowledging receipt of the routed case —
     // same received_by/received_at receipt shape as requests/responses/
-    // internal_requests. .is('received_by', null) guards against a
-    // double-click race the same way .eq('status', currentStatus) guards
-    // requests-api.js's receive-first steps.
+    // internal_requests. mark_entry_received's own received_by IS NULL
+    // guard (server-side) replaces the old .is('received_by', null)
+    // double-click race guard.
     async markReceived(id) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      if (!session) throw new Error('Not signed in.');
-      const { data, error } = await db.from('external_correspondence')
-        .update({ received_by: session.user.id, received_at: new Date().toISOString() })
-        .eq('id', id).is('received_by', null).select().single();
+      const { data, error } = await db.rpc('mark_entry_received', { p_entry_id: id }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('received', id, 'Marked entry as received by section');
       return data;
     },
 
@@ -249,16 +235,10 @@ const EntryAPI = (() => {
     // actually knows the right turnaround time.
     async assign(id, userId, deadline) {
       const db = getSupabase();
-      const { data, error } = await db.from('external_correspondence')
-        .update({ assigned_to: userId, deadline: deadline || null }).eq('id', id).select().single();
+      const { data, error } = await db.rpc('assign_entry', {
+        p_entry_id: id, p_user_id: userId || null, p_deadline: deadline || null,
+      }).single();
       if (error) throw wrapRowError(error);
-      let note = 'Unassigned';
-      if (userId) {
-        const { data: staff, error: staffErr } = await db.from('users').select('full_name').eq('id', userId).single();
-        if (staffErr) console.warn('CorLink: failed to look up staff name for assignment audit log:', staffErr.message);
-        note = `Assigned to ${staff?.full_name || 'a staff member'}`;
-      }
-      await logAudit('assigned', id, note);
       if (userId) {
         await NotificationsAPI.notify([userId], {
           type: 'new_external_correspondence', recordType: 'external_correspondence', recordId: id,
@@ -271,32 +251,28 @@ const EntryAPI = (() => {
     // ── Reply lifecycle: draft -> pending_approval -> sent ─────────
     async draftReply({ entryId, body, language }) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      const { data, error } = await db.from('external_correspondence_replies').insert({
-        entry_id: entryId, created_by: session.user.id,
-        body: RichEditor.sanitize(body), language: language || 'en', status: 'draft',
-      }).select().single();
+      const { data, error } = await db.rpc('draft_entry_reply', {
+        p_entry_id: entryId, p_body: RichEditor.sanitize(body), p_language: language || 'en',
+      }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('created', entryId, 'Drafted a reply to external correspondence');
       return data;
     },
 
     async updateReplyDraft(id, { body, language }) {
       const db = getSupabase();
-      const { data, error } = await db.from('external_correspondence_replies')
-        .update({ body: RichEditor.sanitize(body), language: language || 'en' })
-        .eq('id', id).select().single();
+      const { data, error } = await db.rpc('update_entry_reply_draft', {
+        p_reply_id: id, p_body: RichEditor.sanitize(body), p_language: language || 'en',
+      }).single();
       if (error) throw wrapRowError(error);
       return data;
     },
 
     async submitReplyForApproval(id, approverId, entry) {
       const db = getSupabase();
-      const { data, error } = await db.from('external_correspondence_replies')
-        .update({ status: 'pending_approval', pending_approval_by: approverId || null })
-        .eq('id', id).select().single();
+      const { data, error } = await db.rpc('submit_entry_reply', {
+        p_reply_id: id, p_approver_id: approverId || null,
+      }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('submitted', entry.id, 'Submitted reply for approval');
       const recipients = approverId
         ? [approverId]
         : await NotificationsAPI.sectionUserIds(entry.to_section_id, ['mcs_admin', 'authority_admin', 'supervisor']);
@@ -307,17 +283,14 @@ const EntryAPI = (() => {
       return data;
     },
 
+    // approve_entry_reply() atomically flips the reply to 'sent' AND the
+    // parent entry to 'responded' in one transaction (CAP-003 Phase
+    // 1.7A) — replaces the previous two separate, non-atomic UPDATEs
+    // (see docs/91 for the atomicity defect this fixes).
     async approveReply(id, entry) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      const { data, error } = await db.from('external_correspondence_replies')
-        .update({ status: 'sent', approved_by: session.user.id, approved_at: new Date().toISOString() })
-        .eq('id', id).select().single();
+      const { data, error } = await db.rpc('approve_entry_reply', { p_reply_id: id }).single();
       if (error) throw wrapRowError(error);
-      const { error: entryErr } = await db.from('external_correspondence')
-        .update({ status: 'responded' }).eq('id', entry.id);
-      if (entryErr) throw wrapRowError(entryErr);
-      await logAudit('approved', entry.id, 'Approved reply to external correspondence');
       const notifyIds = new Set([entry.entered_by]);
       await NotificationsAPI.notify([...notifyIds], {
         type: 'external_correspondence_replied', recordType: 'external_correspondence', recordId: entry.id,
@@ -326,22 +299,16 @@ const EntryAPI = (() => {
       return data;
     },
 
+    // return_entry_reply() atomically writes the reply status change and
+    // the approvals(decision='returned') history row (CAP-003 Phase
+    // 1.7A) — the dashboard's "Returned for Correction" row matches
+    // drafts against exactly that approvals row.
     async returnReply(id, entry) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      const { data, error } = await db.from('external_correspondence_replies')
-        .update({ status: 'draft', pending_approval_by: null })
-        .eq('id', id).select().single();
+      const { data, error } = await db.rpc('return_entry_reply', {
+        p_reply_id: id, p_comment: null,
+      }).single();
       if (error) throw wrapRowError(error);
-      // Same approvals(decision='returned') record requests-api.js's
-      // returnRequest/returnResponse write — without it, the dashboard's
-      // "Returned for Correction" row can never find this reply, since
-      // it matches drafts against exactly this table.
-      await db.from('approvals').insert({
-        record_type: 'external_correspondence_reply', record_id: id,
-        reviewed_by: session.user.id, decision: 'returned',
-      });
-      await logAudit('returned', entry.id, 'Returned reply for changes');
       await NotificationsAPI.notify([data.created_by], {
         type: 'draft_returned', recordType: 'external_correspondence', recordId: entry.id,
         message: `"${entry.subject}" — your reply was returned for changes`,
@@ -353,22 +320,21 @@ const EntryAPI = (() => {
     // sender (email/post/in person/etc, outside this system) — CorLink
     // keeps the reply text as the file copy, it doesn't send it itself.
     // Available to Entry staff too, not just the drafter/supervisor
-    // (external_correspondence_replies_update RLS), since closing the
+    // (mark_entry_reply_sent's own server-side check), since closing the
     // loop with the sender is Entry's own accountability.
     async markReplySent(id, deliveryMethod) {
       const db = getSupabase();
-      const { data, error } = await db.from('external_correspondence_replies')
-        .update({ delivery_method: deliveryMethod, sent_at: new Date().toISOString() }).eq('id', id).select().single();
+      const { data, error } = await db.rpc('mark_entry_reply_sent', {
+        p_reply_id: id, p_delivery_method: deliveryMethod,
+      }).single();
       if (error) throw wrapRowError(error);
       return data;
     },
 
     async close(id) {
       const db = getSupabase();
-      const { data, error } = await db.from('external_correspondence')
-        .update({ status: 'closed' }).eq('id', id).select().single();
+      const { data, error } = await db.rpc('close_entry', { p_entry_id: id }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('edited', id, 'Closed external correspondence entry');
       return data;
     },
 
