@@ -86,17 +86,19 @@ BEGIN
   -- (Phase 1.4A) exist as of Phase 1.4B, both still internal-only (no
   -- grant to any role). CAP-003 Phase 1.6B later legitimately added
   -- intent_user_can_view_request, Phase 1.7B later legitimately added
-  -- intent_user_can_view_entry, and Phase 1.8B later legitimately added
-  -- intent_user_can_view_internal_request -- this validator only asserts
-  -- no adapter BEYOND the known set exists; each later phase's own
-  -- validator (validate-requests-notification-integration.sql,
-  -- validate-entry-notification-integration.sql, validate-internal-
-  -- collaboration-notification-integration.sql) pins its exact posture
-  -- (internal-only, no grant).
+  -- intent_user_can_view_entry, Phase 1.8B later legitimately added
+  -- intent_user_can_view_internal_request, and Phase 1.9B later
+  -- legitimately added intent_user_can_view_prisoner_letter -- this
+  -- validator only asserts no adapter BEYOND the known set exists; each
+  -- later phase's own validator (validate-requests-notification-
+  -- integration.sql, validate-entry-notification-integration.sql,
+  -- validate-internal-collaboration-notification-integration.sql,
+  -- validate-prisoner-letters-notification-integration.sql) pins its
+  -- exact posture (internal-only, no grant).
   IF EXISTS (
     SELECT 1 FROM information_schema.routines
     WHERE routine_schema = 'public' AND routine_name ILIKE 'intent_user_can_view_%'
-      AND routine_name NOT IN ('intent_user_can_view_workflow_instance', 'intent_user_can_view_task', 'intent_user_can_view_meeting', 'intent_user_can_view_request', 'intent_user_can_view_entry', 'intent_user_can_view_internal_request')
+      AND routine_name NOT IN ('intent_user_can_view_workflow_instance', 'intent_user_can_view_task', 'intent_user_can_view_meeting', 'intent_user_can_view_request', 'intent_user_can_view_entry', 'intent_user_can_view_internal_request', 'intent_user_can_view_prisoner_letter')
   ) THEN v_missing := v_missing || 'unexpected-new-authorization-adapter '; END IF;
 
   IF has_function_privilege('authenticated', 'intent_user_can_view_task(uuid,uuid)', 'EXECUTE')

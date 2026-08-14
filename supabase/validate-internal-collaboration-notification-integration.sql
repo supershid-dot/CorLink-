@@ -54,11 +54,24 @@ BEGIN
   ) THEN v_missing := v_missing || 'notification_intents_target_type_check-unexpectedly-changed '; END IF;
 
   -- ── 4. Closed source_record_type dispatch: extended by exactly
-  -- 'internal_request'. No 'internal_collaboration' or
-  -- 'internal_request_reply' source type introduced. ──────────────────
+  -- 'internal_request' as of this milestone. No 'internal_collaboration'
+  -- or 'internal_request_reply' source type introduced. CAP-003 Phase
+  -- 1.9B later legitimately extended the same constraint further with
+  -- 'prisoner_letter' -- reconciled here via a positive-membership check
+  -- (every value this milestone itself added is still present) instead
+  -- of an exact-set-equality string match, mirroring the identical
+  -- reconciliation validate-entry-notification-integration.sql's own
+  -- source_record_type check already applies (see docs/94 "Sibling
+  -- validator reconciliation" #3). ─────────────────────────────────────
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'notification_intents_source_record_type_check'
-      AND pg_get_constraintdef(oid) = 'CHECK ((source_record_type = ANY (ARRAY[''workflow_instance''::text, ''platform''::text, ''task''::text, ''meeting''::text, ''request''::text, ''external_correspondence''::text, ''internal_request''::text])))'
+      AND pg_get_constraintdef(oid) ILIKE '%''internal_request''%'
+      AND pg_get_constraintdef(oid) ILIKE '%''workflow_instance''%'
+      AND pg_get_constraintdef(oid) ILIKE '%''platform''%'
+      AND pg_get_constraintdef(oid) ILIKE '%''task''%'
+      AND pg_get_constraintdef(oid) ILIKE '%''meeting''%'
+      AND pg_get_constraintdef(oid) ILIKE '%''request''%'
+      AND pg_get_constraintdef(oid) ILIKE '%''external_correspondence''%'
   ) THEN v_missing := v_missing || 'notification_intents_source_record_type_check-not-extended-correctly '; END IF;
 
   -- ── 5. create_notification_intent()/process_platform_outbox_batch()
@@ -107,7 +120,8 @@ BEGIN
       AND routine_name NOT IN (
         'intent_user_can_view_workflow_instance', 'intent_user_can_view_task',
         'intent_user_can_view_meeting', 'intent_user_can_view_request',
-        'intent_user_can_view_entry', 'intent_user_can_view_internal_request'
+        'intent_user_can_view_entry', 'intent_user_can_view_internal_request',
+        'intent_user_can_view_prisoner_letter'
       )
   ) THEN v_missing := v_missing || 'unexpected-new-authorization-adapter '; END IF;
 
@@ -279,12 +293,13 @@ BEGIN
   IF to_regprocedure('public.submit_internal_request_reply(uuid,uuid)') IS NULL THEN v_missing := v_missing || 'submit_internal_request_reply-missing '; END IF;
   IF to_regprocedure('public.approve_internal_request_reply(uuid)') IS NULL THEN v_missing := v_missing || 'approve_internal_request_reply-missing '; END IF;
   IF to_regprocedure('public.return_internal_request_reply(uuid)') IS NULL THEN v_missing := v_missing || 'return_internal_request_reply-missing '; END IF;
-  IF EXISTS (SELECT 1 FROM platform_event_type_registry WHERE owning_module = 'prisoner_letters') THEN
-    v_missing := v_missing || 'unexpected-out-of-scope-module-event-registered ';
-  END IF;
+  -- 'prisoner_letters' is no longer out-of-scope as of CAP-003 Phase
+  -- 1.9B (validate-prisoner-letters-notification-integration.sql owns
+  -- that assertion now) -- there is no longer any deferred-module
+  -- assertion left for this validator to own.
 
   IF v_missing <> '' THEN
     RAISE EXCEPTION 'Internal Collaboration notification integration structural validation FAILED: %', v_missing;
   END IF;
-  RAISE NOTICE 'Internal Collaboration notification integration structural validation PASSED (5 events registered and registry-driven, deferred candidates absent, all 6 producers atomically enqueue inside their own Phase 1.8A server-authoritative RPC with free-text fields excluded from payload, worker/resolver/create_notification_intent gain only the minimal internal_request-dispatch addition, exactly one new authorization adapter (intent_user_can_view_internal_request, internal-only, admin/supervisor bypass present matching real RLS, no session-bound helper calls), two-descriptor fan-out for reply_sent with shared correlation and deterministic second idempotency key, no reply source type, no new target kind, Phase 1.8A direct-write closure and RLS preserved, Prisoner Letters still not integrated, CAP-003 Phase 2 not started).';
+  RAISE NOTICE 'Internal Collaboration notification integration structural validation PASSED (5 events registered and registry-driven, deferred candidates absent, all 6 producers atomically enqueue inside their own Phase 1.8A server-authoritative RPC with free-text fields excluded from payload, worker/resolver/create_notification_intent gain only the minimal internal_request-dispatch addition, exactly one new authorization adapter (intent_user_can_view_internal_request, internal-only, admin/supervisor bypass present matching real RLS, no session-bound helper calls), two-descriptor fan-out for reply_sent with shared correlation and deterministic second idempotency key, no reply source type, no new target kind, Phase 1.8A direct-write closure and RLS preserved, Prisoner Letters now integrated via its own later Phase 1.9B, CAP-003 Phase 2 not started).';
 END $$;

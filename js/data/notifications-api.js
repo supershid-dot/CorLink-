@@ -121,6 +121,19 @@ const MIGRATED_EVENT_MAP = {
   // CAP-003 row's source_record_id (the thread's id) for the same
   // occurrence, so no mapping here could ever actually match anything --
   // adding one would be dead code, not a real dedup path.
+  // ─── CAP-003 Phase 1.9B — Prisoner Letters ────────────────────────
+  // Unlike Internal Collaboration above, js/data/prisoner-letters-api.js's
+  // own legacy notify() calls (submitLetter/routeLetter/createReply) all
+  // carry recordType:'prisoner_letter', recordId:<the letter's own id> --
+  // the SAME id CAP-003 Phase 1.9B sources every event from (patch-
+  // prisoner-letters-notification-integration.sql's own header). A real
+  // dedup match is therefore possible here (unlike 1.8B), entirely on
+  // (mapped type, record type, record id, time-window) -- never on
+  // message text or prisoner name. 'new_prisoner_letter' is reused by
+  // TWO legacy transitions (submitLetter, routeLetter) exactly mirroring
+  // 'new_request''s own multi-candidate array above.
+  new_prisoner_letter: [{ cap003Type: ['prisoner_letter.sent.v1', 'prisoner_letter.routed.v1', 'prisoner_letter.assigned.v1'], recordType: 'prisoner_letter' }],
+  letter_replied: [{ cap003Type: 'prisoner_letter.reply_sent.v1', recordType: 'prisoner_letter' }],
 };
 const DEDUP_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
@@ -173,6 +186,19 @@ const NOTIFICATION_TEMPLATES = {
   'internal_collaboration.assigned':        () => 'An internal request was assigned to you',
   'internal_collaboration.reply_sent':      () => 'An internal request received a reply',
   'internal_collaboration.reply_returned':  () => 'Your internal reply draft was returned for changes',
+  // prisoner_letter.* templates deliberately never reference prisoner
+  // identity or letter/reply content of any kind -- patch-prisoner-
+  // letters-notification-integration.sql never persists prisoner_id/
+  // prisoner_name/body/reference_number into template_params at all
+  // (docs/95 §16/§17 classify all of those as highly confidential, and
+  // this milestone's own governing instruction is stricter still than
+  // every other module's own conservative fallback: "confidentiality-
+  // first", generic wording only), so these four are the strictest,
+  // smallest templates of any CAP-003 module integrated so far.
+  'prisoner_letter.sent':      () => 'New prisoner correspondence requires your attention.',
+  'prisoner_letter.routed':    () => 'Prisoner correspondence was routed to your section.',
+  'prisoner_letter.assigned':  () => 'Prisoner correspondence has been assigned to you.',
+  'prisoner_letter.reply_sent': () => 'A reply has been received for prisoner correspondence.',
 };
 function renderNotificationTemplate(templateKey, templateParams) {
   const fn = NOTIFICATION_TEMPLATES[templateKey];
@@ -219,11 +245,20 @@ function renderNotificationTemplate(templateKey, templateParams) {
 // handler resolves this polymorphic parent asynchronously (the same
 // established async-resolution pattern the pre-existing meeting_series
 // branch already uses below) instead of adding an entry here.
+// CAP-003 Phase 1.9B adds 'prisoner_letter' as a plain static entry --
+// unlike 'internal_request' (Phase 1.8B), a prisoner_letters row is
+// anchored to exactly one destination (its own detail page, no
+// polymorphic parent choice), so no async resolution is needed here.
+// Routes to the same 'prisoner-letter-detail' view the legacy
+// notifications table already uses for this record type (see shell.js's
+// own routes map) -- the destination view's own RLS remains
+// authoritative; this notification is never a substitute for it.
 const CAP003_ROUTES = {
   task:    recordId => ({ route: 'task-detail', params: { id: recordId } }),
   meeting: recordId => ({ route: 'meetings', params: { meetingId: recordId } }),
   request: recordId => ({ route: 'request-detail', params: { id: recordId } }),
   external_correspondence: recordId => ({ route: 'entry-detail', params: { id: recordId } }),
+  prisoner_letter: recordId => ({ route: 'prisoner-letter-detail', params: { id: recordId } }),
 };
 
 // Structural-identity match: (mapped type, record type, record id),

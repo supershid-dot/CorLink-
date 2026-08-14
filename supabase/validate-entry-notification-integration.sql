@@ -118,7 +118,8 @@ BEGIN
       AND routine_name NOT IN (
         'intent_user_can_view_workflow_instance', 'intent_user_can_view_task',
         'intent_user_can_view_meeting', 'intent_user_can_view_request',
-        'intent_user_can_view_entry', 'intent_user_can_view_internal_request'
+        'intent_user_can_view_entry', 'intent_user_can_view_internal_request',
+        'intent_user_can_view_prisoner_letter'
       )
   ) THEN v_missing := v_missing || 'unexpected-new-authorization-adapter '; END IF;
 
@@ -296,14 +297,14 @@ BEGIN
   THEN v_missing := v_missing || 'unexpected-prisoner-transfer-engine-introduced '; END IF;
   -- 'internal_collaboration' is no longer out-of-scope as of CAP-003
   -- Phase 1.8B (validate-internal-collaboration-notification-
-  -- integration.sql owns that assertion now) -- Prisoner Letters
-  -- remains deferred.
-  IF EXISTS (SELECT 1 FROM platform_event_type_registry WHERE owning_module = 'prisoner_letters') THEN
-    v_missing := v_missing || 'unexpected-out-of-scope-module-event-registered ';
-  END IF;
+  -- integration.sql owns that assertion now), and 'prisoner_letters' is
+  -- no longer out-of-scope as of CAP-003 Phase 1.9B (validate-prisoner-
+  -- letters-notification-integration.sql owns that assertion now) --
+  -- there is no longer any deferred-module assertion left for this
+  -- validator to own.
 
   IF v_missing <> '' THEN
     RAISE EXCEPTION 'Entry notification integration structural validation FAILED: %', v_missing;
   END IF;
-  RAISE NOTICE 'Entry notification integration structural validation PASSED (entry.routed.v1/entry.assigned.v1/entry.reply_sent.v1/entry.reply_returned.v1 registered and registry-driven, deferred candidates absent, all four producers atomically enqueue inside their own Phase 1.7A server-authoritative RPC with free-text fields excluded from payload, worker/resolver/create_notification_intent gain only the minimal external_correspondence-dispatch addition, exactly one new authorization adapter (intent_user_can_view_entry, internal-only, deliberately no admin bypass, no session-bound helper calls), no reply source type, no new target kind, Phase 1.7A direct-write closure and RLS preserved, Internal Collaboration/Prisoner Letters still not integrated, CAP-003 Phase 2 not started).';
+  RAISE NOTICE 'Entry notification integration structural validation PASSED (entry.routed.v1/entry.assigned.v1/entry.reply_sent.v1/entry.reply_returned.v1 registered and registry-driven, deferred candidates absent, all four producers atomically enqueue inside their own Phase 1.7A server-authoritative RPC with free-text fields excluded from payload, worker/resolver/create_notification_intent gain only the minimal external_correspondence-dispatch addition, exactly one new authorization adapter (intent_user_can_view_entry, internal-only, deliberately no admin bypass, no session-bound helper calls), no reply source type, no new target kind, Phase 1.7A direct-write closure and RLS preserved, Internal Collaboration/Prisoner Letters now integrated via their own later phases, CAP-003 Phase 2 not started).';
 END $$;

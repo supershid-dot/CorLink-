@@ -264,13 +264,19 @@ BEGIN
       AND with_check ILIKE '%r.is_locked = FALSE%' AND with_check ILIKE '%re.is_locked = FALSE%'
   ) THEN v_missing := v_missing || 'attachments_insert-request-response-lock-condition-disturbed '; END IF;
 
-  -- ── 19. Zero CAP-003 integration ─────────────────────────────────
+  -- ── 19. Zero CAP-003 integration (this milestone, Phase 1.9A, itself
+  -- adds none). CAP-003 Phase 1.9B has since legitimately added atomic
+  -- outbox enqueue to exactly 3 of the 6 RPCs (create_prisoner_letter,
+  -- route_prisoner_letter, create_prisoner_letter_reply) -- a narrow,
+  -- disclosed carve-out reconciling this 1.9A validator with 1.9B's own
+  -- later, separately-reviewed milestone, mirroring the identical
+  -- reconciliation already applied to every prior phase's sibling
+  -- validators (see docs/94 "Sibling validator reconciliation" #1). The
+  -- remaining 3 RPCs (deferred by 1.9B, see its own header) must still
+  -- show NO CAP-003 integration reference at all. ─────────────────────
   FOREACH v_fn IN ARRAY ARRAY[
-    'create_prisoner_letter(uuid,uuid,uuid,text)',
     'mark_prisoner_letter_received(uuid)',
-    'route_prisoner_letter(uuid,uuid,uuid)',
     'mark_prisoner_letter_slip_generated(uuid)',
-    'create_prisoner_letter_reply(uuid,text)',
     'mark_prisoner_letter_delivered(uuid)'
   ] LOOP
     SELECT pg_get_functiondef(to_regprocedure('public.'||v_fn)) INTO v_def;
@@ -281,8 +287,8 @@ BEGIN
       OR v_def ILIKE '%user_notifications%'
     ) THEN v_missing := v_missing || v_fn || '-unexpectedly-integrates-cap003 '; END IF;
   END LOOP;
-  IF EXISTS (SELECT 1 FROM platform_event_type_registry WHERE owning_module = 'prisoner_letters') THEN
-    v_missing := v_missing || 'unexpected-prisoner-letters-event-registered '; END IF;
+  IF (SELECT count(*) FROM platform_event_type_registry WHERE owning_module = 'prisoner_letters') <> 4 THEN
+    v_missing := v_missing || 'prisoner-letters-event-count-not-exactly-phase-1.9b-four '; END IF;
 
   -- ── 20. No digital signature implementation ─────────────────────────
   IF EXISTS (
