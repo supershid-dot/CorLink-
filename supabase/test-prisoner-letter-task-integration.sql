@@ -107,20 +107,37 @@ BEGIN
     'eeeeeeee-1111-0000-0000-000000000002', 'eeeeeeee-1111-0000-0000-000000000002', now()
   ) ON CONFLICT (id) DO NOTHING;
 
-  -- letter2: open sibling, submitted, unassigned.
-  INSERT INTO prisoner_letters (id, prisoner_id, prisoner_name, from_prison_id, to_org_id, body, submitted_by, status)
+  -- letter2: open sibling, submitted, pre-assigned to authority_staff
+  -- (TEST 9 below has authority_staff manage supporting work on it
+  -- before it is marked received — assigned_to is set here so that
+  -- action is authorized under Product Decision A's narrower access
+  -- model, same realism correction as letter3 above; TEST 9 itself
+  -- only asserts that a letter status change doesn't cascade to task
+  -- status, unaffected by assignment timing).
+  INSERT INTO prisoner_letters (id, prisoner_id, prisoner_name, from_prison_id, to_org_id, body, submitted_by, status, assigned_to)
   VALUES (
     'eeeeeeee-2222-0000-0000-000000000002', 'R8-INMATE-002', 'R8 Test Inmate 2',
     'eeeeeeee-0000-0000-0000-000000000001', 'eeeeeeee-0000-0000-0000-000000000002',
-    'body text', 'eeeeeeee-1111-0000-0000-000000000001', 'submitted'
+    'body text', 'eeeeeeee-1111-0000-0000-000000000001', 'submitted',
+    'eeeeeeee-1111-0000-0000-000000000002'
   ) ON CONFLICT (id) DO NOTHING;
 
   -- letter3: DELIVERED — terminal-status business rule + isolation.
-  INSERT INTO prisoner_letters (id, prisoner_id, prisoner_name, from_prison_id, to_org_id, body, submitted_by, status)
+  -- Assigned to authority_staff: a real letter can only reach
+  -- 'delivered' after being routed/assigned and replied to (patch-
+  -- prisoner-letters-server-mutation-foundation.sql's own
+  -- create_prisoner_letter_reply()/mark_prisoner_letter_delivered()
+  -- both require assigned_to on the authority side), so an unassigned
+  -- delivered letter is not a reachable production state — the
+  -- fixture is updated to match, consistent with Product Decision A's
+  -- narrower access model (authority-side visibility requires
+  -- assigned_to = actor, or supervisor/admin oversight).
+  INSERT INTO prisoner_letters (id, prisoner_id, prisoner_name, from_prison_id, to_org_id, body, submitted_by, status, assigned_to, received_by, received_at)
   VALUES (
     'eeeeeeee-2222-0000-0000-000000000003', 'R8-INMATE-003', 'R8 Test Inmate 3',
     'eeeeeeee-0000-0000-0000-000000000001', 'eeeeeeee-0000-0000-0000-000000000002',
-    'body text', 'eeeeeeee-1111-0000-0000-000000000001', 'delivered'
+    'body text', 'eeeeeeee-1111-0000-0000-000000000001', 'delivered',
+    'eeeeeeee-1111-0000-0000-000000000002', 'eeeeeeee-1111-0000-0000-000000000002', now()
   ) ON CONFLICT (id) DO NOTHING;
 
   RAISE NOTICE 'Fixtures ready.';
@@ -481,7 +498,12 @@ BEGIN
   END IF;
   SELECT status INTO v_task_status_before FROM tasks WHERE id = v_task2_id;
 
-  UPDATE prisoner_letters SET status = 'received', received_by = (SELECT authority_staff FROM test_ids), received_at = now() WHERE id = v_letter2 AND status = 'submitted';
+  -- Direct table UPDATE is no longer available (patch-prisoner-
+  -- letters-server-mutation-foundation.sql's direct-write closure) —
+  -- the real mutation path is now the RPC.
+  IF (SELECT status FROM prisoner_letters WHERE id = v_letter2) = 'submitted' THEN
+    PERFORM mark_prisoner_letter_received(v_letter2);
+  END IF;
 
   IF (SELECT status FROM tasks WHERE id = v_task2_id) <> v_task_status_before THEN
     RAISE EXCEPTION 'TEST 9 FAILED: task status changed as a side effect of letter status change (% -> %)',

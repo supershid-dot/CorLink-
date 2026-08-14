@@ -46,26 +46,35 @@ ALTER TABLE task_links ADD CONSTRAINT task_links_module_key_check
 -- ─── 2. Authorization helpers ───────────────────────────────────
 
 -- "Can this user even SEE this Prisoner Letter" — mirrors
--- prisoner_letters_select verbatim (patch-prisoner-letters-staff-
--- flag.sql, the file that actually governs this table's current
--- policy — confirmed by tracing chain order: it runs AFTER patch-
--- prisoner-registry-section.sql, so its policy bodies are the live
--- ones). Deliberately coarse, matching the real predicate exactly:
--- is_prisoner_letters_staff() (a per-user flag, granted individually
--- via Admin > Manage User — "deliberately with NO automatic bypass
--- for supervisors/admins", per that file's own comment) AND either
--- party org matches the caller's own org. No section/assignee
--- narrowing exists in the real RLS for this table, so none is added
--- here either. SECURITY DEFINER so it can be called from
--- can_view_task_link() below without recursing back through
+-- prisoner_letters_select verbatim as of patch-prisoner-letters-
+-- server-mutation-foundation.sql (Product Decision A's narrower access
+-- model), which supersedes the coarser flag+party-org predicate this
+-- helper originally mirrored from patch-prisoner-letters-staff-
+-- flag.sql. Updated here — a minimal, required change to keep this
+-- Task-integration boundary consistent with the new mutation boundary
+-- (Section 23 of the server-mutation-foundation milestone), not a
+-- redesign of the Task integration itself: MCS side is the creator
+-- (submitted_by, still gated by is_prisoner_letters_staff()) OR
+-- is_supervisor_or_above() (org-wide oversight, independent of the
+-- flag); Authority side is the assignee (assigned_to, same flag gate)
+-- OR is_supervisor_or_above(). SECURITY DEFINER so it can be called
+-- from can_view_task_link() below without recursing back through
 -- prisoner_letters' own RLS.
 CREATE OR REPLACE FUNCTION can_view_prisoner_letter(p_letter_id UUID)
 RETURNS BOOLEAN AS $$
   SELECT EXISTS (
     SELECT 1 FROM prisoner_letters pl
     WHERE pl.id = p_letter_id
-      AND is_prisoner_letters_staff()
-      AND (pl.from_prison_id = get_my_org_id() OR pl.to_org_id = get_my_org_id())
+      AND (
+        (pl.from_prison_id = get_my_org_id() AND (
+          (is_prisoner_letters_staff() AND pl.submitted_by = auth.uid())
+          OR is_supervisor_or_above()
+        ))
+        OR (pl.to_org_id = get_my_org_id() AND (
+          (is_prisoner_letters_staff() AND pl.assigned_to = auth.uid())
+          OR is_supervisor_or_above()
+        ))
+      )
   );
 $$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp;
 
@@ -73,17 +82,11 @@ $$ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp;
 -- on this letter" — reuses can_view_prisoner_letter() directly, same
 -- technique R4's can_manage_request_task_link() and R7's can_manage_
 -- entry_task_link() used. The real prisoner_letters_update RLS policy
--- is exactly as coarse as prisoner_letters_select (same is_prisoner_
--- letters_staff() + party-org predicate, no assigned_to/supervisor
--- narrowing at the RLS layer) — js/data/prisoner-letters-api.js's own
--- top-of-file comment describes a narrower intended actor set
--- ("assigned staff member, submitter, or supervisor"), but that is
--- enforced only client-side (prisoner-letter-detail.js's button
--- gating), not by the database. Reusing the real, currently-enforced
--- predicate — not the aspirational UI-only one — is the correct
--- "reuse existing authorization" choice; inventing a narrower DB-level
--- check here that doesn't exist anywhere else on this table would be
--- new authorization design, not reuse.
+-- (as of the server-mutation-foundation patch) is exactly as coarse as
+-- the updated prisoner_letters_select above (same submitted_by/
+-- assigned_to + supervisor-oversight predicate on each side), so
+-- reusing it here remains the correct "reuse existing authorization"
+-- choice.
 CREATE OR REPLACE FUNCTION can_manage_prisoner_letter_task_link(p_letter_id UUID)
 RETURNS BOOLEAN AS $$
   SELECT can_view_prisoner_letter(p_letter_id);

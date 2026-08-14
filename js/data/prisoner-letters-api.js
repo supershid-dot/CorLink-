@@ -1,20 +1,29 @@
 // ─── Prisoner Letters Data API ─────────────────────────────────
-// Wraps all Supabase queries for the Prisoner Letters workflow
-// (Phase 4). RLS policies (supabase/rls.sql) are the real enforcement
-// layer — these calls simply shape the letters/replies for the UI.
+// Wraps all Supabase queries for the Prisoner Letters workflow.
+// Reads (lists/detail/replies/search) remain direct .from(...).select()
+// calls — RLS policies (supabase/rls.sql) are the real enforcement
+// layer there. All 6 mutations (submitLetter/markReceived/routeLetter/
+// markSlipGenerated/createReply/markDelivered) now go through
+// server-authoritative RPCs (supabase/patch-prisoner-letters-server-
+// mutation-foundation.sql) instead of direct table writes — the RPCs
+// own their own authorization, state-transition guards, and audit
+// writes, so this file no longer calls logAudit() for any of them.
 //
 // Status flow: submitted -> received -> replied -> delivered.
 // Unlike Requests (Phase 3), there's no approval gate here — an MCS
 // staff member submits a letter and it's immediately visible to the
-// destination organization's supervisors, matching prisoner_letters'
-// simpler RLS model. Reference numbers are generated at submission
-// time instead of on approval for the same reason.
+// destination organization, matching prisoner_letters' RLS model.
+// Reference numbers are generated server-side, inside
+// create_prisoner_letter() itself, instead of a separate client RPC
+// round trip before submission.
 //
-// Only the assigned staff member (assigned_to), the original submitter,
-// or a supervisor at either participating org can reply or advance the
-// status (see prisoner_letters_update / prisoner_replies_insert RLS) —
-// so routing a letter to a section without also assigning a specific
-// person means only a supervisor at the receiving org can reply to it.
+// Access model (server-authoritative-mutation-foundation, Product
+// Decision A): on the MCS side, the letter's own submitted_by or a
+// supervisor/admin at that org; on the authority side, the letter's
+// own assigned_to or a supervisor/admin at that org. Replies are
+// authority-side only. So routing a letter to a section without also
+// assigning a specific person means only a supervisor at the receiving
+// org can act on it until it is assigned.
 
 // Prisoner registry (MCS-org-scoped; see prisoners RLS). The compose
 // modal's searchable dropdown filters this list client-side by file
@@ -44,16 +53,6 @@ const PrisonersAPI = (() => {
 })();
 
 const PrisonerLettersAPI = (() => {
-
-  async function logAudit(action, recordType, recordId, notes) {
-    const db = getSupabase();
-    const session = await Auth.getSession();
-    if (!session) return;
-    await db.from('audit_logs').insert({
-      user_id: session.user.id,
-      action, record_type: recordType, record_id: recordId, notes,
-    });
-  }
 
   // See requests-api.js for why this exists — .single() on an
   // RLS-filtered zero-row update throws PostgREST's generic PGRST116.
@@ -160,24 +159,17 @@ const PrisonerLettersAPI = (() => {
     },
 
     // ── Submit ───────────────────────────────────────────────────
-    // prisoner = a row from the prisoners registry; its details are
-    // denormalized onto the letter (prisoner_id/prisoner_name) so the
-    // destination org can read them without registry access, plus
-    // prisoner_ref for the live link. Reference numbers come from the
-    // letters' own per-org PL-{ORG}-{YEAR}-{SEQ} sequence.
+    // prisoner = a row from the prisoners registry; create_prisoner_
+    // letter() derives prisoner_id/prisoner_name server-side from
+    // p_prisoner_ref itself (never trusted from the client), generates
+    // the reference number internally, and writes its own audit row —
+    // all in one RPC call.
     async submitLetter({ prisoner, fromOrgId, toOrgId, body }) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      const { data: refNumber, error: rpcErr } = await db.rpc('generate_prisoner_letter_reference', { p_org_id: fromOrgId });
-      if (rpcErr) throw wrapRowError(rpcErr);
-      const { data, error } = await db.from('prisoner_letters').insert({
-        prisoner_ref: prisoner.id, prisoner_id: prisoner.id_card_number, prisoner_name: prisoner.full_name,
-        from_prison_id: fromOrgId, to_org_id: toOrgId, body,
-        submitted_by: session.user.id, status: 'submitted',
-        reference_number: refNumber, slip_generated: false,
-      }).select().single();
+      const { data, error } = await db.rpc('create_prisoner_letter', {
+        p_prisoner_ref: prisoner.id, p_from_prison_id: fromOrgId, p_to_org_id: toOrgId, p_body: body,
+      }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('created', 'prisoner_letter', data.id, `Submitted prisoner letter for ${prisoner.full_name}`);
       const recipients = await NotificationsAPI.orgSupervisorUserIds(toOrgId);
       await NotificationsAPI.notify(recipients, {
         type: 'new_prisoner_letter', recordType: 'prisoner_letter', recordId: data.id,
@@ -190,31 +182,25 @@ const PrisonerLettersAPI = (() => {
     //    requests/responses: who + when, shown to both sides) ────────
     async markReceived(id) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      const { data, error } = await db.from('prisoner_letters')
-        .update({ status: 'received', received_by: session.user.id, received_at: new Date().toISOString() })
-        .eq('id', id).select().single();
+      const { data, error } = await db.rpc('mark_prisoner_letter_received', { p_letter_id: id }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('received', 'prisoner_letter', id, 'Marked prisoner letter as received');
       return data;
     },
 
     // MCS marks the hand-over slip as generated (after printing).
     async markSlipGenerated(id) {
       const db = getSupabase();
-      const { error } = await db.from('prisoner_letters')
-        .update({ slip_generated: true }).eq('id', id);
+      const { error } = await db.rpc('mark_prisoner_letter_slip_generated', { p_letter_id: id }).single();
       if (error) throw wrapRowError(error);
     },
 
     // ── Route (receiving org, supervisor/admin) ─────────────────────
     async routeLetter(id, { toSectionId, assignedTo }) {
       const db = getSupabase();
-      const patch = { to_section_id: toSectionId };
-      if (assignedTo) patch.assigned_to = assignedTo;
-      const { data, error } = await db.from('prisoner_letters').update(patch).eq('id', id).select().single();
+      const { data, error } = await db.rpc('route_prisoner_letter', {
+        p_letter_id: id, p_to_section_id: toSectionId, p_assigned_to: assignedTo || null,
+      }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('routed', 'prisoner_letter', id, 'Routed prisoner letter to section');
       if (assignedTo) {
         await NotificationsAPI.notify([assignedTo], {
           type: 'new_prisoner_letter', recordType: 'prisoner_letter', recordId: id,
@@ -230,19 +216,19 @@ const PrisonerLettersAPI = (() => {
       return data;
     },
 
-    // ── Reply (assigned staff / submitter / participating supervisor) ──
+    // ── Reply (authority side: assigned staff / participating
+    //    supervisor) — create_prisoner_letter_reply() atomically
+    //    inserts the reply and advances the letter's status to
+    //    'replied' in one transaction, and writes its own audit row. ──
     async createReply({ letterId, body }) {
       const db = getSupabase();
-      const session = await Auth.getSession();
-      const { data, error } = await db.from('prisoner_replies').insert({
-        letter_id: letterId, body, replied_by: session.user.id,
-      }).select().single();
+      const { data, error } = await db.rpc('create_prisoner_letter_reply', {
+        p_letter_id: letterId, p_body: body,
+      }).single();
       if (error) throw wrapRowError(error);
-      const { data: letterData, error: updateErr } = await db.from('prisoner_letters')
-        .update({ status: 'replied' }).eq('id', letterId)
-        .select('submitted_by, prisoner_name').single();
-      if (updateErr) throw wrapRowError(updateErr);
-      await logAudit('created', 'prisoner_letter', letterId, 'Replied to prisoner letter');
+      const { data: letterData, error: letterErr } = await db.from('prisoner_letters')
+        .select('submitted_by, prisoner_name').eq('id', letterId).single();
+      if (letterErr) throw wrapRowError(letterErr);
       await NotificationsAPI.notify([letterData.submitted_by], {
         type: 'letter_replied', recordType: 'prisoner_letter', recordId: letterId,
         message: `A reply has been received for ${letterData.prisoner_name}'s letter`,
@@ -253,10 +239,8 @@ const PrisonerLettersAPI = (() => {
     // ── Delivered (MCS side confirms hand-off to the prisoner) ──────
     async markDelivered(id) {
       const db = getSupabase();
-      const { data, error } = await db.from('prisoner_letters')
-        .update({ status: 'delivered' }).eq('id', id).select().single();
+      const { data, error } = await db.rpc('mark_prisoner_letter_delivered', { p_letter_id: id }).single();
       if (error) throw wrapRowError(error);
-      await logAudit('edited', 'prisoner_letter', id, 'Marked prisoner letter delivered');
       return data;
     },
 
