@@ -72,7 +72,22 @@ SELECT set_config('request.jwt.claims', :'ASSIGNEE', false);
 DO $$
 DECLARE v_event_id UUID;
 BEGIN
-  SELECT id INTO v_event_id FROM platform_outbox_events WHERE event_type='task.assigned.v1' LIMIT 1;
+  -- CAP-003 Phase 1.8B reconciliation note: platform_outbox_events'
+  -- real production grant posture (patch-notification-outbox-
+  -- persistence-foundation.sql's own REVOKE ALL FROM PUBLIC, anon,
+  -- authenticated) denies `authenticated` even SELECT -- this SELECT
+  -- was previously only succeeding (or cleanly returning zero rows) in
+  -- this disposable test harness because 01-grants.sql's own blanket
+  -- grant silently reopened it, a harness-only gap fixed during Phase
+  -- 1.8B testing (see docs/94). Wrapped here so a genuine permission-
+  -- denied error on this lookup falls back to a synthetic id exactly
+  -- like a zero-row result already did, preserving this scenario's own
+  -- real assertion (create_notification_intent() itself is never
+  -- directly callable) unchanged.
+  BEGIN
+    SELECT id INTO v_event_id FROM platform_outbox_events WHERE event_type='task.assigned.v1' LIMIT 1;
+  EXCEPTION WHEN insufficient_privilege THEN v_event_id := NULL;
+  END;
   BEGIN
     PERFORM create_notification_intent(COALESCE(v_event_id, gen_random_uuid()), 'task.assigned.v1','task.assigned','{}'::JSONB,'normal',
       'specific_users', ARRAY['85100000-0001-0000-0000-000000000002']::UUID[], NULL, NULL, NULL, NULL,NULL,NULL);

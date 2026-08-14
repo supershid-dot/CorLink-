@@ -556,13 +556,42 @@ const AppShell = {
         // value it's already at (e.g. clicking a notification for the
         // request you're already viewing) doesn't fire hashchange, so
         // nothing else would refresh the badge/list in that case.
-        if (isCap003) {
-          // CAP-003 only ever produces 'task'/'meeting' source records
-          // today (docs/87) — CAP003_ROUTES has no fallback branch on
-          // purpose, since inventing one for a record type CAP-003
-          // never actually emits would be indistinguishable from a bug.
-          // The notification row is never treated as proof of access:
-          // the destination view still enforces its own RLS on load.
+        if (isCap003 && btn.dataset.recordType === 'internal_request') {
+          // CAP-003 Phase 1.8B: an internal_request's own record_id is
+          // the THREAD's id, not its parent's — CAP003_ROUTES has no
+          // static entry for it (see that const's own comment) since
+          // the destination depends on which of parent_request_id/
+          // parent_entry_id is set, which requires a read. Same async-
+          // resolution shape as the pre-existing meeting_series branch
+          // below: one plain filtered read (RLS-gated exactly like every
+          // other read in this codebase — this notification is never a
+          // substitute for that check), then route to whichever parent
+          // detail page actually renders this thread's conversation.
+          let route = null, params = null;
+          try {
+            const db = getSupabase();
+            const { data } = await db.from('internal_requests')
+              .select('parent_request_id, parent_entry_id')
+              .eq('id', btn.dataset.recordId)
+              .maybeSingle();
+            if (data?.parent_request_id) {
+              route = 'request-detail'; params = { id: data.parent_request_id };
+            } else if (data?.parent_entry_id) {
+              route = 'entry-detail'; params = { id: data.parent_entry_id };
+            }
+          } catch (err) {
+            console.error('CorLink: failed to resolve an internal request\'s parent case for notification routing', err);
+          }
+          if (route) Router.navigate(route, params);
+        } else if (isCap003) {
+          // CAP-003 only ever produces 'task'/'meeting'/'request'/
+          // 'external_correspondence'/'internal_request' source records
+          // today (docs/87/90/92/94) — CAP003_ROUTES has no fallback
+          // branch on purpose, since inventing one for a record type
+          // CAP-003 never actually emits would be indistinguishable
+          // from a bug. The notification row is never treated as proof
+          // of access: the destination view still enforces its own RLS
+          // on load.
           const routeFor = NotificationsAPI.CAP003_ROUTES[btn.dataset.recordType];
           if (routeFor) {
             const { route, params } = routeFor(btn.dataset.recordId);

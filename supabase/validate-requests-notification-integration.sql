@@ -123,7 +123,8 @@ BEGIN
     WHERE routine_schema = 'public' AND routine_name ILIKE 'intent_user_can_view_%'
       AND routine_name NOT IN (
         'intent_user_can_view_workflow_instance', 'intent_user_can_view_task',
-        'intent_user_can_view_meeting', 'intent_user_can_view_request', 'intent_user_can_view_entry'
+        'intent_user_can_view_meeting', 'intent_user_can_view_request', 'intent_user_can_view_entry',
+        'intent_user_can_view_internal_request'
       )
   ) THEN v_missing := v_missing || 'unexpected-new-authorization-adapter '; END IF;
 
@@ -280,8 +281,11 @@ BEGIN
   END IF;
   -- 'entry' is no longer out-of-scope as of CAP-003 Phase 1.7B
   -- (validate-entry-notification-integration.sql owns that assertion
-  -- now) -- Internal Collaboration/Prisoner Letters remain deferred.
-  IF EXISTS (SELECT 1 FROM platform_event_type_registry WHERE owning_module IN ('internal_collaboration','prisoner_letters')) THEN
+  -- now), and 'internal_collaboration' is no longer out-of-scope as of
+  -- CAP-003 Phase 1.8B (validate-internal-collaboration-notification-
+  -- integration.sql owns that assertion now) -- Prisoner Letters remains
+  -- deferred.
+  IF EXISTS (SELECT 1 FROM platform_event_type_registry WHERE owning_module = 'prisoner_letters') THEN
     v_missing := v_missing || 'unexpected-out-of-scope-module-event-registered ';
   END IF;
 

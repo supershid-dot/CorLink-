@@ -53,11 +53,23 @@ BEGIN
   ) THEN v_missing := v_missing || 'notification_intents_target_type_check-unexpectedly-changed '; END IF;
 
   -- ── 4. Closed source_record_type dispatch: extended by exactly
-  -- 'external_correspondence'. No 'entry' or 'external_correspondence_reply'
-  -- source type introduced. ──────────────────────────────────────────
+  -- 'external_correspondence' as of this milestone. No 'entry' or
+  -- 'external_correspondence_reply' source type introduced. CAP-003
+  -- Phase 1.8B later legitimately extended the same constraint further
+  -- with 'internal_request' -- reconciled here via a positive-membership
+  -- check (every value this milestone itself added is still present)
+  -- instead of an exact-set-equality string match, mirroring the
+  -- identical reconciliation already applied to every prior phase's
+  -- sibling validators when a later phase legitimately extends a shared
+  -- closed allowlist. ──────────────────────────────────────────────────
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'notification_intents_source_record_type_check'
-      AND pg_get_constraintdef(oid) = 'CHECK ((source_record_type = ANY (ARRAY[''workflow_instance''::text, ''platform''::text, ''task''::text, ''meeting''::text, ''request''::text, ''external_correspondence''::text])))'
+      AND pg_get_constraintdef(oid) ILIKE '%''external_correspondence''%'
+      AND pg_get_constraintdef(oid) ILIKE '%''workflow_instance''%'
+      AND pg_get_constraintdef(oid) ILIKE '%''platform''%'
+      AND pg_get_constraintdef(oid) ILIKE '%''task''%'
+      AND pg_get_constraintdef(oid) ILIKE '%''meeting''%'
+      AND pg_get_constraintdef(oid) ILIKE '%''request''%'
   ) THEN v_missing := v_missing || 'notification_intents_source_record_type_check-not-extended-correctly '; END IF;
 
   -- ── 5. create_notification_intent()/process_platform_outbox_batch()
@@ -106,7 +118,7 @@ BEGIN
       AND routine_name NOT IN (
         'intent_user_can_view_workflow_instance', 'intent_user_can_view_task',
         'intent_user_can_view_meeting', 'intent_user_can_view_request',
-        'intent_user_can_view_entry'
+        'intent_user_can_view_entry', 'intent_user_can_view_internal_request'
       )
   ) THEN v_missing := v_missing || 'unexpected-new-authorization-adapter '; END IF;
 
@@ -282,7 +294,11 @@ BEGIN
   IF to_regprocedure('public.transfer_entry(uuid,uuid)') IS NOT NULL
      OR to_regprocedure('public.reassign_entry_prison(uuid,uuid)') IS NOT NULL
   THEN v_missing := v_missing || 'unexpected-prisoner-transfer-engine-introduced '; END IF;
-  IF EXISTS (SELECT 1 FROM platform_event_type_registry WHERE owning_module IN ('internal_collaboration','prisoner_letters')) THEN
+  -- 'internal_collaboration' is no longer out-of-scope as of CAP-003
+  -- Phase 1.8B (validate-internal-collaboration-notification-
+  -- integration.sql owns that assertion now) -- Prisoner Letters
+  -- remains deferred.
+  IF EXISTS (SELECT 1 FROM platform_event_type_registry WHERE owning_module = 'prisoner_letters') THEN
     v_missing := v_missing || 'unexpected-out-of-scope-module-event-registered ';
   END IF;
 

@@ -158,17 +158,22 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- ── 7. Zero CAP-003 integration: none of the 11 RPCs reference any
-  -- CAP-003 outbox/notification-intent primitive. Phase 1.8B (not
-  -- started) is the only milestone allowed to add it. ────────────────
+  -- ── 7. CAP-003 integration boundary: this milestone (1.8A) itself
+  -- adds none. CAP-003 Phase 1.8B has since legitimately added atomic
+  -- outbox enqueue to exactly 6 of the 11 RPCs (create_internal_request,
+  -- reroute_internal_request, return_internal_request_to_sender,
+  -- assign_internal_request, approve_internal_request_reply, return_
+  -- internal_request_reply) -- a narrow, disclosed carve-out reconciling
+  -- this 1.8A validator with 1.8B's own later, separately-reviewed
+  -- milestone, mirroring the identical reconciliation already applied to
+  -- every prior phase's sibling validators. The remaining 5 RPCs
+  -- (deferred by 1.8B, see its own header) must still show NO CAP-003
+  -- integration reference at all. ─────────────────────────────────────
   FOREACH v_fn IN ARRAY ARRAY[
-    'create_internal_request(uuid,uuid,text,text,uuid,uuid,text,text,timestamptz)',
-    'mark_internal_request_received(uuid)', 'reroute_internal_request(uuid,uuid)',
-    'return_internal_request_to_sender(uuid,text)', 'assign_internal_request(uuid,uuid)',
+    'mark_internal_request_received(uuid)',
     'close_internal_request(uuid)', 'draft_internal_request_reply(uuid,text,text)',
     'update_internal_request_reply_draft(uuid,text,text)',
-    'submit_internal_request_reply(uuid,uuid)', 'approve_internal_request_reply(uuid)',
-    'return_internal_request_reply(uuid)'
+    'submit_internal_request_reply(uuid,uuid)'
   ] LOOP
     SELECT pg_get_functiondef(to_regprocedure('public.'||v_fn)) INTO v_def;
     IF v_def IS NOT NULL AND (
@@ -178,8 +183,8 @@ BEGIN
       OR v_def ILIKE '%user_notifications%'
     ) THEN v_missing := v_missing || v_fn || '-unexpectedly-integrates-cap003 '; END IF;
   END LOOP;
-  IF (SELECT count(*) FROM platform_event_type_registry WHERE owning_module ILIKE '%internal_collab%' OR owning_module ILIKE '%collaboration%') <> 0 THEN
-    v_missing := v_missing || 'unexpected-internal-collaboration-event-registered '; END IF;
+  IF (SELECT count(*) FROM platform_event_type_registry WHERE owning_module = 'internal_collaboration') <> 5 THEN
+    v_missing := v_missing || 'internal-collaboration-event-count-not-exactly-phase-1.8b-five '; END IF;
 
   -- ── 8. Legacy Internal Collaboration notifications untouched --
   -- NotificationsAPI.notify() plumbing (create_legacy_notification) is

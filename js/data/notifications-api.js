@@ -107,6 +107,20 @@ const MIGRATED_EVENT_MAP = {
     { cap003Type: 'requests.returned.v1',      recordType: 'request' },
     { cap003Type: 'entry.reply_returned.v1',   recordType: 'external_correspondence' },
   ],
+  // ─── CAP-003 Phase 1.8B — Internal Collaboration ──────────────────
+  // Deliberately NO entries for internal_collaboration.routed.v1/
+  // .returned.v1/.assigned.v1/.reply_sent.v1/.reply_returned.v1. Every
+  // legacy Internal Collaboration notification (js/data/internal-
+  // requests-api.js's own NotificationsAPI.notify() calls) carries the
+  // PARENT Request/Entry's own id via parentRef() -- never the internal_
+  // requests thread's own id -- while every CAP-003 Phase 1.8B event is
+  // sourced from source_record_id=<internal_requests.id> (the thread's
+  // own id; see the patch's own header for why). dedupeLegacyAgainstCap003()'s
+  // structural-identity match keys on (mapped type, record type, record
+  // id): a legacy row's record_id (the parent's id) can never equal a
+  // CAP-003 row's source_record_id (the thread's id) for the same
+  // occurrence, so no mapping here could ever actually match anything --
+  // adding one would be dead code, not a real dedup path.
 };
 const DEDUP_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
@@ -148,6 +162,17 @@ const NOTIFICATION_TEMPLATES = {
   'entry.assigned':        () => 'A logged entry was assigned to you',
   'entry.reply_sent':      p => `A reply was sent${p.reference_number ? ' (' + p.reference_number + ')' : ''}`,
   'entry.reply_returned':  () => 'Your reply draft was returned for changes',
+  // internal_collaboration.* templates deliberately never reference the
+  // thread's own subject/body -- patch-internal-collaboration-
+  // notification-integration.sql never persists them into
+  // template_params (docs/94 treats them as potentially sensitive by
+  // default, same conservative fallback requests.*/entry.* already
+  // use), so these five are entirely generic, structural text.
+  'internal_collaboration.routed':          () => 'An internal request was sent to your section',
+  'internal_collaboration.returned':        () => 'An internal request was sent back to your section',
+  'internal_collaboration.assigned':        () => 'An internal request was assigned to you',
+  'internal_collaboration.reply_sent':      () => 'An internal request received a reply',
+  'internal_collaboration.reply_returned':  () => 'Your internal reply draft was returned for changes',
 };
 function renderNotificationTemplate(templateKey, templateParams) {
   const fn = NOTIFICATION_TEMPLATES[templateKey];
@@ -184,6 +209,16 @@ function renderNotificationTemplate(templateKey, templateParams) {
 // entry, never a separate reply id (see patch-entry-notification-
 // integration.sql), because entry-detail.js already renders every
 // reply inline on the entry's own page.
+//
+// CAP-003 Phase 1.8B deliberately adds NO 'internal_request' key here.
+// Unlike task/meeting/request/external_correspondence, an internal_
+// requests row is itself anchored to exactly one of TWO possible parent
+// kinds (parent_request_id XOR parent_entry_id — its own one_parent
+// CHECK constraint), so a single static route function cannot express
+// the destination without first reading the row. shell.js's own click
+// handler resolves this polymorphic parent asynchronously (the same
+// established async-resolution pattern the pre-existing meeting_series
+// branch already uses below) instead of adding an entry here.
 const CAP003_ROUTES = {
   task:    recordId => ({ route: 'task-detail', params: { id: recordId } }),
   meeting: recordId => ({ route: 'meetings', params: { meetingId: recordId } }),
