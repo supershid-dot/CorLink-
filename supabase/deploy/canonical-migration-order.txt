@@ -1,0 +1,143 @@
+# CorLink — Canonical Production Migration Order
+#
+# One file per line, applied top to bottom, relative to supabase/.
+# This is the SINGLE authoritative ordering — apply-canonical-schema.sh
+# reads this exact file; nothing is hard-coded twice. See
+# supabase/deploy/README.md for prerequisites, usage, and the procedure
+# for adding a new patch to this list.
+#
+# Lines starting with # are comments. Blank lines are ignored.
+
+# ── 1. Base schema, security helpers, RLS, storage bucket policies ──
+# (buckets themselves — attachments, prisoner-letters, org-logos — must
+# already exist; see README §2/§3)
+schema.sql
+security-functions.sql
+rls.sql
+storage-policies.sql
+
+# ── 2. Pre-CAP-002 foundation patch (org-scoped admin bootstrap) ────
+patch-org-scope-admin.sql
+
+# ── 2b. Legacy notification RPCs + daily overdue-request cron job.
+#      REQUIRES the pg_cron extension enabled first (see README §2).
+#      Placed this early deliberately: it depends only on schema.sql/
+#      rls.sql (requests, user_assignments), nothing from CAP-002/
+#      CAP-003, and it is the ONLY place section_user_ids()/
+#      org_supervisor_user_ids() are actually DEFINED (several later
+#      CAP-003 module-notification patches reuse them without
+#      redefining them) — so it must run before anything that reuses
+#      them, and before §2c below, which pins their search_path. ────
+notifications.sql
+
+# ── 3. CAP-002: Workflow Engine ──────────────────────────────────────
+patch-workflow-backend-foundation.sql
+patch-workflow-runtime.sql
+patch-workflow-executable-definition-validation.sql
+patch-workflow-executable-instance-activation.sql
+patch-workflow-activation-event-sequence-correction.sql
+patch-workflow-graph-advancement-foundation.sql
+patch-workflow-approval-decision-engine.sql
+patch-workflow-approval-round-lifecycle.sql
+patch-workflow-routing-validation-foundation.sql
+patch-workflow-gateway-routing-execution.sql
+patch-workflow-decision-replay-hardening.sql
+patch-workflow-delegation-substitution-foundation.sql
+patch-workflow-delegation-runtime-integration.sql
+patch-workflow-sla-escalation-foundation.sql
+patch-workflow-sla-timing-correction.sql
+patch-workflow-sla-timer-dispatch.sql
+
+# ── 4. CAP-002: Platform modules, Rooms, Meetings (incl. Recurring
+#      Phase 1 and Phase 2) ──────────────────────────────────────────
+patch-platform-module-foundation.sql
+patch-rooms-booking-foundation.sql
+patch-rooms-route-activation.sql
+patch-meetings-foundation.sql
+patch-meetings-route-activation.sql
+patch-meetings-rsvp.sql
+patch-meetings-attendance.sql
+patch-meetings-minutes.sql
+patch-meetings-lock.sql
+patch-meetings-personal-notes.sql
+patch-meetings-groups.sql
+patch-meetings-recurring.sql
+patch-meetings-recurring-notifications.sql
+patch-calendar-route-activation.sql
+patch-meetings-drafts.sql
+patch-meetings-recurring-phase2-notification-suppression.sql
+patch-meetings-recurring-phase2-series-auth.sql
+patch-meetings-recurring-phase2-series-exceptions.sql
+patch-meetings-recurring-phase2-update-entire-series.sql
+patch-meetings-recurring-phase2-update-series-this-and-future.sql
+patch-meetings-recurring-phase2-preserve-series-membership.sql
+patch-meetings-recurring-phase2-cancel-entire-series.sql
+patch-meetings-recurring-phase2-cancel-series-this-and-future.sql
+patch-meetings-recurring-phase2-audit-visibility.sql
+
+# ── 5. Cross-cutting SECURITY DEFINER search_path hardening ─────────
+# This patch's own restated can_view_case_audit_record() body already
+# includes the meeting_series branch (it was written 2026-07-31, after
+# §4's patch-meetings-recurring-phase2-audit-visibility.sql added it,
+# 2026-07-24) — so it structurally depends on the meeting_series table
+# and must run after all of §4. It must also run after §2b's
+# notifications.sql (the only place section_user_ids()/
+# org_supervisor_user_ids() are DEFINED, not merely reused — nothing
+# before this patch pins their search_path). And it must run before
+# §6's patch-task-audit-visibility.sql, whose own restated body
+# already carries its own search_path pin, so running it after this
+# patch is safe (a no-op reassertion) while running it before would
+# silently lose the task branch this patch's own body does not know
+# about yet. See README §9 for the general rule this incident
+# established: a DROP+CREATE POLICY/FUNCTION restatement is always the
+# new final word for whatever object it redefines — order every
+# cross-cutting hardening or restoration patch strictly after
+# everything it depends on and strictly before everything that must
+# not silently undo it.
+patch-security-definer-search-path-hardening.sql
+
+# ── 6. CAP-002: Shared Tasks + one module-integration widening patch
+#      per consuming module, in the order each module's own task
+#      integration was built (R4 Requests -> R5 Meetings -> R6 Internal
+#      Collaboration -> R7 Entry -> R8 Prisoner Letters) ────────────
+patch-shared-task-foundation.sql
+patch-request-task-integration.sql
+patch-meeting-task-integration.sql
+patch-internal-collaboration-task-integration.sql
+patch-entry-task-integration.sql
+patch-prisoner-letter-task-integration.sql
+patch-task-audit-visibility.sql
+patch-task-attachments.sql
+patch-task-relationships.sql
+patch-task-relationships-hardening.sql
+patch-task-dependencies.sql
+patch-task-dependency-lifecycle-enforcement.sql
+patch-task-dependency-candidate-management.sql
+
+# ── 7. CAP-003: Notification Outbox Platform foundation ─────────────
+patch-legacy-notification-insert-rls-fix.sql
+patch-legacy-notification-record-authorization-fix.sql
+patch-notification-outbox-persistence-foundation.sql
+patch-notification-recipient-resolution.sql
+patch-notification-outbox-worker.sql
+patch-legacy-notification-search-path-hardening.sql
+patch-notification-module-integration-foundation.sql
+patch-notification-target-expansion.sql
+patch-task-meeting-notification-events.sql
+patch-notification-realtime-legacy-cutover.sql
+
+# ── 9. CAP-003: per-module mutation-foundation + notification-
+#      integration pairs, in build order ────────────────────────────
+patch-requests-server-mutation-foundation.sql
+patch-requests-notification-integration.sql
+patch-entry-server-mutation-foundation.sql
+patch-entry-notification-integration.sql
+patch-internal-collaboration-server-mutation-foundation.sql
+patch-internal-collaboration-notification-integration.sql
+patch-prisoner-letters-server-mutation-foundation.sql
+patch-prisoner-letters-notification-integration.sql
+
+# ── 10. Testing-readiness P0-B correction (docs/100). Must run after
+#       patch-prisoner-letters-server-mutation-foundation.sql, whose
+#       own attachments policy restatement it restores branches to. ──
+patch-attachments-authorization-restoration.sql

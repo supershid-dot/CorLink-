@@ -1,5 +1,22 @@
 # Supabase Auth Configuration — CorLink
 
+> **Schema/patch chain note (2026-08-15):** the step list below (§2)
+> only covers CorLink's pre-CAP-002 baseline. CAP-002 (Workflow Engine,
+> Rooms, Meetings, Tasks) and CAP-003 (Notification Platform) — the
+> majority of this project's functionality as of this writing — are
+> **not** listed here; applying only this document's steps produces an
+> incomplete application. For the complete, current, authoritative
+> migration chain, use **`supabase/deploy/`** instead:
+> `supabase/deploy/apply-canonical-schema.sh` (reads its order from
+> `supabase/deploy/canonical-migration-order.txt`) applies everything —
+> this document's own §2 steps included, in the same relative order —
+> deterministically, from a clean database, with zero manual SQL. See
+> `supabase/deploy/README.md` for prerequisites and usage, and
+> `docs/98`/`docs/100` for why this note exists. Sections §1 and §3–§7
+> below (project creation, auth policy, super admin, storage buckets,
+> Realtime/pg_cron, Edge Functions) remain accurate and are not
+> superseded — only §2's own file list is.
+
 ## 1. Create Supabase Project
 1. Go to https://supabase.com → New project
 2. Name: `corlink-production` (or `corlink-dev` for dev)
