@@ -27,7 +27,6 @@ async function init() {
       const hash = window.location.hash.slice(1).split('?')[0];
       if (!hash || hash === 'login') {
         Router.navigate('dashboard');
-        return;
       }
     }
   } catch (err) {

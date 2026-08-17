@@ -17,7 +17,12 @@
 
 // First-page size for the Supporting Tasks panel's "Load More" — same
 // value and reasoning as request-detail.js's SUPPORTING_TASKS_PAGE_SIZE.
-const SUPPORTING_TASKS_PAGE_SIZE = 5;
+// Prefixed (unlike a bare SUPPORTING_TASKS_PAGE_SIZE) because these are
+// plain <script> tags sharing one global scope — request-detail.js
+// already declares that exact identifier, and redeclaring it here would
+// throw a SyntaxError that aborts this entire script, same as
+// entry-detail.js/prisoner-letter-detail.js's own prefixed constants.
+const MEETING_SUPPORTING_TASKS_PAGE_SIZE = 5;
 
 const MeetingsView = {
   _state: {
@@ -992,7 +997,7 @@ const MeetingsView = {
     try {
       const [capabilities, page] = await Promise.all([
         MeetingsAPI.getMeetingTaskCapabilities(meeting.id),
-        MeetingsAPI.listMeetingTasks(meeting.id, { limit: SUPPORTING_TASKS_PAGE_SIZE, offset: 0 }),
+        MeetingsAPI.listMeetingTasks(meeting.id, { limit: MEETING_SUPPORTING_TASKS_PAGE_SIZE, offset: 0 }),
       ]);
       this._meetingTasksState[meeting.id] = { capabilities, items: page.items, totalCount: page.totalCount, error: null };
     } catch (err) {
@@ -2173,7 +2178,7 @@ const MeetingsView = {
     btn.innerHTML = `Loading… <span class="spinner"></span>`;
     try {
       const nextPage = await MeetingsAPI.listMeetingTasks(meeting.id, {
-        limit: SUPPORTING_TASKS_PAGE_SIZE, offset: state.items.length,
+        limit: MEETING_SUPPORTING_TASKS_PAGE_SIZE, offset: state.items.length,
       });
       state.items = [...state.items, ...nextPage.items];
       state.totalCount = nextPage.totalCount;
