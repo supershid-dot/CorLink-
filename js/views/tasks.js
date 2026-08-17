@@ -629,11 +629,13 @@ const TasksView = {
     const iAmWatching = this._myWatchedIds.has(t.id);
     const canAssignSelf = canManage && !iAmAssigned;
 
+    // "Unassign Me" was removed (docs/111) — unassign_task() is now
+    // manage-tier only, so a plain assignee can no longer remove their
+    // own assignment from this menu (or anywhere else).
     const items = [];
     if (canComplete) items.push(`<button class="menu-item" data-action="complete" data-task="${t.id}"><i class="ti ti-check"></i> Complete</button>`);
     if (canCancel) items.push(`<button class="menu-item" data-action="cancel" data-task="${t.id}"><i class="ti ti-x"></i> Cancel</button>`);
     if (canAssignSelf) items.push(`<button class="menu-item" data-action="assign-me" data-task="${t.id}"><i class="ti ti-user-plus"></i> Assign to Me</button>`);
-    if (iAmAssigned) items.push(`<button class="menu-item" data-action="unassign-me" data-task="${t.id}"><i class="ti ti-user-minus"></i> Unassign Me</button>`);
     items.push(`<button class="menu-item" data-action="${iAmWatching ? 'unwatch' : 'watch'}" data-task="${t.id}"><i class="ti ${iAmWatching ? 'ti-eye-off' : 'ti-eye'}"></i> ${iAmWatching ? 'Unwatch' : 'Watch'}</button>`);
 
     if (items.length === 0) return '';
@@ -672,7 +674,6 @@ const TasksView = {
           if (action === 'complete') await TasksAPI.completeTask(taskId);
           else if (action === 'cancel') await TasksAPI.cancelTask(taskId);
           else if (action === 'assign-me') await TasksAPI.assignTask(taskId, this._user.id);
-          else if (action === 'unassign-me') await TasksAPI.unassignTask(taskId, this._user.id);
           else if (action === 'watch') await TasksAPI.watchTask(taskId);
           else if (action === 'unwatch') await TasksAPI.unwatchTask(taskId);
           this._resetLoadedData();

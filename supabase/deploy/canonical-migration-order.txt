@@ -150,3 +150,16 @@ patch-attachments-authorization-restoration.sql
 #       in_progress/dependency-enforcement branch this patch preserves
 #       verbatim. ──────────────────────────────────────────────────────
 patch-task-assignee-permission-and-activation-fix.sql
+
+# ── 12. UAT correction (docs/111): Task "Start Work" action (frontend
+#       only — reuses update_task()'s existing dependency-aware
+#       Open -> In Progress path, no backend change) + assignment
+#       accountability (removes unassign_task()'s self-unassign
+#       branch). Redefines unassign_task() only — its own predecessor
+#       is patch-shared-task-foundation.sql (the only place it has
+#       ever been defined), so this just needs to run after that file,
+#       which it already does by canonical position. Placed here,
+#       after §11's permission reconciliation, purely for chronology
+#       (this is the next UAT round against that deployment), not
+#       because of any real dependency between the two. ───────────────
+patch-task-start-work-and-assignment-accountability.sql

@@ -37,6 +37,15 @@
 // there is no way to blank an already-set due date via this RPC. The
 // edit form below blocks that specific attempt with an honest message
 // rather than silently no-op'ing it (see docs/47 §Known limitations).
+//
+// UAT correction (docs/111): a "Start Work" action (Open -> In
+// Progress) was added to _actionsHtml — it reuses update_task()
+// exactly as it already existed, no new RPC. Self-unassign was
+// removed from the Assignees panel — unassign_task() is now
+// manage-tier only (supabase/patch-task-start-work-and-assignment-
+// accountability.sql), so there is no "Unassign Me" button and a
+// caller's own row no longer offers a remove control unless they are
+// also manage-tier. See _actionsHtml/_assigneesHtml below.
 
 const TaskDetailView = {
   async render(container, params = {}) {
@@ -1253,13 +1262,15 @@ const TaskDetailView = {
     return `<div class="avatar">${this._escapeHtml(AppShell.initials(name || '?'))}</div>`;
   },
 
-  // ── Assignees (T2D) — arbitrary add/remove for canManage(), plus
-  // self-service assign/unassign for anyone (assign_task()/
-  // unassign_task() both allow p_user_id = auth.uid() unconditionally
-  // for unassign; assign-self is still gated by canManage() since
-  // assign_task()'s own authorization has no special self-assign
-  // bypass — matching js/views/tasks.js's T2A permission mirror
-  // exactly). ───────────────────────────────────────────────────────
+  // ── Assignees (T2D) — arbitrary add/remove for canManage() only.
+  // Assignment is an accountable management action (docs/111): an
+  // assignee can no longer remove their own assignment, so
+  // unassign_task() is now manage-tier only and there is no self-
+  // service unassign UI at all — neither a bulk "Unassign Me" button
+  // nor a per-row remove control for the caller's own row. Assign-self
+  // is still gated by canManage() since assign_task()'s own
+  // authorization has no special self-assign bypass — matching
+  // js/views/tasks.js's T2A permission mirror exactly. ───────────────
   _assigneesHtml(t) {
     const assignees = t.assignees || [];
     const canManage = this._canManage();
@@ -1267,7 +1278,6 @@ const TaskDetailView = {
     const rows = assignees.map(a => {
       const name = this._userName(a.user_id);
       const { role, section } = this._roleAndSectionLabel(a.user_id);
-      const canRemove = canManage || a.user_id === this._user.id;
       return `
         <div class="task-people-row" data-assignee-row="${a.user_id}">
           ${this._avatarHtml(name)}
@@ -1275,7 +1285,7 @@ const TaskDetailView = {
             <div class="task-people-row-name">${this._escapeHtml(name)}</div>
             <div class="task-people-row-meta">${this._escapeHtml(role)} · ${this._escapeHtml(section)}</div>
           </div>
-          ${canRemove ? `<button class="icon-btn" data-remove-assignee="${a.user_id}" title="Remove"><i class="ti ti-x"></i></button>` : ''}
+          ${canManage ? `<button class="icon-btn" data-remove-assignee="${a.user_id}" title="Remove"><i class="ti ti-x"></i></button>` : ''}
         </div>
       `;
     }).join('');
@@ -1283,10 +1293,13 @@ const TaskDetailView = {
     const actions = [];
     if (canManage) actions.push(`<button class="btn btn-secondary btn-sm" data-open-assignee-picker><i class="ti ti-user-plus"></i> Add Assignee</button>`);
     if (!iAmAssigned && canManage) actions.push(`<button class="btn btn-secondary btn-sm" data-assign-self><i class="ti ti-user-check"></i> Assign to Me</button>`);
-    if (iAmAssigned) actions.push(`<button class="btn btn-secondary btn-sm" data-unassign-self><i class="ti ti-user-minus"></i> Unassign Me</button>`);
+    const hint = (iAmAssigned && !canManage)
+      ? `<p class="field-hint" style="margin-top:8px;">Contact the task owner or supervisor if reassignment is required.</p>`
+      : '';
     return `
       <div class="task-people-list">${rows || empty}</div>
       ${actions.length ? `<div class="task-detail-actions" style="margin-top:10px;">${actions.join('')}</div>` : ''}
+      ${hint}
       <div class="task-people-error alert alert-error hidden" data-assignees-error></div>
     `;
   },
@@ -1364,7 +1377,8 @@ const TaskDetailView = {
 
   _actionsHtml(t) {
     const canManage = this._canManage();
-    const completeAuthorized = ['in_progress', 'waiting'].includes(t.status) && (canManage || this._isActiveAssignee());
+    const isActiveAssignee = this._isActiveAssignee();
+    const completeAuthorized = ['in_progress', 'waiting'].includes(t.status) && (canManage || isActiveAssignee);
     const canComplete = completeAuthorized && this._dependencyLifecycleState?.can_complete === true;
     const canCancel = ['draft', 'open', 'in_progress', 'waiting'].includes(t.status) && canManage;
     // Draft -> Open activation (docs/107). update_task() already
@@ -1377,16 +1391,42 @@ const TaskDetailView = {
     // remains the same pre-existing, separately-scoped gap docs/47
     // already named and is not addressed here.
     const canStart = t.status === 'draft' && canManage;
+    // Open -> In Progress "Start Work" (docs/111). update_task() has
+    // ALREADY supported this — a manage-tier caller unconditionally,
+    // or an active assignee via the narrow v_is_pure_start_request
+    // exception (patch-task-assignee-permission-and-activation-fix.sql,
+    // docs/109) — since before this correction; only the frontend
+    // action to trigger it was missing. get_task_dependency_lifecycle_
+    // state()'s can_start column already evaluates the exact same
+    // eligibility (can_manage_task(), which itself includes an active-
+    // assignee branch, AND status in ('open','waiting') AND not
+    // blocked) — reused here rather than re-deriving it, and no extra
+    // database call is made: this state is already fetched for the
+    // Complete button above. Restricted to status === 'open' here
+    // (not 'waiting', which that column also allows) — this milestone
+    // is scoped to Open -> In Progress only, see docs/111.
+    const startWorkAuthorized = t.status === 'open' && (canManage || isActiveAssignee);
+    const canStartWork = startWorkAuthorized && this._dependencyLifecycleState?.can_start === true;
 
     const btn = (label, icon, action) => `<button class="btn btn-secondary btn-sm" data-task-detail-action="${action}"><i class="ti ${icon}"></i> ${label}</button>`;
     const items = [];
     if (canStart) items.push(btn('Start Task', 'ti-player-play', 'start'));
+    if (canStartWork) items.push(btn('Start Work', 'ti-player-play', 'start_work'));
+    else if (startWorkAuthorized && this._dependencyLifecycleState?.is_blocked) items.push('<button class="btn btn-secondary btn-sm" data-task-detail-action="start_work" disabled aria-disabled="true"><i class="ti ti-player-play"></i> Start Work</button>');
     if (canComplete) items.push(btn('Complete', 'ti-check', 'complete'));
     else if (completeAuthorized && this._dependencyLifecycleState?.is_blocked) items.push('<button class="btn btn-secondary btn-sm" data-task-detail-action="complete" disabled aria-disabled="true"><i class="ti ti-check"></i> Complete</button>');
     if (canCancel) items.push(btn('Cancel', 'ti-x', 'cancel'));
 
+    // Open -> In Progress and In Progress/Waiting -> Completed are
+    // mutually exclusive by status, so at most one of these two
+    // "blocked" explanations is ever produced for a given task.
     let explanation = '';
-    if (completeAuthorized && this._dependencyLifecycleState?.is_blocked) {
+    if (startWorkAuthorized && this._dependencyLifecycleState?.is_blocked) {
+      const unresolved = this._dependencyLifecycleState.unresolved_prerequisite_count;
+      explanation = `<div class="alert alert-warning" data-task-dependency-blocked>${unresolved != null ? `This task cannot be started because ${this._escapeHtml(unresolved)} prerequisite${Number(unresolved) === 1 ? ' is' : 's are'} unresolved.` : 'This task cannot be started because one or more prerequisite tasks are not complete.'}</div>`;
+    } else if (startWorkAuthorized && this._dependencyLifecycleError) {
+      explanation = `<div class="alert alert-error" data-dependency-state-error>Couldn’t verify dependency state. Start Work is unavailable. <button class="btn btn-secondary btn-sm" data-retry-dependency-state>Retry</button></div>`;
+    } else if (completeAuthorized && this._dependencyLifecycleState?.is_blocked) {
       const unresolved = this._dependencyLifecycleState.unresolved_prerequisite_count;
       explanation = `<div class="alert alert-warning" data-task-dependency-blocked>${unresolved != null ? `This task is blocked by ${this._escapeHtml(unresolved)} unresolved prerequisite${Number(unresolved) === 1 ? '' : 's'}.` : 'This task is blocked because one or more prerequisites are unresolved.'}</div>`;
     } else if (completeAuthorized && this._dependencyLifecycleError) {
@@ -1500,9 +1540,10 @@ const TaskDetailView = {
   // valid_task_status_transition() allow-list permits, and the RPC/
   // trigger remain the real, final authority regardless. ─────────────
   _LIFECYCLE_ACTION_COPY: {
-    start:    { title: 'Start this task?', message: 'This moves the task to Open so an assignee can begin work on it.', confirmLabel: 'Start Task', progressLabel: 'Starting…', hasNote: false },
-    complete: { title: 'Complete this task?', message: "This marks the task complete and can't be undone from here.", confirmLabel: 'Complete Task', progressLabel: 'Completing…', hasNote: true, noteFieldLabel: 'Notes (optional)' },
-    cancel:   { title: 'Cancel this task?', message: "This cancels the task and can't be undone from here.", confirmLabel: 'Cancel Task', progressLabel: 'Cancelling…', hasNote: true, noteFieldLabel: 'Reason (optional)', destructive: true },
+    start:      { title: 'Start this task?', message: 'This moves the task to Open so an assignee can begin work on it.', confirmLabel: 'Start Task', progressLabel: 'Starting…', hasNote: false },
+    start_work: { title: 'Start work on this task?', message: 'This will move the task to In Progress.', confirmLabel: 'Start Work', progressLabel: 'Starting…', hasNote: false },
+    complete:   { title: 'Complete this task?', message: "This marks the task complete and can't be undone from here.", confirmLabel: 'Complete Task', progressLabel: 'Completing…', hasNote: true, noteFieldLabel: 'Notes (optional)' },
+    cancel:     { title: 'Cancel this task?', message: "This cancels the task and can't be undone from here.", confirmLabel: 'Cancel Task', progressLabel: 'Cancelling…', hasNote: true, noteFieldLabel: 'Reason (optional)', destructive: true },
   },
   _confirmLifecycleAction(action) {
     const copy = this._LIFECYCLE_ACTION_COPY[action];
@@ -1538,6 +1579,7 @@ const TaskDetailView = {
       btn.innerHTML = `<span class="spinner spinner--dark" style="width:14px;height:14px;"></span> ${copy.progressLabel}`;
       try {
         if (action === 'start') await TasksAPI.updateTask(this._taskId, { status: 'open' });
+        else if (action === 'start_work') await TasksAPI.updateTask(this._taskId, { status: 'in_progress' });
         else if (action === 'complete') await TasksAPI.completeTask(this._taskId, note);
         else await TasksAPI.cancelTask(this._taskId, note);
         this._closeModal();
@@ -1600,8 +1642,6 @@ const TaskDetailView = {
     });
     panel.querySelector('[data-assign-self]')?.addEventListener('click', (e) => this._runPeopleMutation(e.currentTarget, '[data-assignees-error]',
       () => TasksAPI.assignTask(this._taskId, this._user.id)));
-    panel.querySelector('[data-unassign-self]')?.addEventListener('click', (e) => this._runPeopleMutation(e.currentTarget, '[data-assignees-error]',
-      () => TasksAPI.unassignTask(this._taskId, this._user.id)));
     panel.querySelector('[data-open-assignee-picker]')?.addEventListener('click', () => this._openAssigneePickerModal());
   },
 
