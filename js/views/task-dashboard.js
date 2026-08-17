@@ -204,7 +204,10 @@ const TaskDashboardView = {
               <h2 class="page-title">Tasks Dashboard</h2>
               <p class="page-subtitle">An overview of tasks assigned to you, tasks you oversee, and what needs attention.</p>
             </div>
-            <a href="#tasks" class="btn btn-secondary btn-sm"><i class="ti ti-list"></i> View Task List</a>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <button type="button" class="btn btn-primary btn-sm" id="create-task-btn"><i class="ti ti-plus"></i> Create Task</button>
+              <a href="#tasks" class="btn btn-secondary btn-sm"><i class="ti ti-list"></i> View Task List</a>
+            </div>
           </div>
           <div class="task-dashboard-grid">
             ${this._visibleWidgets().map(w => `
@@ -232,6 +235,7 @@ const TaskDashboardView = {
 
   _bindShell() {
     AppShell.bindTopbar();
+    document.getElementById('create-task-btn')?.addEventListener('click', () => TaskCreateModal.open(this._user));
   },
 
   _widgetLoadingHtml(w) {

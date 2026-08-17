@@ -140,6 +140,7 @@ const TasksView = {
               <h2 class="page-title">Tasks</h2>
               <p class="page-subtitle">Work items you're assigned to, created, or oversee — across every module.</p>
             </div>
+            <button type="button" class="btn btn-primary btn-sm" id="create-task-btn"><i class="ti ti-plus"></i> Create Task</button>
           </div>
 
           <div class="tabs" id="tasks-scope-tabs">
@@ -156,6 +157,7 @@ const TasksView = {
 
   _bindShell() {
     AppShell.bindTopbar();
+    document.getElementById('create-task-btn')?.addEventListener('click', () => TaskCreateModal.open(this._user));
     document.querySelectorAll('#tasks-scope-tabs .tab-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         if (btn.dataset.scope === this._state.scope) return;
