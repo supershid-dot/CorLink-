@@ -1,12 +1,12 @@
 # 111 — Task "Start Work" Action + Assignment Accountability (UAT Fix)
 
-**Outcome: READY FOR STAGING DEPLOYMENT.** Live staging UAT against the
-reconciled permission fix (docs/108-110) surfaced two follow-up findings.
-Both are corrected here: a frontend-only "Start Work" action that reuses
-`update_task()`'s already-shipped, dependency-aware Open → In Progress path,
-and a backend authorization change removing self-unassign from
-`unassign_task()`. Verified on a disposable local Postgres instance;
-**no live Supabase migration was performed in this checkpoint.**
+**Outcome: DEPLOYED.** Live staging UAT against the reconciled permission fix
+(docs/108-110) surfaced two follow-up findings. Both are corrected here: a
+frontend-only "Start Work" action that reuses `update_task()`'s
+already-shipped, dependency-aware Open → In Progress path, and a backend
+authorization change removing self-unassign from `unassign_task()`. Verified
+first on a disposable local Postgres instance, then applied to and verified
+on CorLink Staging (`vjobntuyzymhcuanyeak`). Production was never touched.
 
 Repository: `supershid-dot/CorLink-`. Development branch:
 `claude/phase-2-continuation-mc4hr1`. Staging branch:
@@ -244,21 +244,66 @@ transparency call made in docs/109 for the identical issue.
 | `task-standalone-creation-frontend.test.js` | 13/13 PASS |
 | `task-relationships-frontend.test.js` | 59/59 PASS |
 
-## 14. Existing UAT task preserved
+## 14. Staging deployment
 
-`TSK-MCS-STG-2026-0001` ("Arrange meeting", assigned to Room Manager) was
-**not** touched by anything in this checkpoint — all verification ran on a
-disposable local Postgres instance seeded with its own `ac0000...`-prefixed
-fixtures, fully cleaned up afterward. No local-only test or migration
-targeted live Supabase in this checkpoint at all.
+After the implementation commit (`951345c`) was pushed and
+`feature/corlink-platform-migration` was fast-forwarded to match, the
+incremental patch — **only**
+`supabase/patch-task-start-work-and-assignment-accountability.sql`, not the
+full canonical chain — was applied directly to CorLink Staging
+(`vjobntuyzymhcuanyeak`, positively distinct from `infjjroktzzhaxjvfknr`
+"corlink-production", confirmed via `list_projects`).
 
-## 15. Production untouched
+Pre-migration check: the live `unassign_task()` was inspected first and
+confirmed byte-for-byte identical to the expected predecessor (still
+carrying the `OR p_user_id = v_actor` branch this patch removes) — safe to
+apply.
+
+Migration applied via `apply_migration` using the exact SQL committed to the
+repository (not manually retyped). Post-migration, the live function was
+re-inspected: the self-unassign branch is gone, every other branch
+(creator/supervisor-in-scope/admin, the idempotent no-op, the audit insert)
+is unchanged, and exactly 1 overload each of `unassign_task`, `update_task`,
+`assign_task`, and `complete_task` exists (no signature drift).
+
+## 15. Live staging verification
+
+A single transaction (`BEGIN` ... `ROLLBACK`), using the real staging
+personas (Normal staff = creator, Room manager = assignee,
+Supervisor = supervisor-in-scope), exercised the corrected function against
+one disposable task created and destroyed entirely inside that transaction —
+the real `TSK-MCS-STG-2026-0001` fixture was never touched:
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Active assignee (Room manager) cannot self-unassign | PASS |
+| 2 | Creator (manage-tier) can remove that assignment | PASS |
+| 3 | Supervisor-in-scope can also remove an assignment (distinct branch) | PASS |
+| 4 | Assignee's pure Start Work request (unblocked) still succeeds, unaffected by this patch | PASS |
+| 5 | Audit evidence: correct assigned/unassigned counts, no self-unassign row | PASS |
+
+**5 of 5 live assertions pass.** After the `ROLLBACK`, staging's task count
+was independently re-checked and confirmed still exactly 1 — only the real
+`TSK-MCS-STG-2026-0001` fixture, no residue from the disposable verification
+task.
+
+## 16. Existing UAT task preserved
+
+`TSK-MCS-STG-2026-0001` ("Arrange meeting", assigned to Room manager) was
+**not** modified by this checkpoint. Its status was independently observed
+to have organically progressed to `open` between sessions (the human tester
+using the "Start Task" button docs/110 handed off, per that document's own
+final recommendation) — this was pre-existing state observed, not caused by
+anything in this checkpoint; every mutation this checkpoint performed against
+live staging happened inside the single rolled-back transaction in §15.
+
+## 17. Production untouched
 
 `main` was not read, fetched into, or modified. Production Supabase
 (`infjjroktzzhaxjvfknr`) was never referenced by any command in this
 checkpoint.
 
-## 16. Future enhancement (recorded, not built)
+## 18. Future enhancement (recorded, not built)
 
 "Request Reassignment" / "Decline Assignment" / "Return Task" — a
 formal, assignee-initiated reassignment-request workflow — has no
@@ -268,7 +313,7 @@ hint ("Contact the task owner or supervisor if reassignment is required.")
 is a placeholder pointing at the manual path until such a workflow is
 designed and scoped separately.
 
-## 17. Remaining known Task UAT items
+## 19. Remaining known Task UAT items
 
 - The pre-existing cleanup-ordering bug in
   `test-task-dependency-lifecycle-enforcement.sql` (§12) remains unfixed —
@@ -277,5 +322,5 @@ designed and scoped separately.
   Progress directly (only the flow this milestone adds, via Start Work, for
   assignees, plus whatever pre-existing affordance already covers
   manage-tier — not investigated further here, unchanged from docs/110 §15).
-- A formal reassignment-request workflow (§16) remains a future,
+- A formal reassignment-request workflow (§18) remains a future,
   separately-scoped enhancement.
