@@ -141,3 +141,9 @@ patch-prisoner-letters-notification-integration.sql
 #       patch-prisoner-letters-server-mutation-foundation.sql, whose
 #       own attachments policy restatement it restores branches to. ──
 patch-attachments-authorization-restoration.sql
+
+# ── 11. UAT correction (docs/107): Task assignee permission tightening
+#       + Draft activation action. Must run after
+#       patch-shared-task-foundation.sql, whose update_task() it
+#       restates. ────────────────────────────────────────────────────
+patch-task-assignee-permission-and-activation-fix.sql

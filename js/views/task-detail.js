@@ -384,16 +384,19 @@ const TaskDetailView = {
   _isActiveAssignee() {
     return (this._task.assignees || []).some(a => a.user_id === this._user.id);
   },
-  // update_task()'s own authorization (supabase/patch-shared-task-
-  // foundation.sql) is is_super_admin() OR creator OR ACTIVE ASSIGNEE
-  // OR supervisor-in-scope — the exact same shape complete_task() uses
-  // (see the canComplete mirror in _actionsHtml below), NOT the
-  // narrower creator/supervisor-only shape cancel_task()/assign_task()
-  // use. _canManage() alone (no assignee branch) would under-mirror
-  // this RPC and hide Edit from someone the backend would actually let
-  // edit — this is the corrected predicate T3C needs.
+  // update_task()'s authorization (supabase/patch-task-assignee-
+  // permission-and-activation-fix.sql, docs/107) is now manage-tier
+  // only — is_super_admin() OR creator OR supervisor-in-scope — same
+  // shape as cancel_task()/assign_task(). It previously also allowed
+  // any active assignee (matching complete_task()'s shape), which let
+  // a plain assignee redefine title/description/priority/section set
+  // by the task's creator; that branch was removed as a UAT
+  // correction. _canEdit() mirrors this exactly, so it's simply
+  // _canManage() now — see _canUploadAttachment()/_canDeleteAttachment()
+  // below for the one place that still needs the OLD (unchanged)
+  // broader predicate.
   _canEdit() {
-    return this._canManage() || this._isActiveAssignee();
+    return this._canManage();
   },
 
   _contentHtml() {
@@ -622,19 +625,26 @@ const TaskDetailView = {
     }
   },
 
-  // Mirrors attachments_insert's 'task' branch (patch-task-
-  // attachments.sql) exactly — same predicate as _canEdit() above,
-  // since that RLS branch was deliberately written to match
-  // update_task()'s own authorization. Delete mirrors
-  // attachments_delete's 'task' branch: uploaded_by = me AND the task
-  // is still editable by me — losing edit access (e.g. unassigned)
-  // revokes delete on your own past uploads too, live, not frozen at
-  // upload time. See docs/48 §Permissions.
+  // Mirrors attachments_insert/attachments_delete's 'task' branch
+  // (most recently restated in patch-attachments-authorization-
+  // restoration.sql) exactly: is_super_admin() OR creator OR ACTIVE
+  // ASSIGNEE OR supervisor-in-scope OR admin. That RLS policy was
+  // deliberately written to match update_task()'s ORIGINAL (pre-
+  // docs/107) authorization shape and was NOT changed by that UAT
+  // correction — attaching a file to your own assigned work is a
+  // legitimate contribute-tier action, unlike redefining the task's
+  // title/description/priority, so this predicate intentionally still
+  // includes the active-assignee branch _canEdit() no longer has. See
+  // docs/48 §Permissions and docs/107 for why these two predicates are
+  // now allowed to diverge.
+  _canManageOwnAttachments() {
+    return this._canManage() || this._isActiveAssignee();
+  },
   _canUploadAttachment() {
-    return this._canEdit();
+    return this._canManageOwnAttachments();
   },
   _canDeleteAttachment(a) {
-    return a.uploaded_by === this._user.id && this._canEdit();
+    return a.uploaded_by === this._user.id && this._canManageOwnAttachments();
   },
 
   _formatBytes(bytes) {
@@ -1357,9 +1367,20 @@ const TaskDetailView = {
     const completeAuthorized = ['in_progress', 'waiting'].includes(t.status) && (canManage || this._isActiveAssignee());
     const canComplete = completeAuthorized && this._dependencyLifecycleState?.can_complete === true;
     const canCancel = ['draft', 'open', 'in_progress', 'waiting'].includes(t.status) && canManage;
+    // Draft -> Open activation (docs/107). update_task() already
+    // permits this transition (valid_task_status_transition() has
+    // always allowed draft->open; update_task()'s own status guard
+    // only blocks setting completed/cancelled directly) — no new RPC,
+    // manage-tier only (matches update_task()'s own, now-narrowed
+    // authorization). No button existed for this before this
+    // correction; the rest of the lifecycle chain (open->in_progress)
+    // remains the same pre-existing, separately-scoped gap docs/47
+    // already named and is not addressed here.
+    const canStart = t.status === 'draft' && canManage;
 
     const btn = (label, icon, action) => `<button class="btn btn-secondary btn-sm" data-task-detail-action="${action}"><i class="ti ${icon}"></i> ${label}</button>`;
     const items = [];
+    if (canStart) items.push(btn('Start Task', 'ti-player-play', 'start'));
     if (canComplete) items.push(btn('Complete', 'ti-check', 'complete'));
     else if (completeAuthorized && this._dependencyLifecycleState?.is_blocked) items.push('<button class="btn btn-secondary btn-sm" data-task-detail-action="complete" disabled aria-disabled="true"><i class="ti ti-check"></i> Complete</button>');
     if (canCancel) items.push(btn('Cancel', 'ti-x', 'cancel'));
@@ -1468,38 +1489,41 @@ const TaskDetailView = {
     });
   },
 
-  // ── Lifecycle actions (T3C) — Complete/Cancel, each behind a
-  // confirmation modal with an optional notes/reason field (both RPCs
-  // already accept one — p_notes/p_reason — reusing it rather than
-  // adding anything new). No client-side status-transition logic is
-  // duplicated here: _actionsHtml above only ever offers an action the
-  // backend's own valid_task_status_transition() allow-list permits,
-  // and the RPC/trigger remain the real, final authority regardless. ──
+  // ── Lifecycle actions — Start/Complete/Cancel, each behind a
+  // confirmation modal. Complete/Cancel keep their optional notes/
+  // reason field (both RPCs already accept one — p_notes/p_reason —
+  // reusing it rather than adding anything new); Start has no such
+  // field since update_task() takes no note/reason parameter at all —
+  // showing one would silently discard whatever the user typed. No
+  // client-side status-transition logic is duplicated here:
+  // _actionsHtml above only ever offers an action the backend's own
+  // valid_task_status_transition() allow-list permits, and the RPC/
+  // trigger remain the real, final authority regardless. ─────────────
+  _LIFECYCLE_ACTION_COPY: {
+    start:    { title: 'Start this task?', message: 'This moves the task to Open so an assignee can begin work on it.', confirmLabel: 'Start Task', progressLabel: 'Starting…', hasNote: false },
+    complete: { title: 'Complete this task?', message: "This marks the task complete and can't be undone from here.", confirmLabel: 'Complete Task', progressLabel: 'Completing…', hasNote: true, noteFieldLabel: 'Notes (optional)' },
+    cancel:   { title: 'Cancel this task?', message: "This cancels the task and can't be undone from here.", confirmLabel: 'Cancel Task', progressLabel: 'Cancelling…', hasNote: true, noteFieldLabel: 'Reason (optional)', destructive: true },
+  },
   _confirmLifecycleAction(action) {
-    const isComplete = action === 'complete';
-    const title = isComplete ? 'Complete this task?' : 'Cancel this task?';
-    const message = isComplete
-      ? "This marks the task complete and can't be undone from here."
-      : "This cancels the task and can't be undone from here.";
-    const noteFieldLabel = isComplete ? 'Notes (optional)' : 'Reason (optional)';
-    const confirmLabel = isComplete ? 'Complete Task' : 'Cancel Task';
+    const copy = this._LIFECYCLE_ACTION_COPY[action];
     // No .btn-danger class exists in this app (confirmed against
     // css/style.css) — mirrors the exact same inline destructive-tone
     // style js/views/meetings.js's own delete confirmations already use,
     // rather than inventing a new button variant for this one case.
-    const confirmBtnStyle = isComplete ? '' : 'style="background:var(--color-error-bg); color:var(--color-error-dark);"';
+    const confirmBtnStyle = copy.destructive ? 'style="background:var(--color-error-bg); color:var(--color-error-dark);"' : '';
 
     this._openModal(`
-      <h3>${title}</h3>
-      <p>${message}</p>
+      <h3>${copy.title}</h3>
+      <p>${copy.message}</p>
+      ${copy.hasNote ? `
       <div class="field-group">
-        <label class="field-label" for="task-lifecycle-note">${noteFieldLabel}</label>
+        <label class="field-label" for="task-lifecycle-note">${copy.noteFieldLabel}</label>
         <textarea class="field-input-plain" id="task-lifecycle-note" rows="3"></textarea>
-      </div>
+      </div>` : ''}
       <div class="task-lifecycle-error alert alert-error hidden" id="task-lifecycle-error"></div>
       <div class="modal-actions">
         <button type="button" class="btn btn-secondary" data-close-modal>Back</button>
-        <button type="button" class="btn" ${confirmBtnStyle} id="task-lifecycle-confirm-btn">${confirmLabel}</button>
+        <button type="button" class="btn" ${confirmBtnStyle} id="task-lifecycle-confirm-btn">${copy.confirmLabel}</button>
       </div>
     `);
 
@@ -1507,13 +1531,14 @@ const TaskDetailView = {
       const btn = e.currentTarget;
       const backBtn = document.getElementById('modal-root').querySelector('[data-close-modal]');
       const errEl = document.getElementById('task-lifecycle-error');
-      const note = document.getElementById('task-lifecycle-note').value.trim() || null;
+      const note = copy.hasNote ? (document.getElementById('task-lifecycle-note').value.trim() || null) : null;
       btn.disabled = true;
       if (backBtn) backBtn.disabled = true;
       const originalLabel = btn.innerHTML;
-      btn.innerHTML = `<span class="spinner spinner--dark" style="width:14px;height:14px;"></span> ${isComplete ? 'Completing…' : 'Cancelling…'}`;
+      btn.innerHTML = `<span class="spinner spinner--dark" style="width:14px;height:14px;"></span> ${copy.progressLabel}`;
       try {
-        if (isComplete) await TasksAPI.completeTask(this._taskId, note);
+        if (action === 'start') await TasksAPI.updateTask(this._taskId, { status: 'open' });
+        else if (action === 'complete') await TasksAPI.completeTask(this._taskId, note);
         else await TasksAPI.cancelTask(this._taskId, note);
         this._closeModal();
         await this._load();
