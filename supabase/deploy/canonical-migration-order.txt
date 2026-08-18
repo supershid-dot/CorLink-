@@ -163,3 +163,21 @@ patch-task-assignee-permission-and-activation-fix.sql
 #       (this is the next UAT round against that deployment), not
 #       because of any real dependency between the two. ───────────────
 patch-task-start-work-and-assignment-accountability.sql
+
+# ── 13. UAT correction (docs/112): Task search UX for existing-task
+#       selectors (Add Prerequisite, Add Relationship). Restates
+#       search_tasks_for_dependency() -- its only prior predecessor is
+#       patch-task-dependency-candidate-management.sql (the last file
+#       to define it; every authorization/exclusion line from that
+#       version is preserved verbatim here, only the text-matching
+#       predicate and ORDER BY change) -- and adds the new
+#       search_tasks_for_relationship() RPC, which has no predecessor
+#       (Add Relationship previously queried `tasks` directly from the
+#       client, never through an RPC). Neither function this patch
+#       touches has been redefined by section 11 or 12 above, so
+#       ordering relative to those two is immaterial; placed last
+#       purely for chronology. Also adds pg_trgm + two GIN trigram
+#       indexes, dropping the two now-redundant text_pattern_ops
+#       prefix indexes patch-task-dependencies.sql added (superseded
+#       by this patch, not by anything in between). ──────────────────
+patch-task-search-and-linking-candidates.sql

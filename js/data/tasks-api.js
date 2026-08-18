@@ -246,17 +246,21 @@ const TasksAPI = (() => {
       if (error) throw error;
     },
 
-    async searchRelationshipCandidates(taskId, organizationId, query, limit = 20) {
-      const term = (query || '').trim().replace(/[^\p{L}\p{N}\s_-]/gu, ' ').replace(/\s+/g, ' ');
+    // Server-authoritative — search_tasks_for_relationship() (supabase/patch-
+    // task-search-and-linking-candidates.sql) enforces can_view_task()+
+    // can_manage_task() on both this Task and every candidate, and excludes
+    // any Task already actively related in either direction, mirroring
+    // create_task_relationship()'s own duplicate-pair check exactly. Never
+    // queries `tasks` directly from the client.
+    async searchRelationshipCandidates(taskId, query, limit = 20) {
+      const term = (query || '').trim();
       if (!term) return [];
       const db = getSupabase();
-      const { data, error } = await db.from('tasks')
-        .select('id, task_number, title, status, priority, due_date')
-        .eq('organization_id', organizationId)
-        .neq('id', taskId)
-        .or(`task_number.ilike.%${term}%,title.ilike.%${term}%`)
-        .order('updated_at', { ascending: false })
-        .limit(Math.min(Math.max(limit, 1), 50));
+      const { data, error } = await db.rpc('search_tasks_for_relationship', {
+        p_task_id: taskId,
+        p_query: term,
+        p_limit: Math.min(Math.max(limit, 1), 50),
+      });
       if (error) throw error;
       return data || [];
     },

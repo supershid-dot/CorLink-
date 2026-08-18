@@ -9,6 +9,7 @@ const viewSource = fs.readFileSync(path.join(root, 'js/views/task-detail.js'), '
 const apiSource = fs.readFileSync(path.join(root, 'js/data/tasks-api.js'), 'utf8');
 const cssSource = fs.readFileSync(path.join(root, 'css/style.css'), 'utf8');
 const candidateSearchSource = fs.readFileSync(path.join(root, 'supabase/patch-task-dependency-candidate-management.sql'), 'utf8');
+const taskSearchSource = fs.readFileSync(path.join(root, 'supabase/patch-task-search-and-linking-candidates.sql'), 'utf8');
 const results = [];
 
 async function check(name, fn) {
@@ -73,11 +74,49 @@ async function check(name, fn) {
     await page.locator('[data-remove-relationship]').click();
     assert.match(await page.locator('[data-relationships-error]').innerText(), /denied/);
   });
-  await check('search excludes existing relationship', async () => {
-    await page.evaluate(() => { window.__view._relationships=[{related_task_id:'task-b'}]; window.TasksAPI.searchRelationshipCandidates=async()=>[{id:'task-b',task_number:'TSK-2',title:'B',status:'open'},{id:'task-c',task_number:'TSK-3',title:'C',status:'open'}]; window.__view._openRelationshipModal(); });
+  // UAT search correction: exclusion of already-related/unauthorized/cross-
+  // org candidates is now entirely server-side (search_tasks_for_relationship()
+  // mirrors create_task_relationship()'s own duplicate-pair check), so the
+  // frontend no longer receives — and therefore never needs to disable — an
+  // already-related candidate. Verified two ways: the RPC only ever returns
+  // selectable candidates (frontend behavior), and the exclusion contract
+  // itself is present server-side (source check).
+  await check('candidate rows are selectable (server already excludes duplicates)', async () => {
+    await page.evaluate(() => { window.__view._relationships=[{related_task_id:'task-b'}]; window.TasksAPI.searchRelationshipCandidates=async()=>[{id:'task-c',task_number:'TSK-3',title:'C',status:'open',due_date:null}]; window.__view._openRelationshipModal(); });
     await page.locator('#task-relationship-search').fill('TSK'); await page.waitForTimeout(350);
-    assert.strictEqual(await page.locator('[data-select-related-task="task-b"][disabled]').count(), 1);
     assert.strictEqual(await page.locator('[data-select-related-task="task-c"]:not([disabled])').count(), 1);
+  });
+  await check('relationship search requires at least 2 characters', async () => {
+    await page.evaluate(() => { window.__searchCalls = 0; window.TasksAPI.searchRelationshipCandidates = async () => { window.__searchCalls++; return []; }; });
+    await page.locator('#task-relationship-search').fill('T'); await page.waitForTimeout(350);
+    assert.strictEqual(await page.evaluate(() => window.__searchCalls), 0);
+    assert.match(await page.locator('#task-relationship-results').innerText(), /at least 2 characters/);
+    // Restore a real search + selection — this suite's later 'create
+    // failure' step depends on task-c still being rendered and selectable.
+    await page.evaluate(() => { window.TasksAPI.searchRelationshipCandidates = async () => [{id:'task-c',task_number:'TSK-3',title:'C',status:'open',due_date:null}]; });
+    await page.locator('#task-relationship-search').fill('TSK'); await page.waitForTimeout(350);
+    await page.locator('[data-select-related-task="task-c"]').click();
+  });
+  await check('relationship exclusion contract: current task excluded', async () => assert.match(taskSearchSource, /candidate\.id <> current_task\.id/));
+  await check('relationship exclusion contract: cross-organization excluded', async () => assert.match(taskSearchSource, /candidate\.organization_id = current_task\.organization_id/));
+  await check('relationship exclusion contract: requires manage authority on both tasks', async () => {
+    const fn = taskSearchSource.slice(taskSearchSource.indexOf('FUNCTION search_tasks_for_relationship'));
+    assert.match(fn, /can_manage_task\(current_task\.id\)/);
+    assert.match(fn, /can_manage_task\(candidate\.id\)/);
+  });
+  await check('relationship exclusion contract: already-related pair excluded', async () => {
+    const fn = taskSearchSource.slice(taskSearchSource.indexOf('FUNCTION search_tasks_for_relationship'));
+    assert.match(fn, /LEAST\(tr\.source_task_id, tr\.target_task_id\) = LEAST\(current_task\.id, candidate\.id\)/);
+    assert.match(fn, /GREATEST\(tr\.source_task_id, tr\.target_task_id\) = GREATEST\(current_task\.id, candidate\.id\)/);
+  });
+  await check('search contract: substring matching, not prefix-only', async () => {
+    assert.match(taskSearchSource, /LIKE '%' \|\| lower\(btrim\(p_query\)\) \|\| '%'/);
+  });
+  await check('search contract: 2-character minimum enforced server-side', async () => {
+    assert.match(taskSearchSource, /length\(btrim\(COALESCE\(p_query, ''\)\)\) >= 2/);
+  });
+  await check('no direct client-side `tasks` table query for relationship search', async () => {
+    assert.doesNotMatch(apiSource.slice(apiSource.indexOf('searchRelationshipCandidates'), apiSource.indexOf('searchRelationshipCandidates') + 600), /from\('tasks'\)/);
   });
   await check('create failure', async () => {
     await page.locator('[data-select-related-task="task-c"]').click();
@@ -222,13 +261,39 @@ async function check(name, fn) {
     await page.locator('#dependency-candidate-search').fill('Candidate'); await page.waitForTimeout(320);
     assert.deepStrictEqual(await page.evaluate(() => window.__searchQueries),['TSK-99','Candidate']);
   });
-  await check('current Task exclusion contract', async () => assert.match(candidateSearchSource,/candidate\.id <> current_task\.id/));
-  await check('hidden Task exclusion contract', async () => assert.match(candidateSearchSource,/can_view_task\(candidate\.id\)/));
-  await check('existing dependency exclusion contract', async () => {
-    assert.match(candidateSearchSource,/td\.dependent_task_id = current_task\.id AND td\.prerequisite_task_id = candidate\.id/);
-    assert.match(candidateSearchSource,/td\.dependent_task_id = candidate\.id AND td\.prerequisite_task_id = current_task\.id/);
+  await check('dependency search requires at least 2 characters', async () => {
+    await page.evaluate(() => { window.__searchQueries = []; });
+    await page.locator('#dependency-candidate-search').fill('T'); await page.waitForTimeout(320);
+    assert.deepStrictEqual(await page.evaluate(() => window.__searchQueries), []);
+    assert.match(await page.locator('#dependency-candidate-results').innerText(), /at least 2 characters/);
   });
-  await check('cross-organization exclusion contract', async () => assert.match(candidateSearchSource,/candidate\.organization_id = current_task\.organization_id/));
+  await check('dependency search clear no-result state', async () => {
+    await page.evaluate(() => { window.TasksAPI.searchTasksForDependency = async () => []; });
+    await page.locator('#dependency-candidate-search').fill('zzzznomatch'); await page.waitForTimeout(320);
+    assert.match(await page.locator('#dependency-candidate-results').innerText(), /No eligible matching Tasks/);
+    // Restore the working mock and re-search so the candidate row this
+    // suite's later "successful prerequisite add" step depends on is
+    // present again in the DOM.
+    await page.evaluate(() => { window.TasksAPI.searchTasksForDependency = async (_id, q) => { window.__searchQueries.push(q); return [{id:'candidate',task_number:'TSK-99',title:'Candidate',status:'open',priority:'normal'}]; }; });
+    await page.locator('#dependency-candidate-search').fill('Candidate'); await page.waitForTimeout(320);
+    assert.strictEqual(await page.locator('[data-select-dependency-task="candidate"]').count(), 1);
+  });
+  // search_tasks_for_dependency() was last redefined by
+  // patch-task-search-and-linking-candidates.sql (UAT search correction,
+  // runs after patch-task-dependency-candidate-management.sql in canonical
+  // order and restates it) — that later file is what's actually live, so
+  // the exclusion-contract checks below assert against IT, not the
+  // superseded predecessor. candidateSearchSource is kept above only for
+  // reference/history; no assertion in this suite still reads from it.
+  const dependencySearchFn = taskSearchSource.slice(taskSearchSource.indexOf('FUNCTION search_tasks_for_dependency'), taskSearchSource.indexOf('FUNCTION search_tasks_for_relationship'));
+  await check('current Task exclusion contract', async () => assert.match(dependencySearchFn,/candidate\.id <> current_task\.id/));
+  await check('hidden Task exclusion contract', async () => assert.match(dependencySearchFn,/can_view_task\(candidate\.id\)/));
+  await check('existing dependency exclusion contract', async () => {
+    assert.match(dependencySearchFn,/td\.dependent_task_id = current_task\.id AND td\.prerequisite_task_id = candidate\.id/);
+    assert.match(dependencySearchFn,/td\.dependent_task_id = candidate\.id AND td\.prerequisite_task_id = current_task\.id/);
+  });
+  await check('cross-organization exclusion contract', async () => assert.match(dependencySearchFn,/candidate\.organization_id = current_task\.organization_id/));
+  await check('dependency search matches a substring, not only a prefix', async () => assert.match(dependencySearchFn,/LIKE '%' \|\| lower\(btrim\(p_query\)\) \|\| '%'/));
   await check('successful prerequisite add', async () => {
     await page.locator('[data-select-dependency-task="candidate"]').click();
     await page.evaluate(() => {

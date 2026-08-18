@@ -868,21 +868,72 @@ const TaskDetailView = {
     }));
   },
 
+  // ── Shared existing-Task search/select picker ───────────────────
+  // Used by both _openRelationshipModal() and _openAddPrerequisiteModal()
+  // (T3F.2A/UAT search correction) — one debounce/minimum-length/render/
+  // select implementation instead of two near-duplicate ones. Candidate
+  // exclusion (current Task, already-linked, unauthorized, cross-org) is
+  // entirely server-side (search_tasks_for_dependency()/
+  // search_tasks_for_relationship()) — this only renders whatever the
+  // RPC already decided is a valid candidate.
+  _taskCandidateRowHtml(task, dataAttr) {
+    const bits = [this._escapeHtml((task.status || '').replace(/_/g, ' '))];
+    if (task.assignee_names) bits.push(this._escapeHtml(task.assignee_names));
+    if (task.due_date) bits.push('Due ' + new Date(task.due_date).toLocaleDateString());
+    return `<button type="button" class="user-picker-row" data-${dataAttr}="${this._escapeAttr(task.id)}" aria-pressed="false"><strong>${this._escapeHtml(task.task_number)} — ${this._escapeHtml(task.title)}</strong><span>${bits.join(' · ')}</span></button>`;
+  },
+
+  _bindTaskCandidateSearch({ search, results, target, submit, dataAttr, searchFn }) {
+    let timer;
+    search.addEventListener('input', () => {
+      clearTimeout(timer);
+      target.value = '';
+      submit.disabled = true;
+      const query = search.value.trim();
+      if (query.length < 2) {
+        results.innerHTML = query.length === 0
+          ? '<p class="structure-empty">Search by task number or title…</p>'
+          : '<p class="structure-empty">Keep typing — at least 2 characters.</p>';
+        return;
+      }
+      timer = setTimeout(async () => {
+        results.innerHTML = '<div class="tab-loading" role="status"><span class="spinner spinner--dark"></span> Searching…</div>';
+        try {
+          // One over the display limit so we can tell "exactly N" from
+          // "more than N exist" without a second round-trip.
+          const matches = await searchFn(query, 21);
+          const truncated = matches.length > 20;
+          const shown = truncated ? matches.slice(0, 20) : matches;
+          results.innerHTML = shown.length
+            ? shown.map(t => this._taskCandidateRowHtml(t, dataAttr)).join('') + (truncated ? '<p class="field-hint">More than 20 matches — refine your search to narrow the list.</p>' : '')
+            : '<p class="structure-empty">No eligible matching Tasks.</p>';
+          results.querySelectorAll(`[data-${dataAttr}]`).forEach(button => button.addEventListener('click', () => {
+            target.value = button.dataset[dataAttr.replace(/-([a-z])/g, (_, c) => c.toUpperCase())];
+            results.querySelectorAll(`[data-${dataAttr}]`).forEach(row => {
+              const selected = row === button;
+              row.classList.toggle('selected', selected);
+              row.setAttribute('aria-pressed', selected ? 'true' : 'false');
+            });
+            submit.disabled = false;
+          }));
+        } catch (err) {
+          results.innerHTML = `<div class="alert alert-error">${this._escapeHtml(err.message || 'Search failed. Try again.')}</div>`;
+        }
+      }, 250);
+    });
+  },
+
   _openRelationshipModal() {
-    this._openModal(`<h3>Add Task Relationship</h3><form class="modal-form" id="task-relationship-form">
-      <div class="field-group"><label for="task-relationship-search">Search task number or title</label><input class="form-input" id="task-relationship-search" type="search" autocomplete="off" placeholder="Start typing…"></div>
-      <div id="task-relationship-results" class="user-picker-results"><p class="structure-empty">Enter a task number or title.</p></div><input type="hidden" id="task-relationship-target">
+    this._openModal(`<h3 id="task-relationship-title">Add Task Relationship</h3><form class="modal-form" id="task-relationship-form">
+      <div class="field-group"><label for="task-relationship-search">Search task number or title</label><input class="form-input" id="task-relationship-search" type="search" autocomplete="off" placeholder="Search by task number or title…" aria-controls="task-relationship-results"></div>
+      <div id="task-relationship-results" class="user-picker-results" aria-live="polite"><p class="structure-empty">Search by task number or title…</p></div><input type="hidden" id="task-relationship-target">
       <div class="field-group"><label for="task-relationship-type">Relationship</label><select class="form-select" id="task-relationship-type"><option value="related">Related</option><option value="duplicate">Duplicate</option><option value="parent">Parent</option></select></div>
-      <div class="alert alert-error hidden" id="task-relationship-error"></div><div class="modal-actions"><button type="button" class="btn btn-secondary" data-close-modal>Cancel</button><button class="btn btn-primary" type="submit" disabled>Add Relationship</button></div></form>`);
-    const root = document.getElementById('modal-root'); const form = root.querySelector('#task-relationship-form'); const search = root.querySelector('#task-relationship-search'); const results = root.querySelector('#task-relationship-results'); const target = root.querySelector('#task-relationship-target'); const submit = form.querySelector('[type="submit"]'); let timer;
-    search.addEventListener('input', () => { clearTimeout(timer); target.value = ''; submit.disabled = true; timer = setTimeout(async () => {
-      const query = search.value.trim(); if (!query) { results.innerHTML = '<p class="structure-empty">Enter a task number or title.</p>'; return; }
-      results.innerHTML = '<div class="tab-loading"><span class="spinner spinner--dark"></span> Searching…</div>';
-      try { const matches = await TasksAPI.searchRelationshipCandidates(this._taskId, this._task.organization_id, query); const activeIds = new Set((this._relationships || []).map(r => r.related_task_id));
-        results.innerHTML = matches.length ? matches.map(t => `<button type="button" class="user-picker-row" data-select-related-task="${t.id}" ${activeIds.has(t.id) ? 'disabled' : ''}><strong>${this._escapeHtml(t.task_number)} — ${this._escapeHtml(t.title)}</strong><span>${this._escapeHtml(t.status.replace(/_/g, ' '))}${activeIds.has(t.id) ? ' · Already related' : ''}</span></button>`).join('') : '<p class="structure-empty">No visible matching tasks.</p>';
-        results.querySelectorAll('[data-select-related-task]:not([disabled])').forEach(btn => btn.addEventListener('click', () => { target.value = btn.dataset.selectRelatedTask; results.querySelectorAll('[data-select-related-task]').forEach(row => row.classList.toggle('selected', row === btn)); submit.disabled = false; }));
-      } catch (err) { results.innerHTML = `<div class="alert alert-error">${this._escapeHtml(err.message || 'Search failed. Try again.')}</div>`; }
-    }, 250); });
+      <div class="alert alert-error hidden" id="task-relationship-error"></div><div class="modal-actions"><button type="button" class="btn btn-secondary" data-close-modal>Cancel</button><button class="btn btn-primary" type="submit" disabled>Add Relationship</button></div></form>`, { labelledBy: 'task-relationship-title' });
+    const root = document.getElementById('modal-root'); const form = root.querySelector('#task-relationship-form'); const search = root.querySelector('#task-relationship-search'); const results = root.querySelector('#task-relationship-results'); const target = root.querySelector('#task-relationship-target'); const submit = form.querySelector('[type="submit"]');
+    this._bindTaskCandidateSearch({
+      search, results, target, submit, dataAttr: 'select-related-task',
+      searchFn: (query, limit) => TasksAPI.searchRelationshipCandidates(this._taskId, query, limit),
+    });
     form.addEventListener('submit', async e => { e.preventDefault(); const errEl = root.querySelector('#task-relationship-error'); if (!target.value) return; submit.disabled = true; errEl.classList.add('hidden');
       try { await TasksAPI.createTaskRelationship(this._taskId, target.value, root.querySelector('#task-relationship-type').value); this._closeModal(); await this._loadRelatedTasks(); }
       catch (err) { submit.disabled = false; errEl.textContent = err.message || 'Could not create this relationship.'; errEl.classList.remove('hidden'); }
@@ -1017,8 +1068,8 @@ const TaskDetailView = {
   _openAddPrerequisiteModal() {
     this._openModal(`<h3 id="add-prerequisite-title">Add Prerequisite</h3>
       <form class="modal-form" id="add-prerequisite-form">
-        <div class="field-group"><label for="dependency-candidate-search">Search Task number or title</label><input class="form-input" id="dependency-candidate-search" type="search" autocomplete="off" placeholder="Start typing…" aria-controls="dependency-candidate-results"></div>
-        <div id="dependency-candidate-results" class="user-picker-results" aria-live="polite"><p class="structure-empty">Enter a Task number or title.</p></div>
+        <div class="field-group"><label for="dependency-candidate-search">Search Task number or title</label><input class="form-input" id="dependency-candidate-search" type="search" autocomplete="off" placeholder="Search by task number or title…" aria-controls="dependency-candidate-results"></div>
+        <div id="dependency-candidate-results" class="user-picker-results" aria-live="polite"><p class="structure-empty">Search by task number or title…</p></div>
         <input type="hidden" id="dependency-candidate-id">
         <div class="alert alert-error hidden" id="add-prerequisite-error"></div>
         <div class="modal-actions"><button type="button" class="btn btn-secondary" data-close-modal>Cancel</button><button class="btn btn-primary" type="submit" disabled>Add Prerequisite</button></div>
@@ -1029,31 +1080,9 @@ const TaskDetailView = {
     const results = root.querySelector('#dependency-candidate-results');
     const target = root.querySelector('#dependency-candidate-id');
     const submit = form.querySelector('[type="submit"]');
-    let timer;
-    search.addEventListener('input', () => {
-      clearTimeout(timer);
-      target.value = '';
-      submit.disabled = true;
-      timer = setTimeout(async () => {
-        const query = search.value.trim();
-        if (!query) { results.innerHTML = '<p class="structure-empty">Enter a Task number or title.</p>'; return; }
-        results.innerHTML = '<div class="tab-loading" role="status"><span class="spinner spinner--dark"></span> Searching…</div>';
-        try {
-          const matches = await TasksAPI.searchTasksForDependency(this._taskId, query, 20);
-          results.innerHTML = matches.length ? matches.map(task => `<button type="button" class="user-picker-row" data-select-dependency-task="${this._escapeAttr(task.id)}" aria-pressed="false"><strong>${this._escapeHtml(task.task_number)} — ${this._escapeHtml(task.title)}</strong><span>${this._escapeHtml((task.status || '').replace(/_/g, ' '))} · ${this._escapeHtml(task.priority || 'normal')}</span></button>`).join('') : '<p class="structure-empty">No eligible matching Tasks.</p>';
-          results.querySelectorAll('[data-select-dependency-task]').forEach(button => button.addEventListener('click', () => {
-            target.value = button.dataset.selectDependencyTask;
-            results.querySelectorAll('[data-select-dependency-task]').forEach(row => {
-              const selected = row === button;
-              row.classList.toggle('selected', selected);
-              row.setAttribute('aria-pressed', selected ? 'true' : 'false');
-            });
-            submit.disabled = false;
-          }));
-        } catch (err) {
-          results.innerHTML = `<div class="alert alert-error">${this._escapeHtml(err.message || 'Search failed. Try again.')}</div>`;
-        }
-      }, 250);
+    this._bindTaskCandidateSearch({
+      search, results, target, submit, dataAttr: 'select-dependency-task',
+      searchFn: (query, limit) => TasksAPI.searchTasksForDependency(this._taskId, query, limit),
     });
     form.addEventListener('submit', async event => {
       event.preventDefault();
