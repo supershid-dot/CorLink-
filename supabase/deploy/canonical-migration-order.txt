@@ -181,3 +181,25 @@ patch-task-start-work-and-assignment-accountability.sql
 #       prefix indexes patch-task-dependencies.sql added (superseded
 #       by this patch, not by anything in between). ──────────────────
 patch-task-search-and-linking-candidates.sql
+
+# ── 14. UAT correction (docs/113): Task dependency structural
+#       authority + human-readable Activity history. Adds
+#       can_manage_task_dependency() (new). Restates create_task_
+#       dependency() -- predecessor patch-task-dependency-lifecycle-
+#       enforcement.sql -- remove_task_dependency(),
+#       list_task_dependencies(), get_task_dependency_capabilities()
+#       -- predecessor for all three: patch-task-dependencies.sql,
+#       never restated since. Restates update_task() -- predecessor
+#       patch-task-assignee-permission-and-activation-fix.sql, NOT
+#       patch-task-dependency-lifecycle-enforcement.sql (confirmed
+#       directly against live staging before writing this patch, per
+#       the standing "stale baseline" rule -- that later file's
+#       v_is_pure_start_request exception is preserved verbatim).
+#       Restates assign_task() -- predecessor patch-notification-
+#       module-integration-foundation.sql (its CAP-003 outbox enqueue
+#       preserved verbatim) -- and unassign_task() -- predecessor
+#       patch-task-start-work-and-assignment-accountability.sql.
+#       Widens audit_logs_action_check -- predecessor patch-task-
+#       dependencies.sql, the last file in canonical order to touch
+#       it -- adding 'task_started'/'task_work_started' only. ────────
+patch-task-dependency-authority-and-activity-history.sql

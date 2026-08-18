@@ -487,5 +487,23 @@ const TasksAPI = (() => {
       if (error) throw error;
       return data || [];
     },
+
+    // Batched lookup for the "related_task_id=<uuid>" reference some
+    // audit rows carry (task_dependency_added/removed — see
+    // supabase/patch-task-dependency-authority-and-activity-history.sql).
+    // One query for every row in the timeline, not one per row. `tasks`
+    // carries the ordinary tasks_select RLS policy (can_view_task(id)),
+    // so an id the caller cannot see is simply absent from the result —
+    // the caller falls back to safe generic wording for those, never a
+    // leaked title/number.
+    async fetchTasksByIds(ids) {
+      if (!ids || !ids.length) return [];
+      const db = getSupabase();
+      const { data, error } = await db.from('tasks')
+        .select('id, task_number, title')
+        .in('id', ids);
+      if (error) throw error;
+      return data || [];
+    },
   };
 })();

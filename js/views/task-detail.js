@@ -1122,6 +1122,20 @@ const TaskDetailView = {
         TasksAPI.fetchTaskComments(this._taskId),
         TasksAPI.fetchTaskAuditTrail(this._taskId),
       ]);
+      // task_dependency_added/removed rows carry 'related_task_id=<uuid>'
+      // in notes (supabase/patch-task-dependency-authority-and-activity-
+      // history.sql) — batch-resolve every such id in one query rather
+      // than one per row. Rows referencing an id the caller cannot view
+      // are simply absent from relatedTasksById; _auditEvent() falls
+      // back to safe generic wording for those.
+      const relatedIds = auditRows
+        .map(a => this._parseRelatedTaskId(a.notes))
+        .filter(Boolean);
+      const relatedTasksById = new Map();
+      if (relatedIds.length) {
+        const related = await TasksAPI.fetchTasksByIds([...new Set(relatedIds)]);
+        for (const t of related) relatedTasksById.set(t.id, t);
+      }
       const events = [];
       for (const c of comments) events.push(this._commentEvent(c));
       for (const a of auditRows) {
@@ -1131,7 +1145,7 @@ const TaskDetailView = {
         // rendering both would show the same comment twice. See docs/42
         // §Ordering rules.
         if (a.action === 'commented') continue;
-        const evt = this._auditEvent(a);
+        const evt = this._auditEvent(a, relatedTasksById);
         if (evt) events.push(evt);
       }
       // Chronological (oldest first) — matches every existing timeline/
@@ -1169,7 +1183,21 @@ const TaskDetailView = {
   // share an identical created_at — see the sort call in
   // _loadActivity() above.
   _COMMENT_TYPE_RANK: 100,
-  _AUDIT_TYPE_RANKS: { created: 0, edited: 1, assigned: 2, unassigned: 3, completed: 4, cancelled: 5 },
+  _AUDIT_TYPE_RANKS: {
+    created: 0, task_started: 1, edited: 1, task_work_started: 2,
+    assigned: 3, unassigned: 3,
+    task_dependency_added: 4, task_dependency_removed: 4,
+    completed: 5, cancelled: 6,
+  },
+
+  // Extracts the uuid from a 'related_task_id=<uuid>' notes value
+  // (task_dependency_added/removed rows only — see
+  // supabase/patch-task-dependency-authority-and-activity-history.sql).
+  // Returns null for any other notes shape, safely ignored.
+  _parseRelatedTaskId(notes) {
+    const m = /^related_task_id=([0-9a-f-]{36})$/i.exec(notes || '');
+    return m ? m[1] : null;
+  },
 
   _commentEvent(c) {
     const createdAt = new Date(c.created_at);
@@ -1194,19 +1222,30 @@ const TaskDetailView = {
   // null for an action this timeline doesn't render (safely ignored,
   // same "return null for an unrecognized row" convention as
   // js/views/meetings.js's own _seriesAuditEvent()). update_task()'s
-  // 'edited' audit row carries no `notes` describing WHAT changed
-  // (title vs. priority vs. due date vs. a non-terminal status move
-  // are all indistinguishable) — shown as a single honest, generic
-  // label rather than a fabricated specific one. See docs/42 §Known
-  // Limitations.
-  _auditEvent(a) {
+  // generic 'edited' action (still written for any details-only edit,
+  // or a status change other than Draft->Open/Open->In Progress)
+  // carries no `notes` describing WHAT changed — shown as a single
+  // honest, generic label rather than a fabricated specific one. See
+  // docs/42 §Known Limitations and docs/113 for why per-field diff
+  // wording (priority/due-date/etc) was deliberately not added.
+  //
+  // relatedTasksById (Map<uuid, {task_number, title}>) resolves
+  // task_dependency_added/removed's related_task_id — see
+  // _loadActivity()'s batch fetch above. An id absent from the map
+  // (not visible to this viewer, or the row predates this feature)
+  // falls back to safe generic wording, never a raw id.
+  _auditEvent(a, relatedTasksById) {
     const map = {
-      created:    { icon: 'ti-plus',        title: 'Created this task' },
-      edited:     { icon: 'ti-edit',        title: 'Updated task details' },
-      assigned:   { icon: 'ti-user-plus',   title: 'Updated task assignments' },
-      unassigned: { icon: 'ti-user-minus',  title: 'Updated task assignments' },
-      completed:  { icon: 'ti-check',       title: 'Marked this task complete' },
-      cancelled:  { icon: 'ti-ban',         title: 'Cancelled this task' },
+      created:            { icon: 'ti-plus',        title: 'created this task' },
+      edited:              { icon: 'ti-edit',        title: 'updated task details' },
+      task_started:        { icon: 'ti-player-play', title: 'started this task' },
+      task_work_started:   { icon: 'ti-player-play', title: 'started work on this task' },
+      assigned:            { icon: 'ti-user-plus',   title: `assigned ${this._escapeHtml(a.notes || 'a user')}` },
+      unassigned:          { icon: 'ti-user-minus',  title: `removed ${this._escapeHtml(a.notes || 'a user')} from the task` },
+      completed:           { icon: 'ti-check',       title: 'completed this task' },
+      cancelled:           { icon: 'ti-ban',         title: 'cancelled this task' },
+      task_dependency_added:   { icon: 'ti-link-plus', title: this._relatedTaskActivityTitle(a, relatedTasksById, 'added', 'as a prerequisite') },
+      task_dependency_removed: { icon: 'ti-link-plus', title: this._relatedTaskActivityTitle(a, relatedTasksById, 'removed', 'as a prerequisite') },
     };
     const meta = map[a.action];
     if (!meta) return null;
@@ -1215,11 +1254,25 @@ const TaskDetailView = {
       id: a.id,
       icon: meta.icon,
       actorName: a.user?.full_name || 'Unknown user',
+      // assigned/unassigned/dependency titles above already carry
+      // escaped, trusted-safe HTML fragments — titleIsHtml tells
+      // _activityEventHtml() not to double-escape them.
       title: meta.title,
+      titleIsHtml: true,
       dateLabel: createdAt.toLocaleString(),
       sortKey: createdAt.getTime(),
       typeRank: this._AUDIT_TYPE_RANKS[a.action],
     };
+  },
+
+  // "added TSK-... — Title as a prerequisite" when the related task is
+  // visible to this viewer, else the safe generic fallback (Section 16:
+  // never leak a title/number the viewer isn't authorized to see).
+  _relatedTaskActivityTitle(a, relatedTasksById, verb, suffix) {
+    const relatedId = this._parseRelatedTaskId(a.notes);
+    const related = relatedId && relatedTasksById ? relatedTasksById.get(relatedId) : null;
+    if (!related) return `${verb} a prerequisite task`;
+    return `${verb} <a class="task-number-link" href="#task-detail?id=${this._escapeAttr(relatedId)}">${this._escapeHtml(related.task_number)} — ${this._escapeHtml(related.title)}</a> ${suffix}`;
   },
 
   _activityHtml(events) {
@@ -1239,7 +1292,7 @@ const TaskDetailView = {
       <div class="task-activity-item">
         <i class="ti ${e.icon}"></i>
         <div class="task-activity-item-body">
-          <div class="task-activity-item-meta"><strong>${this._escapeHtml(e.actorName)}</strong> ${e.title ? this._escapeHtml(e.title) : 'commented'} <span class="structure-empty">· ${e.dateLabel}</span></div>
+          <div class="task-activity-item-meta"><strong>${this._escapeHtml(e.actorName)}</strong> ${e.title ? (e.titleIsHtml ? e.title : this._escapeHtml(e.title)) : 'commented'} <span class="structure-empty">· ${e.dateLabel}</span></div>
           ${e.bodyText ? `<div class="task-activity-comment-body">${this._escapeHtml(e.bodyText)}</div>` : ''}
         </div>
       </div>
