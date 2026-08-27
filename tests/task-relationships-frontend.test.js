@@ -52,7 +52,7 @@ async function check(name, fn) {
   await check('permission gating', async () => {
     const html = await page.evaluate(() => { window.__view._relationshipCapabilities={can_create:false}; return window.__view._relationshipsHtml(); });
     assert.doesNotMatch(html, /data-create-relationship/);
-    await page.evaluate(() => { window.__view._relationshipCapabilities={can_create:true}; });
+    await page.evaluate(() => { window.__view._relationshipCapabilities={can_create:true, can_remove:true}; });
   });
   await check('loading state', async () => assert.match(await page.evaluate(() => window.__view._relationshipsLoadingHtml()), /Loading related tasks/));
   await check('load error and retry', async () => {

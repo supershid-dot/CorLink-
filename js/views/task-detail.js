@@ -848,10 +848,21 @@ const TaskDetailView = {
   _relationshipsHtml() {
     const rows = (this._relationships || []).map(r => {
       const assignees = (r.assignees || []).map(a => a.full_name).filter(Boolean).join(', ') || 'Unassigned';
+      // Both flags must agree, same defense-in-depth pattern as the
+      // dependency card's canRemove (js/views/task-detail.js
+      // _dependencyCardHtml): capabilities.can_remove alone only
+      // reflects manage-authority over the CURRENT task, while
+      // row.can_remove additionally requires the SPECIFIC related
+      // task in this row (get_task_relationship_capabilities() vs.
+      // list_related_tasks() — supabase/patch-task-relationship-
+      // authority-and-activity-history.sql). row.can_remove already
+      // implies capabilities.can_remove for well-formed data; the
+      // extra AND costs nothing and mirrors the established pattern.
+      const canRemove = this._relationshipCapabilities?.can_remove === true && r.can_remove === true;
       return `<div class="task-card related-task-card">
         <div class="task-card-header"><span class="badge badge-outline">${this._escapeHtml(this._relationshipLabel(r.relationship_type))}</span><a class="task-card-number task-number-link" href="#task-detail?id=${r.related_task_id}">${this._escapeHtml(r.task_number)}</a><span class="task-card-title">${this._escapeHtml(r.title)}</span></div>
         <div class="task-card-meta"><span>${this._statusBadge(r.status)}</span><span>${this._priorityBadge(r.priority)}</span><span>Assignee: ${this._escapeHtml(assignees)}</span><span>Due: ${r.due_date ? new Date(r.due_date).toLocaleDateString() : '—'}</span></div>
-        <div class="task-card-actions"><a class="btn btn-secondary btn-xs" href="#task-detail?id=${r.related_task_id}">Open</a>${r.can_remove ? `<button class="btn btn-secondary btn-xs" data-remove-relationship="${r.relationship_id}">Remove Relationship</button>` : ''}</div>
+        <div class="task-card-actions"><a class="btn btn-secondary btn-xs" href="#task-detail?id=${r.related_task_id}">Open</a>${canRemove ? `<button class="btn btn-secondary btn-xs" data-remove-relationship="${r.relationship_id}">Remove Relationship</button>` : ''}</div>
       </div>`;
     }).join('');
     return `${rows ? `<div class="related-task-list">${rows}</div>` : '<p class="structure-empty">No related tasks.</p>'}${this._relationshipCapabilities?.can_create ? '<div class="task-detail-actions related-task-add"><button class="btn btn-secondary btn-sm" data-create-relationship><i class="ti ti-link-plus"></i> Add Relationship</button></div>' : ''}<div class="alert alert-error hidden" data-relationships-error></div>`;
@@ -863,7 +874,7 @@ const TaskDetailView = {
       if (!window.confirm('Remove this task relationship? The tasks themselves will not be changed.')) return;
       const errEl = panel.querySelector('[data-relationships-error]');
       errEl.classList.add('hidden'); btn.disabled = true;
-      try { await TasksAPI.removeTaskRelationship(btn.dataset.removeRelationship); await this._loadRelatedTasks(); }
+      try { await TasksAPI.removeTaskRelationship(btn.dataset.removeRelationship, this._taskId); await this._loadRelatedTasks(); }
       catch (err) { btn.disabled = false; errEl.textContent = err.message || 'Could not remove this relationship.'; errEl.classList.remove('hidden'); }
     }));
   },
@@ -1124,12 +1135,14 @@ const TaskDetailView = {
       ]);
       // task_dependency_added/removed rows carry 'related_task_id=<uuid>'
       // in notes (supabase/patch-task-dependency-authority-and-activity-
-      // history.sql) — batch-resolve every such id in one query rather
-      // than one per row. Rows referencing an id the caller cannot view
-      // are simply absent from relatedTasksById; _auditEvent() falls
+      // history.sql), and task_relationship_added/removed rows carry the
+      // same key (supabase/patch-task-relationship-authority-and-
+      // activity-history.sql) — batch-resolve every such id in one query
+      // rather than one per row. Rows referencing an id the caller cannot
+      // view are simply absent from relatedTasksById; _auditEvent() falls
       // back to safe generic wording for those.
       const relatedIds = auditRows
-        .map(a => this._parseRelatedTaskId(a.notes))
+        .flatMap(a => [this._parseRelatedTaskId(a.notes), this._parseRelationshipNotes(a.notes)?.relatedTaskId])
         .filter(Boolean);
       const relatedTasksById = new Map();
       if (relatedIds.length) {
@@ -1187,6 +1200,7 @@ const TaskDetailView = {
     created: 0, task_started: 1, edited: 1, task_work_started: 2,
     assigned: 3, unassigned: 3,
     task_dependency_added: 4, task_dependency_removed: 4,
+    task_relationship_added: 7, task_relationship_removed: 7,
     completed: 5, cancelled: 6,
   },
 
@@ -1197,6 +1211,20 @@ const TaskDetailView = {
   _parseRelatedTaskId(notes) {
     const m = /^related_task_id=([0-9a-f-]{36})$/i.exec(notes || '');
     return m ? m[1] : null;
+  },
+
+  // Parses task_relationship_added/removed's notes (supabase/patch-
+  // task-relationship-authority-and-activity-history.sql):
+  // 'related_task_id=<uuid>' (removal — type-agnostic) or
+  // 'related_task_id=<uuid>;relationship_type=<related|duplicate|child>'
+  // (add — role is the OTHER task's role from the viewer's own
+  // perspective, already resolved server-side; 'child' for a 'parent'
+  // relationship since the viewer, per create_task_relationship()'s
+  // own unchanged direction rule, is always the parent side). Returns
+  // null for any other notes shape, safely ignored.
+  _parseRelationshipNotes(notes) {
+    const m = /^related_task_id=([0-9a-f-]{36})(?:;relationship_type=(related|duplicate|child))?$/i.exec(notes || '');
+    return m ? { relatedTaskId: m[1], role: m[2] ? m[2].toLowerCase() : null } : null;
   },
 
   _commentEvent(c) {
@@ -1246,6 +1274,8 @@ const TaskDetailView = {
       cancelled:           { icon: 'ti-ban',         title: 'cancelled this task' },
       task_dependency_added:   { icon: 'ti-link-plus', title: this._relatedTaskActivityTitle(a, relatedTasksById, 'added', 'as a prerequisite') },
       task_dependency_removed: { icon: 'ti-link-plus', title: this._relatedTaskActivityTitle(a, relatedTasksById, 'removed', 'as a prerequisite') },
+      task_relationship_added:   { icon: 'ti-link-plus', title: this._relationshipActivityTitle(a, relatedTasksById, 'added') },
+      task_relationship_removed: { icon: 'ti-link-plus', title: this._relationshipActivityTitle(a, relatedTasksById, 'removed') },
     };
     const meta = map[a.action];
     if (!meta) return null;
@@ -1273,6 +1303,25 @@ const TaskDetailView = {
     const related = relatedId && relatedTasksById ? relatedTasksById.get(relatedId) : null;
     if (!related) return `${verb} a prerequisite task`;
     return `${verb} <a class="task-number-link" href="#task-detail?id=${this._escapeAttr(relatedId)}">${this._escapeHtml(related.task_number)} — ${this._escapeHtml(related.title)}</a> ${suffix}`;
+  },
+
+  // "linked TSK-... — Title as a related task" / "marked ... as a
+  // duplicate task" / "linked ... as the child task" for an add, or
+  // "removed the relationship with ..." for a removal — safe generic
+  // fallback when the related task isn't visible to this viewer or the
+  // row predates this feature (Section 15: never leak a title/number
+  // the viewer isn't authorized to see).
+  _relationshipActivityTitle(a, relatedTasksById, verb) {
+    const parsed = this._parseRelationshipNotes(a.notes);
+    if (!parsed) return verb === 'removed' ? 'removed a task relationship' : 'added a task relationship';
+    const related = relatedTasksById ? relatedTasksById.get(parsed.relatedTaskId) : null;
+    const label = related
+      ? `<a class="task-number-link" href="#task-detail?id=${this._escapeAttr(parsed.relatedTaskId)}">${this._escapeHtml(related.task_number)} — ${this._escapeHtml(related.title)}</a>`
+      : 'a task';
+    if (verb === 'removed') return `removed the relationship with ${label}`;
+    const roleWording = { related: 'as a related task', duplicate: 'as a duplicate task', child: 'as the child task' }[parsed.role] || 'as a related task';
+    const actionVerb = parsed.role === 'duplicate' ? 'marked' : 'linked';
+    return `${actionVerb} ${label} ${roleWording}`;
   },
 
   _activityHtml(events) {

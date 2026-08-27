@@ -203,3 +203,26 @@ patch-task-search-and-linking-candidates.sql
 #       dependencies.sql, the last file in canonical order to touch
 #       it -- adding 'task_started'/'task_work_started' only. ────────
 patch-task-dependency-authority-and-activity-history.sql
+
+# ── 15. UAT correction (docs/114): Task relationship structural
+#       authority + human-readable Activity history. Adds
+#       can_manage_task_relationship() (new -- a deliberate twin of
+#       section 14's can_manage_task_dependency(), not a reuse/rename,
+#       since this milestone's own instructions forbid touching
+#       already-UAT-passed Dependency code). Restates create_task_
+#       relationship(), remove_task_relationship(), list_related_
+#       tasks() -- predecessor for all three: patch-task-relationships-
+#       hardening.sql, the only later restatement of patch-task-
+#       relationships.sql's originals. Restates get_task_relationship_
+#       capabilities() -- predecessor patch-task-relationships.sql,
+#       never restated since (confirmed against live staging).
+#       remove_task_relationship() gains a new p_viewer_task_id
+#       parameter -- DROP FUNCTION first, since adding a parameter
+#       changes its argument-type identity even with a DEFAULT and
+#       CREATE OR REPLACE would otherwise leave the old, un-narrowed
+#       single-argument overload live alongside the new one. Widens
+#       audit_logs_action_check -- predecessor patch-task-dependency-
+#       authority-and-activity-history.sql (section 14 above), the
+#       last file in canonical order to touch it -- adding
+#       'task_relationship_added'/'task_relationship_removed' only. ──
+patch-task-relationship-authority-and-activity-history.sql

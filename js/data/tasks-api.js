@@ -240,9 +240,12 @@ const TasksAPI = (() => {
       return data;
     },
 
-    async removeTaskRelationship(relationshipId) {
+    async removeTaskRelationship(relationshipId, viewerTaskId) {
       const db = getSupabase();
-      const { error } = await db.rpc('remove_task_relationship', { p_relationship_id: relationshipId });
+      const { error } = await db.rpc('remove_task_relationship', {
+        p_relationship_id: relationshipId,
+        p_viewer_task_id: viewerTaskId,
+      });
       if (error) throw error;
     },
 
