@@ -32,7 +32,8 @@ const MeetingsAPI = (() => {
     updated_by_user:users!meetings_updated_by_fkey(full_name),
     cancelled_by_user:users!meetings_cancelled_by_fkey(full_name),
     bookings:meeting_room_bookings!meeting_room_bookings_meeting_id_fkey(id, room_id, status, room:meeting_rooms!meeting_room_bookings_room_id_fkey(id, name)),
-    series:meeting_series!meetings_series_id_fkey(id, template_title, recurrence_pattern, series_start_date, series_end_date)
+    series:meeting_series!meetings_series_id_fkey(id, template_title, recurrence_pattern, series_start_date, series_end_date),
+    section:sections!meetings_section_id_fkey(id, name)
   `;
 
   const LINKED_BOOKING_SELECT = `
@@ -144,7 +145,7 @@ const MeetingsAPI = (() => {
     async createMeeting({
       title, startAt, endAt, status = 'scheduled', description = null,
       meetingType = 'general', visibility = 'participants', timezone = 'Indian/Maldives',
-      locationMode = null, externalLocation = null, virtualLink = null,
+      locationMode = null, externalLocation = null, virtualLink = null, sectionId = null,
     }) {
       const db = getSupabase();
       const { data, error } = await db.rpc('create_meeting', {
@@ -152,6 +153,7 @@ const MeetingsAPI = (() => {
         p_description: description || null, p_meeting_type: meetingType, p_visibility: visibility,
         p_timezone: timezone, p_location_mode: locationMode || null,
         p_external_location: externalLocation || null, p_virtual_link: virtualLink || null,
+        p_section_id: sectionId || null,
       });
       if (error) throw error;
       return data;
@@ -159,6 +161,11 @@ const MeetingsAPI = (() => {
 
     // patch fields left undefined/null mean "leave unchanged" server-side
     // (COALESCE against the current row) — every field is optional here.
+    // sectionId follows the same convention EXCEPT clearing it: passing
+    // clearSection:true is required to null it out, since undefined/null
+    // here already means "leave unchanged" (matching p_clear_section on
+    // update_meeting — a bare null sectionId can't distinguish "don't
+    // touch" from "remove").
     async updateMeeting(meetingId, patch = {}) {
       const db = getSupabase();
       const { error } = await db.rpc('update_meeting', {
@@ -174,6 +181,8 @@ const MeetingsAPI = (() => {
         p_location_mode: patch.locationMode ?? null,
         p_external_location: patch.externalLocation ?? null,
         p_virtual_link: patch.virtualLink ?? null,
+        p_section_id: patch.sectionId ?? null,
+        p_clear_section: patch.clearSection ?? false,
       });
       if (error) throw error;
     },
@@ -424,7 +433,7 @@ const MeetingsAPI = (() => {
       title, seriesStartDate, seriesEndDate, startTime, endTime, recurrencePattern,
       description = null, meetingType = 'general', visibility = 'participants',
       timezone = 'Indian/Maldives', locationMode = null, externalLocation = null,
-      virtualLink = null, roomId = null, groupId = null, intervalCount = 1,
+      virtualLink = null, roomId = null, groupId = null, intervalCount = 1, sectionId = null,
     }) {
       const db = getSupabase();
       const { data, error } = await db.rpc('create_recurring_meeting', {
@@ -444,6 +453,7 @@ const MeetingsAPI = (() => {
         p_room_id: roomId || null,
         p_group_id: groupId || null,
         p_interval_count: intervalCount,
+        p_section_id: sectionId || null,
       });
       if (error) throw error;
       return data || [];

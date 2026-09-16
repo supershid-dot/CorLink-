@@ -588,8 +588,12 @@ const MeetingsView = {
   // steps). Completed/cancelled meetings never reach here (edit button
   // is hidden for both in the detail modal) — defensive guard in case
   // of a stale reference.
-  _openEditMeetingModal(meeting) {
+  async _openEditMeetingModal(meeting) {
     if (meeting.status === 'cancelled' || this._effectiveStatus(meeting) === 'completed') return;
+
+    let sections = [];
+    try { sections = (await AdminAPI.listSectionsByOrg(meeting.organization_id)).filter(s => s.is_active); }
+    catch (err) { console.warn('CorLink: failed to load sections for the edit-meeting form', err); }
 
     const startVal = new Date(meeting.start_at).toISOString().slice(0, 16);
     const endVal = new Date(meeting.end_at).toISOString().slice(0, 16);
@@ -611,6 +615,16 @@ const MeetingsView = {
           ${RichEditor.langToggleHtml('descriptionLanguage', RichEditor.isDivehi(meeting.description || '') ? 'dv' : 'en')}
           <textarea class="field-input-plain${RichEditor.dvClass(meeting.description || '')}" name="description" rows="3" id="edit-meeting-description-textarea">${this._escapeHtml(meeting.description || '')}</textarea>
         </div>
+        ${sections.length > 0 ? `
+          <div class="field-group">
+            <label class="field-label">Section (optional)</label>
+            <select class="field-select" name="sectionId">
+              <option value="">— None —</option>
+              ${sections.map(s => `<option value="${s.id}" ${meeting.section_id === s.id ? 'selected' : ''}>${this._escapeHtml(s.name)}</option>`).join('')}
+            </select>
+            <p class="field-hint">Staff and command/department heads over this section will be able to see, book, and edit this meeting.</p>
+          </div>
+        ` : ''}
         <div class="field-row">
           <div class="field-group">
             <label class="field-label">Meeting Type</label>
@@ -737,6 +751,13 @@ const MeetingsView = {
           externalLocation: locationMode === 'external' ? externalLocation : null,
           virtualLink: locationMode === 'virtual' ? virtualLink : null,
         };
+        // Only touch section_id when the field actually rendered (the org
+        // has sections) — otherwise fd.get('sectionId') is always null and
+        // would wrongly clear an existing section_id on every save.
+        if (sections.length > 0) {
+          payload.sectionId = fd.get('sectionId') || null;
+          payload.clearSection = !fd.get('sectionId');
+        }
         if (showStatusField) payload.status = fd.get('status');
         await MeetingsAPI.updateMeeting(meeting.id, payload);
         this._closeModal();
@@ -767,16 +788,17 @@ const MeetingsView = {
     this._orgId = this._orgId || this._user.org_id;
     if (this._roomsEnabled === undefined) this._roomsEnabled = AppShell.isModuleEnabled(this._user, 'rooms');
 
-    let rooms = [], groups = [], orgUsers = [];
+    let rooms = [], groups = [], orgUsers = [], sections = [];
     try {
-      const fetches = [MeetingsAPI.fetchMeetingGroups(this._orgId), AdminAPI.listUsersByOrg(this._orgId)];
+      const fetches = [MeetingsAPI.fetchMeetingGroups(this._orgId), AdminAPI.listUsersByOrg(this._orgId), AdminAPI.listSectionsByOrg(this._orgId)];
       if (this._roomsEnabled) fetches.push(RoomsAPI.fetchRooms(this._orgId));
       const results = await Promise.all(fetches);
       groups = results[0] || [];
       orgUsers = (results[1] || []).filter(u => u.is_active && u.id !== this._user.id);
-      if (this._roomsEnabled) rooms = (results[2] || []).filter(r => r.is_active);
+      sections = (results[2] || []).filter(s => s.is_active);
+      if (this._roomsEnabled) rooms = (results[3] || []).filter(r => r.is_active);
     } catch (err) {
-      console.error('CorLink: failed to load rooms/groups/staff for the schedule-meeting form', err);
+      console.error('CorLink: failed to load rooms/groups/staff/sections for the schedule-meeting form', err);
     }
 
     const { start: defStart } = this._defaultMeetingTimes();
@@ -798,6 +820,16 @@ const MeetingsView = {
               <label class="field-label">Title</label>
               <input class="field-input-plain" name="title" required />
             </div>
+            ${sections.length > 0 ? `
+              <div class="field-group">
+                <label class="field-label">Section (optional)</label>
+                <select class="field-select" name="sectionId">
+                  <option value="">— None —</option>
+                  ${sections.map(s => `<option value="${s.id}">${this._escapeHtml(s.name)}</option>`).join('')}
+                </select>
+                <p class="field-hint">Staff and command/department heads over this section will be able to see, book, and edit this meeting.</p>
+              </div>
+            ` : ''}
             <div class="field-group">
               <label class="field-label">Format</label>
               <select class="field-select" name="locationMode" id="sm-location-mode">
@@ -1174,6 +1206,7 @@ const MeetingsView = {
       const endAt = new Date(startAt.getTime() + durationMin * 60000);
       const locationMode = fd.get('locationMode') || null;
       const roomId = roomGroup ? (fd.get('roomId') || null) : null;
+      const sectionId = fd.get('sectionId') || null;
       const externalLocation = fd.get('externalLocation') || null;
       // Not tied to locationMode==='virtual' — a room/external meeting
       // may also carry a virtual link for remote (hybrid) attendees;
@@ -1208,7 +1241,7 @@ const MeetingsView = {
             visibility: fd.get('visibility'), startAt: startAt.toISOString(), endAt: endAt.toISOString(),
             timezone: 'Indian/Maldives', locationMode,
             externalLocation: locationMode === 'external' ? externalLocation : null,
-            virtualLink,
+            virtualLink, sectionId,
             status: 'scheduled',
           });
           allMeetingIds = [meetingId];
@@ -1229,7 +1262,7 @@ const MeetingsView = {
             seriesStartDate: date, seriesEndDate, startTime: startTimeStr, endTime: endTimeStr,
             timezone: 'Indian/Maldives', locationMode,
             externalLocation: locationMode === 'external' ? externalLocation : null,
-            virtualLink,
+            virtualLink, sectionId,
             roomId: locationMode === 'room' ? roomId : null,
             groupId: pendingGroup ? pendingGroup.groupId : null,
           });
@@ -1603,6 +1636,7 @@ const MeetingsView = {
         <div><strong>When</strong><div>${new Date(meeting.start_at).toLocaleString()} – ${new Date(meeting.end_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div></div>
         <div><strong>Timezone</strong><div>${this._escapeHtml(meeting.timezone)}</div></div>
         <div><strong>Visibility</strong><div>${this._capitalize(meeting.visibility)}</div></div>
+        ${meeting.section ? `<div><strong>Section</strong><div>${this._escapeHtml(meeting.section.name)}</div></div>` : ''}
         <div><strong>Creator</strong><div>${this._escapeHtml(meeting.created_by_user?.full_name || '')}</div></div>
         ${meeting.updated_by_user ? `<div><strong>Last Updated By</strong><div>${this._escapeHtml(meeting.updated_by_user.full_name)}</div></div>` : ''}
         ${meeting.status === 'cancelled' ? `<div><strong>Cancelled By</strong><div>${this._escapeHtml(meeting.cancelled_by_user?.full_name || '')}${meeting.cancellation_reason ? ` — ${this._escapeHtml(meeting.cancellation_reason)}` : ''}</div></div>` : ''}

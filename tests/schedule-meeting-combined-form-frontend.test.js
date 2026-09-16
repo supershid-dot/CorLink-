@@ -63,6 +63,10 @@ async function check(name, fn) {
           { id: 'staff-2', full_name: 'Aminath Nisreen', is_active: true },
           { id: 'u1', full_name: 'Jane Staff', is_active: true },
         ]),
+        listSectionsByOrg: async () => ([
+          { id: 'sec-1', name: 'Programs', is_active: true },
+          { id: 'sec-2', name: 'Legal', is_active: true },
+        ]),
       };
       window.RoomsAPI = {
         fetchRooms: async () => ([
@@ -317,6 +321,37 @@ async function check(name, fn) {
     assert.ok(!calls.some(c => c.name === 'MeetingsAPI.createMeeting'), 'must not create the meeting without a room');
     const errVisible = await page.evaluate(() => !document.querySelector('#schedule-meeting-form .modal-error').classList.contains('hidden'));
     assert.ok(errVisible, 'expected an inline validation error');
+    await page.close();
+  });
+
+  await check('renders a Section field and includes the chosen sectionId in the create payload', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openScheduleMeetingModal());
+    const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /name="sectionId"/);
+    assert.match(html, /Legal/);
+    await page.evaluate(() => {
+      document.querySelector('#schedule-meeting-form [name="title"]').value = 'Section Tagged Meeting';
+      document.querySelector('#schedule-meeting-form [name="sectionId"]').value = 'sec-2';
+    });
+    await page.evaluate(() => document.getElementById('sm-submit-btn').click());
+    await page.waitForTimeout(50);
+    const calls = await page.evaluate(() => window.calls);
+    const createCall = calls.find(c => c.name === 'MeetingsAPI.createMeeting');
+    assert.ok(createCall);
+    assert.strictEqual(createCall.args[0].sectionId, 'sec-2');
+    await page.close();
+  });
+
+  await check('leaving Section unset sends sectionId: null', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openScheduleMeetingModal());
+    await page.evaluate(() => { document.querySelector('#schedule-meeting-form [name="title"]').value = 'No Section'; });
+    await page.evaluate(() => document.getElementById('sm-submit-btn').click());
+    await page.waitForTimeout(50);
+    const calls = await page.evaluate(() => window.calls);
+    const createCall = calls.find(c => c.name === 'MeetingsAPI.createMeeting');
+    assert.strictEqual(createCall.args[0].sectionId, null);
     await page.close();
   });
 
