@@ -608,7 +608,8 @@ const MeetingsView = {
         </div>
         <div class="field-group">
           <label class="field-label">Description (optional)</label>
-          <textarea class="field-input-plain" name="description" rows="3">${this._escapeHtml(meeting.description || '')}</textarea>
+          ${RichEditor.langToggleHtml('descriptionLanguage', RichEditor.isDivehi(meeting.description || '') ? 'dv' : 'en')}
+          <textarea class="field-input-plain${RichEditor.dvClass(meeting.description || '')}" name="description" rows="3" id="edit-meeting-description-textarea">${this._escapeHtml(meeting.description || '')}</textarea>
         </div>
         <div class="field-row">
           <div class="field-group">
@@ -683,6 +684,11 @@ const MeetingsView = {
     const locSelect = document.getElementById('meeting-location-mode');
     const extGroup = document.getElementById('external-location-group');
     const virtGroup = document.getElementById('virtual-link-group');
+
+    const editDescriptionTextarea = document.getElementById('edit-meeting-description-textarea');
+    const syncEditDescriptionDir = (lang) => editDescriptionTextarea.classList.toggle('field-divehi', lang === 'dv');
+    RichEditor.bindLangToggle(form, 'descriptionLanguage', syncEditDescriptionDir);
+    RichEditor.bindAutoDetect(editDescriptionTextarea, form, 'descriptionLanguage', syncEditDescriptionDir);
 
     const syncLocationFields = () => {
       extGroup.classList.toggle('hidden', locSelect.value !== 'external');
@@ -792,23 +798,14 @@ const MeetingsView = {
               <label class="field-label">Title</label>
               <input class="field-input-plain" name="title" required />
             </div>
-            <div class="field-row">
-              <div class="field-group">
-                <label class="field-label">Meeting Type</label>
-                <select class="field-select" name="meetingType">
-                  ${['general', 'interview', 'training', 'operational', 'administrative', 'other'].map(t =>
-                    `<option value="${t}">${this._capitalize(t)}</option>`).join('')}
-                </select>
-              </div>
-              <div class="field-group">
-                <label class="field-label">Format</label>
-                <select class="field-select" name="locationMode" id="sm-location-mode">
-                  <option value="" ${defLocationMode === '' ? 'selected' : ''}>Not decided yet</option>
-                  ${this._roomsEnabled ? `<option value="room" ${defLocationMode === 'room' ? 'selected' : ''}>In person — Room</option>` : ''}
-                  <option value="external">In person — External location</option>
-                  <option value="virtual">Online — Virtual link</option>
-                </select>
-              </div>
+            <div class="field-group">
+              <label class="field-label">Format</label>
+              <select class="field-select" name="locationMode" id="sm-location-mode">
+                <option value="" ${defLocationMode === '' ? 'selected' : ''}>Not decided yet</option>
+                ${this._roomsEnabled ? `<option value="room" ${defLocationMode === 'room' ? 'selected' : ''}>In person — Room</option>` : ''}
+                <option value="external">In person — External location</option>
+                <option value="virtual">Online — Virtual link</option>
+              </select>
             </div>
             ${this._roomsEnabled ? `
               <div class="field-group hidden" id="sm-room-group">
@@ -825,8 +822,12 @@ const MeetingsView = {
               <label class="field-label">External Location</label>
               <input class="field-input-plain" name="externalLocation" />
             </div>
+            <label class="checkbox-row hidden" id="sm-hybrid-toggle-group">
+              <input type="checkbox" id="sm-hybrid-checkbox" />
+              <span>Also allow remote/online participation (hybrid) — add a virtual link</span>
+            </label>
             <div class="field-group hidden" id="sm-virtual-group">
-              <label class="field-label">Virtual Link (https:// only)</label>
+              <label class="field-label" id="sm-virtual-label">Virtual Link (https:// only)</label>
               <input class="field-input-plain" type="url" name="virtualLink" placeholder="https://…" />
             </div>
             <div class="field-row">
@@ -840,19 +841,13 @@ const MeetingsView = {
               </div>
               <div class="field-group">
                 <label class="field-label">Duration</label>
-                <select class="field-select" name="duration">
+                <select class="field-select" name="duration" id="sm-duration-select">
                   ${[15, 30, 45, 60, 90, 120, 180, 240, 300].map(m =>
                     `<option value="${m}" ${m === 60 ? 'selected' : ''}>${m < 60 ? `${m} min` : `${m / 60}h${m % 60 ? ' 30min' : ''}`}</option>`).join('')}
                 </select>
               </div>
             </div>
-            <div class="field-group">
-              <label class="field-label">Timezone</label>
-              <select class="field-select" name="timezone">
-                ${['Indian/Maldives', 'Asia/Colombo', 'Asia/Kolkata', 'Asia/Dubai', 'UTC'].map(tz =>
-                  `<option value="${tz}" ${tz === 'Indian/Maldives' ? 'selected' : ''}>${tz}</option>`).join('')}
-              </select>
-            </div>
+            <div id="sm-duration-hint" class="field-hint"></div>
             <div class="field-group">
               <label class="field-label">Recurrence</label>
               <div class="tabs" id="sm-recurrence-tabs">
@@ -868,7 +863,8 @@ const MeetingsView = {
             </div>
             <div class="field-group">
               <label class="field-label">Agenda / Notes (optional)</label>
-              <textarea class="field-input-plain" name="description" rows="3"></textarea>
+              ${RichEditor.langToggleHtml('descriptionLanguage', 'en')}
+              <textarea class="field-input-plain" name="description" rows="3" id="sm-description-textarea"></textarea>
             </div>
           </div>
           <div class="modal-two-col-side">
@@ -929,20 +925,95 @@ const MeetingsView = {
     const submitBtn = document.getElementById('sm-submit-btn');
 
     // ── Format / location toggles ──────────────────────────────────
+    // Hybrid (docs/22 UAT correction): meetings.virtual_link carries no
+    // DB constraint tying it to location_mode='virtual' — the only
+    // constraint is that 'virtual' mode REQUIRES a link, never that a
+    // room/external meeting can't also carry one. So "some participants
+    // in person, some online" needs no schema change: a room-based
+    // meeting can freely also set virtual_link for remote attendees.
     const locSelect = document.getElementById('sm-location-mode');
     const roomGroup = document.getElementById('sm-room-group');
     const extGroup = document.getElementById('sm-external-group');
     const virtGroup = document.getElementById('sm-virtual-group');
+    const virtLabel = document.getElementById('sm-virtual-label');
+    const hybridToggleGroup = document.getElementById('sm-hybrid-toggle-group');
+    const hybridCheckbox = document.getElementById('sm-hybrid-checkbox');
     const syncLocationFields = () => {
-      if (roomGroup) roomGroup.classList.toggle('hidden', locSelect.value !== 'room');
-      extGroup.classList.toggle('hidden', locSelect.value !== 'external');
-      virtGroup.classList.toggle('hidden', locSelect.value !== 'virtual');
+      const mode = locSelect.value;
+      if (roomGroup) roomGroup.classList.toggle('hidden', mode !== 'room');
+      extGroup.classList.toggle('hidden', mode !== 'external');
+      hybridToggleGroup.classList.toggle('hidden', mode === 'virtual');
+      if (mode === 'virtual') {
+        virtGroup.classList.remove('hidden');
+        virtLabel.textContent = 'Virtual Link (https:// only)';
+      } else {
+        virtGroup.classList.toggle('hidden', !hybridCheckbox.checked);
+        virtLabel.textContent = 'Virtual Link (for remote participants, optional)';
+      }
     };
-    locSelect.addEventListener('change', syncLocationFields);
+    locSelect.addEventListener('change', () => { syncLocationFields(); refreshDurationCap(); });
+    hybridCheckbox.addEventListener('change', syncLocationFields);
     syncLocationFields();
 
+    // ── Duration — capped to the room's actual free time from the
+    // selected start (docs/22 UAT correction: don't offer a duration
+    // that would conflict with the room's next booking/block) —
+    // recomputed on room/date/start-time change; a format other than
+    // 'room' (or no room selected yet) leaves the full preset list.
+    const DURATION_OPTIONS = [15, 30, 45, 60, 90, 120, 180, 240, 300];
+    const durationSelect = document.getElementById('sm-duration-select');
+    const durationHint = document.getElementById('sm-duration-hint');
+    const fmtDurationOption = (m) => (m < 60 ? `${m} min` : `${m / 60}h${m % 60 ? ' 30min' : ''}`);
+    const fmtMinutesLong = (total) => {
+      const h = Math.floor(total / 60), m = total % 60;
+      if (h === 0) return `${m} min`;
+      if (m === 0) return `${h}h`;
+      return `${h}h ${m}min`;
+    };
+    const setDurationOptions = (capMinutes) => {
+      const prevValue = durationSelect.value;
+      const allowed = capMinutes == null ? DURATION_OPTIONS : DURATION_OPTIONS.filter(m => m <= capMinutes);
+      if (capMinutes != null && allowed.length === 0) {
+        durationSelect.innerHTML = `<option value="0">No availability</option>`;
+        durationHint.innerHTML = `<span style="color:var(--color-error-dark);">This room has no free time at this start — pick an earlier time or a different room.</span>`;
+        return;
+      }
+      durationSelect.innerHTML = allowed.map(m => `<option value="${m}">${fmtDurationOption(m)}</option>`).join('');
+      durationSelect.value = allowed.includes(parseInt(prevValue, 10)) ? prevValue : String(allowed.includes(60) ? 60 : allowed[allowed.length - 1]);
+      durationHint.textContent = capMinutes != null ? `Room is free for ${fmtMinutesLong(capMinutes)} from this start.` : '';
+    };
+    const roomSelect = roomGroup ? form.querySelector('[name="roomId"]') : null;
+    async function refreshDurationCap() {
+      if (!roomGroup || locSelect.value !== 'room') { setDurationOptions(null); return; }
+      const roomId = roomSelect.value;
+      const date = form.querySelector('[name="date"]').value;
+      const startTime = form.querySelector('[name="startTime"]').value;
+      if (!roomId || !date || !startTime) { setDurationOptions(null); return; }
+      const selectedStart = new Date(`${date}T${startTime}:00`);
+      const dayStart = new Date(`${date}T00:00:00`);
+      const dayEnd = new Date(dayStart.getTime() + 24 * 3600 * 1000);
+      durationHint.textContent = 'Checking availability…';
+      try {
+        const [bookings, blocks] = await Promise.all([
+          RoomsAPI.fetchBookings({ roomId, from: dayStart.toISOString(), to: dayEnd.toISOString() }),
+          RoomsAPI.fetchRoomBlocks({ roomId, from: dayStart.toISOString(), to: dayEnd.toISOString(), activeOnly: true }),
+        ]);
+        const nextConflictStarts = [
+          ...bookings.filter(b => !['cancelled', 'rejected', 'expired'].includes(b.status)).map(b => new Date(b.start_at)),
+          ...blocks.map(b => new Date(b.start_at)),
+        ].filter(d => d > selectedStart);
+        const cap = nextConflictStarts.length > 0
+          ? Math.floor((Math.min(...nextConflictStarts.map(d => d.getTime())) - selectedStart.getTime()) / 60000)
+          : null;
+        setDurationOptions(cap);
+      } catch (err) {
+        durationHint.textContent = '';
+      }
+    }
     if (roomGroup) {
-      const roomSelect = form.querySelector('[name="roomId"]');
+      roomSelect.addEventListener('change', refreshDurationCap);
+      form.querySelector('[name="date"]').addEventListener('change', refreshDurationCap);
+      form.querySelector('[name="startTime"]').addEventListener('change', refreshDurationCap);
       const availEl = document.getElementById('sm-availability-indicator');
       document.getElementById('sm-check-availability-btn').addEventListener('click', async () => {
         const roomId = roomSelect.value;
@@ -961,7 +1032,18 @@ const MeetingsView = {
           availEl.textContent = err.message || 'Could not check availability.';
         }
       });
+      refreshDurationCap();
     }
+
+    // ── Agenda/Notes — EN/Dhivehi toggle, same RichEditor pattern used
+    // everywhere else text is authored in this app (My Notes above,
+    // Entry/Request threads) — a single field, no separate language
+    // column; isDivehi() auto-detects Thaana on read for anything typed
+    // without ever touching the toggle. ─────────────────────────────
+    const descriptionTextarea = document.getElementById('sm-description-textarea');
+    const syncDescriptionDir = (lang) => descriptionTextarea.classList.toggle('field-divehi', lang === 'dv');
+    RichEditor.bindLangToggle(form, 'descriptionLanguage', syncDescriptionDir);
+    RichEditor.bindAutoDetect(descriptionTextarea, form, 'descriptionLanguage', syncDescriptionDir);
 
     // ── Recurrence quick-picks ─────────────────────────────────────
     let recurrence = 'none';
@@ -1084,12 +1166,18 @@ const MeetingsView = {
       if (!title) { errEl.textContent = 'Title is required.'; errEl.classList.remove('hidden'); return; }
       const date = fd.get('date'), startTimeStr = fd.get('startTime');
       if (!date || !startTimeStr) { errEl.textContent = 'Date and start time are required.'; errEl.classList.remove('hidden'); return; }
-      const durationMin = parseInt(fd.get('duration'), 10) || 60;
+      const durationMin = parseInt(fd.get('duration'), 10) || 0;
+      if (roomGroup && locSelect.value === 'room' && durationMin === 0) {
+        errEl.textContent = 'This room has no free time at the selected start — pick an earlier time or a different room.'; errEl.classList.remove('hidden'); return;
+      }
       const startAt = new Date(`${date}T${startTimeStr}:00`);
       const endAt = new Date(startAt.getTime() + durationMin * 60000);
       const locationMode = fd.get('locationMode') || null;
       const roomId = roomGroup ? (fd.get('roomId') || null) : null;
       const externalLocation = fd.get('externalLocation') || null;
+      // Not tied to locationMode==='virtual' — a room/external meeting
+      // may also carry a virtual link for remote (hybrid) attendees;
+      // only a fully-virtual meeting requires it.
       const virtualLink = fd.get('virtualLink') || null;
 
       if (locationMode === 'room' && !roomId) {
@@ -1100,6 +1188,9 @@ const MeetingsView = {
       }
       if (locationMode === 'virtual' && (!virtualLink || !/^https:\/\//.test(virtualLink))) {
         errEl.textContent = 'A valid https:// virtual link is required for an online meeting.'; errEl.classList.remove('hidden'); return;
+      }
+      if (locationMode !== 'virtual' && virtualLink && !/^https:\/\//.test(virtualLink)) {
+        errEl.textContent = 'The virtual link must start with https://.'; errEl.classList.remove('hidden'); return;
       }
       const seriesEndDate = fd.get('seriesEndDate');
       if (recurrence !== 'none' && (!seriesEndDate || seriesEndDate < date)) {
@@ -1113,11 +1204,11 @@ const MeetingsView = {
         let allMeetingIds = [];
         if (recurrence === 'none') {
           const meetingId = await MeetingsAPI.createMeeting({
-            title, description: fd.get('description') || null, meetingType: fd.get('meetingType'),
+            title, description: fd.get('description') || null,
             visibility: fd.get('visibility'), startAt: startAt.toISOString(), endAt: endAt.toISOString(),
-            timezone: fd.get('timezone'), locationMode,
+            timezone: 'Indian/Maldives', locationMode,
             externalLocation: locationMode === 'external' ? externalLocation : null,
-            virtualLink: locationMode === 'virtual' ? virtualLink : null,
+            virtualLink,
             status: 'scheduled',
           });
           allMeetingIds = [meetingId];
@@ -1133,12 +1224,12 @@ const MeetingsView = {
           const [pattern, interval] = recurrence.split(':');
           const endTimeStr = `${String(endAt.getHours()).padStart(2, '0')}:${String(endAt.getMinutes()).padStart(2, '0')}`;
           const occurrences = await MeetingsAPI.createRecurringMeeting({
-            title, description: fd.get('description') || null, meetingType: fd.get('meetingType'),
+            title, description: fd.get('description') || null,
             visibility: fd.get('visibility'), recurrencePattern: pattern, intervalCount: parseInt(interval, 10) || 1,
             seriesStartDate: date, seriesEndDate, startTime: startTimeStr, endTime: endTimeStr,
-            timezone: fd.get('timezone'), locationMode,
+            timezone: 'Indian/Maldives', locationMode,
             externalLocation: locationMode === 'external' ? externalLocation : null,
-            virtualLink: locationMode === 'virtual' ? virtualLink : null,
+            virtualLink,
             roomId: locationMode === 'room' ? roomId : null,
             groupId: pendingGroup ? pendingGroup.groupId : null,
           });
@@ -1522,7 +1613,7 @@ const MeetingsView = {
       ${meeting.description ? `
         <div style="margin-top:12px;">
           <label class="field-label">Description</label>
-          <div style="white-space:pre-wrap; margin-top:6px;">${this._escapeHtml(meeting.description)}</div>
+          <div class="${RichEditor.dvClass(meeting.description).trim()}" style="white-space:pre-wrap; margin-top:6px;">${this._escapeHtml(meeting.description)}</div>
         </div>
       ` : ''}
 

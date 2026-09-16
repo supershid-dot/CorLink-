@@ -19,6 +19,7 @@ const path = require('path');
 const assert = require('assert');
 
 const root = path.resolve(__dirname, '..');
+const richEditorSource = fs.readFileSync(path.join(root, 'js/lib/rich-editor.js'), 'utf8');
 const meetingsSource = fs.readFileSync(path.join(root, 'js/views/meetings.js'), 'utf8');
 
 const results = [];
@@ -69,6 +70,11 @@ async function check(name, fn) {
           { id: 'room-2', name: 'HQ Meeting Room B', is_active: true },
         ]),
         checkRoomAvailability: async (args) => { record('RoomsAPI.checkRoomAvailability', [args]); return true; },
+        // No existing bookings/blocks by default — duration stays uncapped
+        // (the full preset list) unless a test's own RoomsAPI override says
+        // otherwise (see the duration-cap test below).
+        fetchBookings: async (args) => { record('RoomsAPI.fetchBookings', [args]); return []; },
+        fetchRoomBlocks: async (args) => { record('RoomsAPI.fetchRoomBlocks', [args]); return []; },
       };
       window.MeetingsAPI = {
         fetchMeetingGroups: async () => ([{ id: 'grp-1', name: 'Executive Team' }]),
@@ -79,6 +85,7 @@ async function check(name, fn) {
         applyGroupToMeeting: async (meetingId, groupId) => { record('MeetingsAPI.applyGroupToMeeting', [meetingId, groupId]); },
         fetchMeeting: async (id) => ({ id, title: 'Fetched Meeting' }),
       };
+      ${richEditorSource}
       ${meetingsSource}
       window.__view = MeetingsView;
       window.__view._openMeetingDetailModal = (meeting) => { record('_openMeetingDetailModal', [meeting]); };
@@ -101,6 +108,13 @@ async function check(name, fn) {
     assert.match(html, /data-recur="none"/);
     assert.match(html, /data-recur="weekly:1"/);
     assert.match(html, /You \(organizer\)/);
+    // Timezone and Meeting Type are no longer user-facing fields —
+    // every meeting is always Indian/Maldives time and 'general' type.
+    assert.doesNotMatch(html, /name="timezone"/);
+    assert.doesNotMatch(html, /name="meetingType"/);
+    // Agenda/Notes carries the same EN/Dhivehi toggle used everywhere
+    // else text is authored in this app.
+    assert.match(html, /data-lang-toggle="descriptionLanguage"/);
     await page.close();
   });
 
@@ -148,10 +162,86 @@ async function check(name, fn) {
     assert.ok(createCall, 'expected createMeeting to be called');
     assert.strictEqual(createCall.args[0].title, 'Budget Review');
     assert.strictEqual(createCall.args[0].locationMode, 'room');
+    assert.strictEqual(createCall.args[0].timezone, 'Indian/Maldives');
+    assert.strictEqual(createCall.args[0].meetingType, undefined, 'meetingType is no longer a user-facing field — the API default (general) applies');
     assert.ok(assignCall, 'expected assignRoomBooking to be called');
     assert.deepStrictEqual(assignCall.args, ['meeting-1', 'room-1']);
     const detailCall = calls.find(c => c.name === '_openMeetingDetailModal');
     assert.ok(detailCall, 'expected the new meeting detail to open after scheduling');
+    await page.close();
+  });
+
+  await check('hybrid: a room meeting can also carry a virtual link for remote participants', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openScheduleMeetingModal({ prefillRoomId: 'room-1', prefillDate: '2026-09-20', prefillTime: '09:00' }));
+    const hiddenBeforeHybrid = await page.evaluate(() => document.getElementById('sm-virtual-group').classList.contains('hidden'));
+    assert.strictEqual(hiddenBeforeHybrid, true, 'virtual link field starts hidden for a plain room meeting');
+    await page.evaluate(() => {
+      document.querySelector('#schedule-meeting-form [name="title"]').value = 'Hybrid Standup';
+      document.getElementById('sm-hybrid-checkbox').click();
+      document.querySelector('#schedule-meeting-form [name="virtualLink"]').value = 'https://meet.example.com/hybrid';
+    });
+    const hiddenAfterHybrid = await page.evaluate(() => document.getElementById('sm-virtual-group').classList.contains('hidden'));
+    assert.strictEqual(hiddenAfterHybrid, false, 'checking the hybrid box reveals the virtual link field');
+    await page.evaluate(() => document.getElementById('sm-submit-btn').click());
+    await page.waitForTimeout(50);
+    const calls = await page.evaluate(() => window.calls);
+    const createCall = calls.find(c => c.name === 'MeetingsAPI.createMeeting');
+    assert.strictEqual(createCall.args[0].locationMode, 'room');
+    assert.strictEqual(createCall.args[0].virtualLink, 'https://meet.example.com/hybrid');
+    const assignCall = calls.find(c => c.name === 'MeetingsAPI.assignRoomBooking');
+    assert.ok(assignCall, 'the room is still booked alongside the virtual link');
+    await page.close();
+  });
+
+  await check('duration options are capped to the room\'s free time before its next booking', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => {
+      // A booking starting exactly 1 hour after the selected 09:00 start
+      // caps the room's free time at 60 minutes — 90min/2h/etc. must not
+      // be offered, and the previously-selected 60min default survives.
+      window.RoomsAPI.fetchBookings = async () => ([
+        { id: 'bk1', status: 'confirmed', start_at: '2026-09-20T10:00:00Z', end_at: '2026-09-20T11:00:00Z' },
+      ]);
+    });
+    await page.evaluate(() => window.__view._openScheduleMeetingModal({ prefillRoomId: 'room-1', prefillDate: '2026-09-20', prefillTime: '09:00' }));
+    await page.waitForTimeout(50);
+    const options = await page.evaluate(() => Array.from(document.getElementById('sm-duration-select').options).map(o => o.value));
+    assert.deepStrictEqual(options, ['15', '30', '45', '60']);
+    await page.close();
+  });
+
+  await check('duration is capped to "No availability" when the room is immediately double-booked, and submit is rejected', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => {
+      window.RoomsAPI.fetchBookings = async () => ([
+        { id: 'bk1', status: 'confirmed', start_at: '2026-09-20T09:10:00Z', end_at: '2026-09-20T10:00:00Z' },
+      ]);
+    });
+    await page.evaluate(() => window.__view._openScheduleMeetingModal({ prefillRoomId: 'room-1', prefillDate: '2026-09-20', prefillTime: '09:00' }));
+    await page.waitForTimeout(50);
+    const optionText = await page.evaluate(() => document.getElementById('sm-duration-select').options[0].textContent);
+    assert.strictEqual(optionText, 'No availability');
+    await page.evaluate(() => { document.querySelector('#schedule-meeting-form [name="title"]').value = 'Too Tight'; });
+    await page.evaluate(() => document.getElementById('sm-submit-btn').click());
+    await page.waitForTimeout(20);
+    const calls = await page.evaluate(() => window.calls);
+    assert.ok(!calls.some(c => c.name === 'MeetingsAPI.createMeeting'), 'must not create a meeting with no room availability');
+    await page.close();
+  });
+
+  await check('bilingual Agenda/Notes: typing Thaana auto-flips the textarea to RTL (field-divehi)', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openScheduleMeetingModal());
+    const beforeClass = await page.evaluate(() => document.getElementById('sm-description-textarea').classList.contains('field-divehi'));
+    assert.strictEqual(beforeClass, false);
+    await page.evaluate(() => {
+      const ta = document.getElementById('sm-description-textarea');
+      ta.value = 'ބައްދަލުވުމުގެ އެޖެންޑާ';
+      ta.dispatchEvent(new Event('input'));
+    });
+    const afterClass = await page.evaluate(() => document.getElementById('sm-description-textarea').classList.contains('field-divehi'));
+    assert.strictEqual(afterClass, true);
     await page.close();
   });
 
