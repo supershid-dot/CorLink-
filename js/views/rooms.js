@@ -73,7 +73,7 @@ const RoomsView = {
     if (params.bookingId) {
       try {
         const booking = await RoomsAPI.fetchBooking(params.bookingId);
-        this._openBookingDetailModal(booking);
+        this._openBookingOrMeetingDetailModal(booking);
       } catch (err) {
         console.error('CorLink: failed to open linked booking', err);
       }
@@ -266,7 +266,7 @@ const RoomsView = {
         if (eventId.startsWith('bl:')) {
           this._openBlockDetailModal(this._scheduleBlocksById.get(eventId.slice(3)));
         } else {
-          this._openBookingDetailModal(this._scheduleBookingsById.get(eventId.slice(2)));
+          this._openBookingOrMeetingDetailModal(this._scheduleBookingsById.get(eventId.slice(2)));
         }
       },
       onDayPick: (day) => {
@@ -328,7 +328,7 @@ const RoomsView = {
     content.querySelectorAll('[data-view-booking]').forEach(btn => {
       btn.addEventListener('click', async () => {
         const booking = await RoomsAPI.fetchBooking(btn.dataset.viewBooking);
-        this._openBookingDetailModal(booking);
+        this._openBookingOrMeetingDetailModal(booking);
       });
     });
   },
@@ -711,7 +711,7 @@ const RoomsView = {
     content.querySelectorAll('[data-view-booking]').forEach(btn => {
       btn.addEventListener('click', async () => {
         const booking = await RoomsAPI.fetchBooking(btn.dataset.viewBooking);
-        this._openBookingDetailModal(booking);
+        this._openBookingOrMeetingDetailModal(booking);
       });
     });
   },
@@ -972,7 +972,29 @@ const RoomsView = {
     });
   },
 
-  // ── Booking detail modal ─────────────────────────────────────────
+  // Routes to the full meeting detail (participants, RSVP, notes,
+  // minutes, documents, lock/edit/cancel) whenever this booking is
+  // linked to a meeting and the Meetings module is available — a
+  // booking made through the combined Schedule Meeting form (docs/115)
+  // always has one. Falls back to the room-only Booking Details modal
+  // for a genuinely standalone booking (Meetings disabled, or one made
+  // through the room-only fallback form), or if the linked meeting
+  // itself fails to load.
+  async _openBookingOrMeetingDetailModal(booking) {
+    if (booking?.meeting_id && AppShell.isModuleEnabled(this._user, 'meetings') && typeof MeetingsView !== 'undefined') {
+      try {
+        const meeting = await MeetingsAPI.fetchMeeting(booking.meeting_id);
+        return MeetingsView._openMeetingDetailModal(meeting);
+      } catch (err) {
+        console.error('CorLink: failed to open the linked meeting detail, falling back to the booking detail', err);
+      }
+    }
+    this._openBookingDetailModal(booking);
+  },
+
+  // ── Booking detail modal (room-only fallback — see
+  // _openBookingOrMeetingDetailModal above for the usual, linked-
+  // meeting-aware entry point) ─────────────────────────────────────
   _openBookingDetailModal(booking) {
     const isOwn = booking.created_by === this._user.id;
     const isManager = this._isManagerOf(booking.room_id);

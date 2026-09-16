@@ -120,6 +120,10 @@ async function check(name, fn) {
         fetchBookings: async () => ([]),
         fetchRoomBlocks: async () => ([]),
       };
+      window.openedMeetingDetailCalls = [];
+      window.MeetingsAPI = {
+        fetchMeeting: async (id) => { window.fetchMeetingCalls = window.fetchMeetingCalls || []; window.fetchMeetingCalls.push(id); return { id, title: 'Linked Meeting' }; },
+      };
       // Declared with const, matching meetings.js's own top-level
       // declaration style exactly (not window.MeetingsView = ...) —
       // a const at script top level does NOT become a window property,
@@ -129,6 +133,7 @@ async function check(name, fn) {
       // silently hiding exactly the bug this test exists to catch.
       const MeetingsView = {
         _openScheduleMeetingModal: async (opts) => { window.openedScheduleMeetingCalls.push(opts || {}); },
+        _openMeetingDetailModal: (meeting) => { window.openedMeetingDetailCalls.push(meeting); },
       };
       ${gridSource}
       ${roomsSource}
@@ -162,6 +167,73 @@ async function check(name, fn) {
     assert.ok(result.scheduleCalls[0].prefillDate && result.scheduleCalls[0].prefillTime);
     assert.strictEqual(result.scheduleCalls[0].hasOnSuccess, true);
     assert.strictEqual(result.fallbackCallCount, 0, 'the room-only fallback must not also open');
+    await page.close();
+  });
+
+  await check('clicking a booking linked to a meeting opens the full meeting detail, not the room-only booking detail', async () => {
+    const { page } = await newRoomsPageWithMeetingsEnabled();
+    await page.evaluate(async () => {
+      window.RoomsAPI.fetchBookings = async () => ([{
+        id: 'bk1', room_id: 'r1', status: 'confirmed', meeting_id: 'meeting-42',
+        start_at: '2026-09-16T09:00:00Z', end_at: '2026-09-16T10:00:00Z',
+        created_by_user: { full_name: 'Jane Staff' },
+        room: { id: 'r1', name: 'HQ Meeting Room A' },
+      }]);
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._isAdmin = false; v._isSupervisor = false; v._orgId = 'org-1';
+      v._rooms = await window.RoomsAPI.fetchRooms();
+      v._myManagedRoomIds = new Set();
+      v._state.tab = 'schedule';
+      v._state.scheduleRoomId = 'r1';
+      v._state.scheduleDate = '2026-09-16';
+      document.body.insertAdjacentHTML('beforeend', `<div id="rooms-tab-content"></div>`);
+      await v._renderTab();
+    });
+    await page.evaluate(() => document.querySelector('[data-week-grid-event]').click());
+    await page.waitForTimeout(20);
+    const result = await page.evaluate(() => ({
+      fetchMeetingCalls: window.fetchMeetingCalls || [],
+      detailCalls: window.openedMeetingDetailCalls,
+    }));
+    assert.deepStrictEqual(result.fetchMeetingCalls, ['meeting-42']);
+    assert.strictEqual(result.detailCalls.length, 1);
+    assert.strictEqual(result.detailCalls[0].id, 'meeting-42');
+    await page.close();
+  });
+
+  await check('clicking a booking NOT linked to a meeting still opens the room-only booking detail', async () => {
+    const { page } = await newRoomsPageWithMeetingsEnabled();
+    await page.evaluate(async () => {
+      window.RoomsAPI.fetchBookings = async () => ([{
+        id: 'bk1', room_id: 'r1', status: 'confirmed', meeting_id: null,
+        start_at: '2026-09-16T09:00:00Z', end_at: '2026-09-16T10:00:00Z',
+        created_by_user: { full_name: 'Jane Staff' },
+        room: { id: 'r1', name: 'HQ Meeting Room A' },
+      }]);
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._isAdmin = false; v._isSupervisor = false; v._orgId = 'org-1';
+      v._rooms = await window.RoomsAPI.fetchRooms();
+      v._myManagedRoomIds = new Set();
+      v._state.tab = 'schedule';
+      v._state.scheduleRoomId = 'r1';
+      v._state.scheduleDate = '2026-09-16';
+      window.openedRoomOnlyDetailCalls = [];
+      v._openBookingDetailModal = (booking) => { window.openedRoomOnlyDetailCalls.push(booking); };
+      document.body.insertAdjacentHTML('beforeend', `<div id="rooms-tab-content"></div>`);
+      await v._renderTab();
+    });
+    await page.evaluate(() => document.querySelector('[data-week-grid-event]').click());
+    await page.waitForTimeout(20);
+    const result = await page.evaluate(() => ({
+      fetchMeetingCalls: window.fetchMeetingCalls || [],
+      detailCalls: window.openedMeetingDetailCalls,
+      roomOnlyCalls: window.openedRoomOnlyDetailCalls,
+    }));
+    assert.deepStrictEqual(result.fetchMeetingCalls, []);
+    assert.strictEqual(result.detailCalls.length, 0);
+    assert.strictEqual(result.roomOnlyCalls.length, 1);
     await page.close();
   });
 

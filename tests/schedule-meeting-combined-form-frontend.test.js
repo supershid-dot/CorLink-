@@ -54,6 +54,7 @@ async function check(name, fn) {
       window.Auth = { getCachedProfile: () => ({ id: 'u1', org_id: 'org-1', full_name: 'Jane Staff' }) };
       window.AppShell = {
         isModuleEnabled: (user, mod) => mod === 'rooms' ? ${roomsEnabled} : true,
+        isAdmin: () => false, isSupervisorOrAbove: () => false,
         topbarHtml: () => '', bottomNavHtml: () => '', bindTopbar: () => {},
       };
       window.Router = { navigate: (...args) => record('Router.navigate', args) };
@@ -88,6 +89,7 @@ async function check(name, fn) {
         addParticipant: async (meetingId, payload) => { record('MeetingsAPI.addParticipant', [meetingId, payload]); },
         applyGroupToMeeting: async (meetingId, groupId) => { record('MeetingsAPI.applyGroupToMeeting', [meetingId, groupId]); },
         fetchMeeting: async (id) => ({ id, title: 'Fetched Meeting' }),
+        updateMeeting: async (meetingId, payload) => { record('MeetingsAPI.updateMeeting', [meetingId, payload]); },
       };
       ${richEditorSource}
       ${meetingsSource}
@@ -352,6 +354,87 @@ async function check(name, fn) {
     const calls = await page.evaluate(() => window.calls);
     const createCall = calls.find(c => c.name === 'MeetingsAPI.createMeeting');
     assert.strictEqual(createCall.args[0].sectionId, null);
+    await page.close();
+  });
+
+  // ── Edit Meeting — docs/117 UAT correction: should look/behave the
+  // same as the combined Schedule Meeting form (Format/Section/Date+
+  // Start+Duration/Privacy/bilingual Agenda, no Timezone or Meeting
+  // Type field), minus recurrence and the inline participants panel
+  // (the meeting already exists — its own detail view manages those). ─
+  const fixtureMeeting = {
+    id: 'meeting-9', title: 'Weekly Sync', description: 'Agenda here',
+    visibility: 'participants', status: 'scheduled', organization_id: 'org-1',
+    location_mode: 'external', external_location: 'City Hall', virtual_link: null,
+    start_at: '2026-09-20T09:00:00Z', end_at: '2026-09-20T10:00:00Z',
+    section_id: 'sec-2', bookings: [],
+  };
+
+  await check('Edit Meeting renders the same field set as Schedule Meeting (Format/Section/Date+Start+Duration/Privacy), no Timezone or Meeting Type', async () => {
+    const { page } = await newPage();
+    await page.evaluate((meeting) => window.__view._openEditMeetingModal(meeting), fixtureMeeting);
+    const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /Edit Meeting/);
+    assert.match(html, /name="locationMode"/); // Format, not "Location"
+    assert.match(html, /In person — External location/);
+    assert.match(html, /name="sectionId"/);
+    assert.match(html, /Legal/); // sec-2's name in the fixture AdminAPI stub
+    assert.match(html, /name="date"/);
+    assert.match(html, /name="startTime"/);
+    assert.match(html, /name="duration"/);
+    assert.doesNotMatch(html, /name="timezone"/);
+    assert.doesNotMatch(html, /name="meetingType"/);
+    assert.doesNotMatch(html, /data-recur=/); // no recurrence in edit mode
+    assert.doesNotMatch(html, /sm-participant-list/); // no inline participants panel
+    await page.close();
+  });
+
+  await check('Edit Meeting prefills date/start/duration from the meeting\'s own start_at/end_at', async () => {
+    const { page } = await newPage();
+    await page.evaluate((meeting) => window.__view._openEditMeetingModal(meeting), fixtureMeeting);
+    const values = await page.evaluate(() => {
+      const form = document.getElementById('meeting-form');
+      return {
+        date: form.querySelector('[name="date"]').value,
+        startTime: form.querySelector('[name="startTime"]').value,
+        duration: form.querySelector('[name="duration"]').value,
+        externalLocation: form.querySelector('[name="externalLocation"]').value,
+      };
+    });
+    assert.strictEqual(values.date, '2026-09-20');
+    assert.strictEqual(values.startTime, '09:00');
+    assert.strictEqual(values.duration, '60');
+    assert.strictEqual(values.externalLocation, 'City Hall');
+    await page.close();
+  });
+
+  await check('submitting Edit Meeting calls updateMeeting with recomputed start/end and the section', async () => {
+    const { page } = await newPage();
+    await page.evaluate((meeting) => window.__view._openEditMeetingModal(meeting), fixtureMeeting);
+    await page.evaluate(() => {
+      document.querySelector('#meeting-form [name="startTime"]').value = '14:00';
+      document.querySelector('#meeting-form [name="duration"]').value = '90';
+    });
+    await page.evaluate(() => document.getElementById('meeting-form-submit').click());
+    await page.waitForTimeout(50);
+    const calls = await page.evaluate(() => window.calls);
+    const updateCall = calls.find(c => c.name === 'MeetingsAPI.updateMeeting');
+    assert.ok(updateCall);
+    assert.strictEqual(updateCall.args[0], 'meeting-9');
+    assert.strictEqual(updateCall.args[1].startAt, new Date('2026-09-20T14:00:00').toISOString());
+    assert.strictEqual(updateCall.args[1].endAt, new Date('2026-09-20T15:30:00').toISOString());
+    assert.strictEqual(updateCall.args[1].sectionId, 'sec-2');
+    await page.close();
+  });
+
+  await check('Edit Meeting shows a room-based meeting\'s room as read-only text, not an editable select', async () => {
+    const { page } = await newPage();
+    const roomMeeting = { ...fixtureMeeting, location_mode: 'room', external_location: null, bookings: [{ id: 'bk1', status: 'confirmed', room: { id: 'room-1', name: 'HQ Meeting Room A' } }] };
+    await page.evaluate((meeting) => window.__view._openEditMeetingModal(meeting), roomMeeting);
+    const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.doesNotMatch(html, /name="roomId"/);
+    assert.match(html, /HQ Meeting Room A/);
+    assert.match(html, /Assign\/Change Room from the meeting detail/);
     await page.close();
   });
 

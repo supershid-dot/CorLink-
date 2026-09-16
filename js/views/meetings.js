@@ -588,6 +588,21 @@ const MeetingsView = {
   // steps). Completed/cancelled meetings never reach here (edit button
   // is hidden for both in the detail modal) — defensive guard in case
   // of a stale reference.
+  // Same field set/layout as _openScheduleMeetingModal (docs/116 UAT
+  // correction: "edit should look the same as new meeting") — Format+
+  // hybrid virtual link, Date/Start/Duration, Section, Privacy, EN/
+  // Dhivehi Agenda/Notes, no Timezone (always Indian/Maldives), no
+  // Meeting Type (fixed at creation, matching the create form). Two
+  // things are deliberately NOT carried over from create: recurrence
+  // (editing one occurrence never turns it into a series) and the
+  // inline Participants panel (the meeting already exists — its
+  // detail view's own Add/Remove Participant flows already do this
+  // without duplicating that logic here). A room-based meeting shows
+  // its current room as read-only text rather than an editable select
+  // — reassigning a room is a distinct, already-working flow (Assign/
+  // Change Room from the detail view) that manages the linked booking
+  // itself; re-deriving that here would either duplicate it or silently
+  // diverge from it.
   async _openEditMeetingModal(meeting) {
     if (meeting.status === 'cancelled' || this._effectiveStatus(meeting) === 'completed') return;
 
@@ -595,9 +610,12 @@ const MeetingsView = {
     try { sections = (await AdminAPI.listSectionsByOrg(meeting.organization_id)).filter(s => s.is_active); }
     catch (err) { console.warn('CorLink: failed to load sections for the edit-meeting form', err); }
 
-    const startVal = new Date(meeting.start_at).toISOString().slice(0, 16);
-    const endVal = new Date(meeting.end_at).toISOString().slice(0, 16);
+    const start = new Date(meeting.start_at), end = new Date(meeting.end_at);
+    const defDate = this._dateStr(start);
+    const defStartTime = `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`;
+    const defDurationMin = Math.max(15, Math.round((end - start) / 60000));
     const locationMode = meeting.location_mode || '';
+    const activeBooking = (meeting.bookings || []).find(b => ['hold', 'pending', 'confirmed'].includes(b.status));
     // A scheduled meeting can never go back to draft — no status field
     // shown at all in that case (nothing to choose; p_status stays
     // unset/unchanged). A draft gets the real choice.
@@ -606,83 +624,89 @@ const MeetingsView = {
     this._openModal(`
       <h3>Edit Meeting</h3>
       <form id="meeting-form" class="modal-form">
-        <div class="field-group">
-          <label class="field-label">Title</label>
-          <input class="field-input-plain" name="title" required value="${this._escapeHtml(meeting.title)}" />
-        </div>
-        <div class="field-group">
-          <label class="field-label">Description (optional)</label>
-          ${RichEditor.langToggleHtml('descriptionLanguage', RichEditor.isDivehi(meeting.description || '') ? 'dv' : 'en')}
-          <textarea class="field-input-plain${RichEditor.dvClass(meeting.description || '')}" name="description" rows="3" id="edit-meeting-description-textarea">${this._escapeHtml(meeting.description || '')}</textarea>
-        </div>
-        ${sections.length > 0 ? `
-          <div class="field-group">
-            <label class="field-label">Section (optional)</label>
-            <select class="field-select" name="sectionId">
-              <option value="">— None —</option>
-              ${sections.map(s => `<option value="${s.id}" ${meeting.section_id === s.id ? 'selected' : ''}>${this._escapeHtml(s.name)}</option>`).join('')}
-            </select>
-            <p class="field-hint">Staff and command/department heads over this section will be able to see, book, and edit this meeting.</p>
+        <div class="modal-two-col">
+          <div class="modal-two-col-main">
+            <div class="field-group">
+              <label class="field-label">Title</label>
+              <input class="field-input-plain" name="title" required value="${this._escapeHtml(meeting.title)}" />
+            </div>
+            ${sections.length > 0 ? `
+              <div class="field-group">
+                <label class="field-label">Section (optional)</label>
+                <select class="field-select" name="sectionId">
+                  <option value="">— None —</option>
+                  ${sections.map(s => `<option value="${s.id}" ${meeting.section_id === s.id ? 'selected' : ''}>${this._escapeHtml(s.name)}</option>`).join('')}
+                </select>
+                <p class="field-hint">Staff and command/department heads over this section will be able to see, book, and edit this meeting.</p>
+              </div>
+            ` : ''}
+            <div class="field-group">
+              <label class="field-label">Format</label>
+              <select class="field-select" name="locationMode" id="meeting-location-mode">
+                <option value="" ${locationMode === '' ? 'selected' : ''}>Not decided yet</option>
+                <option value="room" ${locationMode === 'room' ? 'selected' : ''}>In person — Room</option>
+                <option value="external" ${locationMode === 'external' ? 'selected' : ''}>In person — External location</option>
+                <option value="virtual" ${locationMode === 'virtual' ? 'selected' : ''}>Online — Virtual link</option>
+              </select>
+            </div>
+            <div class="field-group hidden" id="meeting-room-readonly-group">
+              <label class="field-label">Meeting Room</label>
+              <p class="field-hint">${activeBooking?.room?.name ? this._escapeHtml(activeBooking.room.name) : 'Not yet assigned'} — use Assign/Change Room from the meeting detail to reassign.</p>
+            </div>
+            <div class="field-group hidden" id="external-location-group">
+              <label class="field-label">External Location</label>
+              <input class="field-input-plain" name="externalLocation" value="${this._escapeHtml(meeting.external_location || '')}" />
+            </div>
+            <label class="checkbox-row hidden" id="meeting-hybrid-toggle-group">
+              <input type="checkbox" id="meeting-hybrid-checkbox" ${locationMode !== 'virtual' && meeting.virtual_link ? 'checked' : ''} />
+              <span>Also allow remote/online participation (hybrid) — add a virtual link</span>
+            </label>
+            <div class="field-group hidden" id="virtual-link-group">
+              <label class="field-label" id="meeting-virtual-label">Virtual Link (https:// only)</label>
+              <input class="field-input-plain" type="url" name="virtualLink" placeholder="https://…" value="${this._escapeHtml(meeting.virtual_link || '')}" />
+            </div>
+            <div class="field-row">
+              <div class="field-group">
+                <label class="field-label">Date</label>
+                <input class="field-input-plain" type="date" name="date" required value="${defDate}" />
+              </div>
+              <div class="field-group">
+                <label class="field-label">Start Time</label>
+                <input class="field-input-plain" type="time" name="startTime" required value="${defStartTime}" />
+              </div>
+              <div class="field-group">
+                <label class="field-label">Duration</label>
+                <select class="field-select" name="duration">
+                  ${[15, 30, 45, 60, 90, 120, 180, 240, 300].map(m =>
+                    `<option value="${m}" ${m === defDurationMin ? 'selected' : ''}>${m < 60 ? `${m} min` : `${m / 60}h${m % 60 ? ' 30min' : ''}`}</option>`).join('')}
+                </select>
+              </div>
+            </div>
+            <div class="field-group">
+              <label class="field-label">Agenda / Notes (optional)</label>
+              ${RichEditor.langToggleHtml('descriptionLanguage', RichEditor.isDivehi(meeting.description || '') ? 'dv' : 'en')}
+              <textarea class="field-input-plain${RichEditor.dvClass(meeting.description || '')}" name="description" rows="3" id="edit-meeting-description-textarea">${this._escapeHtml(meeting.description || '')}</textarea>
+            </div>
           </div>
-        ` : ''}
-        <div class="field-row">
-          <div class="field-group">
-            <label class="field-label">Meeting Type</label>
-            <select class="field-select" name="meetingType">
-              ${['general', 'interview', 'training', 'operational', 'administrative', 'other'].map(t =>
-                `<option value="${t}" ${meeting.meeting_type === t ? 'selected' : ''}>${this._capitalize(t)}</option>`).join('')}
-            </select>
+          <div class="modal-two-col-side">
+            <div class="field-group">
+              <label class="field-label">Privacy</label>
+              <select class="field-select" name="visibility">
+                <option value="organization" ${meeting.visibility === 'organization' ? 'selected' : ''}>Public — visible to the organization</option>
+                <option value="participants" ${meeting.visibility !== 'organization' ? 'selected' : ''}>Private — participants only</option>
+              </select>
+            </div>
+            ${showStatusField ? `
+              <div class="field-group">
+                <label class="field-label">Status</label>
+                <select class="field-select" name="status">
+                  <option value="draft" ${meeting.status === 'draft' ? 'selected' : ''}>Draft (not announced yet — added participants can still see it)</option>
+                  <option value="scheduled" ${meeting.status !== 'draft' ? 'selected' : ''}>Scheduled (publish now)</option>
+                </select>
+              </div>
+            ` : `<p class="field-hint">This meeting is scheduled. It can be cancelled, but not returned to draft.</p>`}
+            <p class="field-hint">Participants are managed from the meeting detail view, not here.</p>
           </div>
-          <div class="field-group">
-            <label class="field-label">Visibility</label>
-            <select class="field-select" name="visibility">
-              ${['private', 'participants', 'organization'].map(v =>
-                `<option value="${v}" ${meeting.visibility === v ? 'selected' : ''}>${this._capitalize(v)}</option>`).join('')}
-            </select>
-          </div>
-        </div>
-        ${showStatusField ? `
-          <div class="field-group">
-            <label class="field-label">Status</label>
-            <select class="field-select" name="status">
-              <option value="draft" ${meeting.status === 'draft' ? 'selected' : ''}>Draft (not announced yet — added participants can still see it)</option>
-              <option value="scheduled" ${meeting.status !== 'draft' ? 'selected' : ''}>Scheduled (publish now)</option>
-            </select>
-          </div>
-        ` : `<p class="field-hint">This meeting is scheduled. It can be cancelled, but not returned to draft.</p>`}
-        <div class="field-row">
-          <div class="field-group">
-            <label class="field-label">Starts</label>
-            <input class="field-input-plain" type="datetime-local" name="startAt" required value="${startVal}" />
-          </div>
-          <div class="field-group">
-            <label class="field-label">Ends</label>
-            <input class="field-input-plain" type="datetime-local" name="endAt" required value="${endVal}" />
-          </div>
-        </div>
-        <div class="field-group">
-          <label class="field-label">Timezone</label>
-          <select class="field-select" name="timezone">
-            ${['Indian/Maldives', 'Asia/Colombo', 'Asia/Kolkata', 'Asia/Dubai', 'UTC'].map(tz =>
-              `<option value="${tz}" ${meeting.timezone === tz ? 'selected' : ''}>${tz}</option>`).join('')}
-          </select>
-        </div>
-        <div class="field-group">
-          <label class="field-label">Location</label>
-          <select class="field-select" name="locationMode" id="meeting-location-mode">
-            <option value="" ${locationMode === '' ? 'selected' : ''}>Not decided yet</option>
-            <option value="room" ${locationMode === 'room' ? 'selected' : ''}>Room (assign a room from the detail view)</option>
-            <option value="external" ${locationMode === 'external' ? 'selected' : ''}>External location</option>
-            <option value="virtual" ${locationMode === 'virtual' ? 'selected' : ''}>Virtual</option>
-          </select>
-        </div>
-        <div class="field-group hidden" id="external-location-group">
-          <label class="field-label">External Location</label>
-          <input class="field-input-plain" name="externalLocation" value="${this._escapeHtml(meeting.external_location || '')}" />
-        </div>
-        <div class="field-group hidden" id="virtual-link-group">
-          <label class="field-label">Virtual Link (https:// only)</label>
-          <input class="field-input-plain" type="url" name="virtualLink" placeholder="https://…" value="${this._escapeHtml(meeting.virtual_link || '')}" />
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
@@ -690,14 +714,18 @@ const MeetingsView = {
           <button type="submit" class="btn btn-primary" id="meeting-form-submit">Save Changes</button>
         </div>
       </form>
-    `, { medium: true });
+    `, { large: true });
 
     const form = document.getElementById('meeting-form');
     const errEl = form.querySelector('.modal-error');
     const submitBtn = document.getElementById('meeting-form-submit');
     const locSelect = document.getElementById('meeting-location-mode');
+    const roomReadonlyGroup = document.getElementById('meeting-room-readonly-group');
     const extGroup = document.getElementById('external-location-group');
     const virtGroup = document.getElementById('virtual-link-group');
+    const virtLabel = document.getElementById('meeting-virtual-label');
+    const hybridToggleGroup = document.getElementById('meeting-hybrid-toggle-group');
+    const hybridCheckbox = document.getElementById('meeting-hybrid-checkbox');
 
     const editDescriptionTextarea = document.getElementById('edit-meeting-description-textarea');
     const syncEditDescriptionDir = (lang) => editDescriptionTextarea.classList.toggle('field-divehi', lang === 'dv');
@@ -705,27 +733,37 @@ const MeetingsView = {
     RichEditor.bindAutoDetect(editDescriptionTextarea, form, 'descriptionLanguage', syncEditDescriptionDir);
 
     const syncLocationFields = () => {
-      extGroup.classList.toggle('hidden', locSelect.value !== 'external');
-      virtGroup.classList.toggle('hidden', locSelect.value !== 'virtual');
+      const mode = locSelect.value;
+      roomReadonlyGroup.classList.toggle('hidden', mode !== 'room');
+      extGroup.classList.toggle('hidden', mode !== 'external');
+      hybridToggleGroup.classList.toggle('hidden', mode === 'virtual');
+      if (mode === 'virtual') {
+        virtGroup.classList.remove('hidden');
+        virtLabel.textContent = 'Virtual Link (https:// only)';
+      } else {
+        virtGroup.classList.toggle('hidden', !hybridCheckbox.checked);
+        virtLabel.textContent = 'Virtual Link (for remote participants, optional)';
+      }
     };
     locSelect.addEventListener('change', syncLocationFields);
+    hybridCheckbox.addEventListener('change', syncLocationFields);
     syncLocationFields();
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       errEl.classList.add('hidden');
       const fd = new FormData(form);
-      const startAt = new Date(fd.get('startAt')).toISOString();
-      const endAt = new Date(fd.get('endAt')).toISOString();
+      const date = fd.get('date'), startTimeStr = fd.get('startTime');
+      const durationMin = parseInt(fd.get('duration'), 10) || 60;
+      const startAt = new Date(`${date}T${startTimeStr}:00`);
+      const endAt = new Date(startAt.getTime() + durationMin * 60000);
       const locationMode = fd.get('locationMode') || null;
       const externalLocation = fd.get('externalLocation') || null;
+      // Not tied to locationMode==='virtual' — a room/external meeting
+      // may also carry a virtual link for remote (hybrid) attendees;
+      // only a fully-virtual meeting requires it.
       const virtualLink = fd.get('virtualLink') || null;
 
-      if (new Date(endAt) <= new Date(startAt)) {
-        errEl.textContent = 'End time must be after the start time.';
-        errEl.classList.remove('hidden');
-        return;
-      }
       if (locationMode === 'external' && !externalLocation) {
         errEl.textContent = 'External location is required for an external meeting.';
         errEl.classList.remove('hidden');
@@ -736,6 +774,11 @@ const MeetingsView = {
         errEl.classList.remove('hidden');
         return;
       }
+      if (locationMode !== 'virtual' && virtualLink && !/^https:\/\//.test(virtualLink)) {
+        errEl.textContent = 'The virtual link must start with https://.';
+        errEl.classList.remove('hidden');
+        return;
+      }
 
       submitBtn.disabled = true;
       submitBtn.textContent = 'Saving…';
@@ -743,13 +786,11 @@ const MeetingsView = {
         const payload = {
           title: fd.get('title'),
           description: fd.get('description') || null,
-          meetingType: fd.get('meetingType'),
           visibility: fd.get('visibility'),
-          startAt, endAt,
-          timezone: fd.get('timezone'),
+          startAt: startAt.toISOString(), endAt: endAt.toISOString(),
           locationMode,
           externalLocation: locationMode === 'external' ? externalLocation : null,
-          virtualLink: locationMode === 'virtual' ? virtualLink : null,
+          virtualLink,
         };
         // Only touch section_id when the field actually rendered (the org
         // has sections) — otherwise fd.get('sectionId') is always null and
@@ -782,11 +823,24 @@ const MeetingsView = {
   // itself already preserves the manager-vs-request-approval split
   // (create_room_booking vs submit_booking_request) regardless of
   // whether the caller reaches it via Rooms or via this form.
-  async _openScheduleMeetingModal({ prefillRoomId = null, prefillDate = null, prefillTime = null, onSuccess = null } = {}) {
-    this._user = this._user || Auth.getCachedProfile();
-    if (!this._user) return;
-    this._orgId = this._orgId || this._user.org_id;
+  // Every entry point reachable from OUTSIDE this module's own render()
+  // (Rooms' booking flow, Rooms' linked-meeting detail routing) needs
+  // this same set of fields — render() itself already sets them, but a
+  // caller that jumps straight to a modal without ever rendering the
+  // Meetings tab this session wouldn't otherwise have them. Idempotent:
+  // only fills in what render() hasn't already set.
+  _ensureUserContext() {
+    if (!this._user) this._user = Auth.getCachedProfile();
+    if (!this._user) return false;
+    if (this._orgId === undefined) this._orgId = this._user.org_id;
+    if (this._isAdmin === undefined) this._isAdmin = AppShell.isAdmin(this._user);
+    if (this._isSupervisor === undefined) this._isSupervisor = AppShell.isSupervisorOrAbove(this._user);
     if (this._roomsEnabled === undefined) this._roomsEnabled = AppShell.isModuleEnabled(this._user, 'rooms');
+    return true;
+  },
+
+  async _openScheduleMeetingModal({ prefillRoomId = null, prefillDate = null, prefillTime = null, onSuccess = null } = {}) {
+    if (!this._ensureUserContext()) return;
 
     let rooms = [], groups = [], orgUsers = [], sections = [];
     try {
@@ -1529,6 +1583,7 @@ const MeetingsView = {
 
   // ── Meeting detail modal ─────────────────────────────────────────
   async _openMeetingDetailModal(meeting) {
+    if (!this._ensureUserContext()) return;
     let participants = [], booking = null, attachments = [];
     try {
       [participants, booking, attachments] = await Promise.all([
