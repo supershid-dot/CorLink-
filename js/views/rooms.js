@@ -140,10 +140,17 @@ const RoomsView = {
   },
 
   // ── Schedule tab ─────────────────────────────────────────────────
-  _dayRange(dateStr) {
-    const start = new Date(dateStr + 'T00:00:00');
-    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-    return { from: start.toISOString(), to: end.toISOString() };
+  // Week-grid view (docs/22 §3.1 Phase D — reuses the shared
+  // WeekGrid component, js/views/week-grid.js, also used by
+  // calendar.js's Week mode). Replaces the previous single-day list
+  // entirely. One room selected at a time (like every event on this
+  // grid, a room's bookings are positioned on a single time axis —
+  // showing "All Rooms" on one axis isn't meaningful, so a room is
+  // always selected, defaulting to the first one).
+  _weekLabel(weekStart) {
+    const end = new Date(weekStart); end.setDate(end.getDate() + 6);
+    const opts = { month: 'short', day: 'numeric' };
+    return `${weekStart.toLocaleDateString(undefined, opts)} – ${end.toLocaleDateString(undefined, opts)}`;
   },
 
   async _renderScheduleTab(content) {
@@ -151,49 +158,74 @@ const RoomsView = {
       content.innerHTML = this._emptyBlock({ icon: 'ti-door', title: 'No rooms yet', subtitle: this._hasAnyManagerAuthority() ? 'Add a room in the Rooms tab to start booking.' : 'Ask an administrator to add a bookable room.' });
       return;
     }
-    const { from, to } = this._dayRange(this._state.scheduleDate);
-    let bookings = await RoomsAPI.fetchBookings({ roomId: this._state.scheduleRoomId || undefined, from, to });
-    if (!this._state.scheduleShowAll) {
-      bookings = bookings.filter(b => !['cancelled', 'rejected', 'expired'].includes(b.status));
+    if (!this._state.scheduleRoomId || !this._rooms.some(r => r.id === this._state.scheduleRoomId)) {
+      this._state.scheduleRoomId = (this._rooms.find(r => r.is_active) || this._rooms[0]).id;
     }
-    bookings.sort((a, b) => new Date(a.start_at) - new Date(b.start_at));
+    const weekStart = WeekGrid.weekStartFor(this._state.scheduleDate + 'T00:00:00');
+    const weekEnd = new Date(weekStart); weekEnd.setDate(weekEnd.getDate() + 7);
+    const from = weekStart.toISOString(), to = weekEnd.toISOString();
+
+    const [bookingsRaw, blocks] = await Promise.all([
+      RoomsAPI.fetchBookings({ roomId: this._state.scheduleRoomId, from, to }),
+      RoomsAPI.fetchRoomBlocks({ roomId: this._state.scheduleRoomId, from, to, activeOnly: true }),
+    ]);
+    const bookings = this._state.scheduleShowAll
+      ? bookingsRaw
+      : bookingsRaw.filter(b => !['cancelled', 'rejected', 'expired'].includes(b.status));
+
+    this._scheduleBookingsById = new Map(bookings.map(b => [b.id, b]));
+
+    const bookingEvents = bookings.map(b => {
+      const effective = this._effectiveStatus(b);
+      return {
+        id: `b:${b.id}`,
+        day: new Date(b.start_at).toISOString().slice(0, 10),
+        startAt: b.start_at, endAt: b.end_at,
+        cls: `week-grid-event--${effective}`,
+        icon: 'ti-door',
+        title: b.created_by_user?.full_name || 'Booking',
+        meta: `${this._timeRange(b.start_at, b.end_at)}`,
+      };
+    });
+    const blockEvents = blocks.map(bl => ({
+      id: `bl:${bl.id}`,
+      day: new Date(bl.start_at).toISOString().slice(0, 10),
+      startAt: bl.start_at, endAt: bl.end_at,
+      cls: 'week-grid-event--block',
+      icon: 'ti-tool',
+      title: bl.reason || 'Room Block',
+      meta: this._timeRange(bl.start_at, bl.end_at),
+    }));
+    this._scheduleBlocksById = new Map(blocks.map(bl => [bl.id, bl]));
 
     content.innerHTML = `
       <div class="page-header-row" style="align-items:flex-end; flex-wrap:wrap; gap:12px;">
         <div class="field-row" style="align-items:center; gap:8px;">
-          <button type="button" class="icon-btn-xs" id="sched-prev" aria-label="Previous day"><i class="ti ti-chevron-left"></i></button>
-          <input type="date" class="field-input-plain" id="sched-date" value="${this._state.scheduleDate}" aria-label="Schedule date" />
-          <button type="button" class="icon-btn-xs" id="sched-next" aria-label="Next day"><i class="ti ti-chevron-right"></i></button>
+          <button type="button" class="icon-btn-xs" id="sched-prev" aria-label="Previous week"><i class="ti ti-chevron-left"></i></button>
+          <span class="calendar-range-label">${this._weekLabel(weekStart)}</span>
+          <button type="button" class="icon-btn-xs" id="sched-next" aria-label="Next week"><i class="ti ti-chevron-right"></i></button>
           <button type="button" class="btn btn-secondary btn-xs" id="sched-today">Today</button>
         </div>
-        <select class="field-select" id="sched-room-filter" aria-label="Filter by room" style="max-width:220px;">
-          <option value="">All Rooms</option>
+        <select class="field-select" id="sched-room-filter" aria-label="Select room" style="max-width:220px;">
           ${this._rooms.map(r => `<option value="${r.id}" ${r.id === this._state.scheduleRoomId ? 'selected' : ''}>${this._escapeHtml(r.name)}</option>`).join('')}
         </select>
-        <button type="button" class="btn btn-primary btn-sm" id="sched-new-booking"><i class="ti ti-plus"></i> New Booking</button>
+        <button type="button" class="btn btn-primary btn-sm" id="sched-new-booking"><i class="ti ti-plus"></i> Book</button>
+        <button type="button" class="icon-btn" id="sched-refresh" title="Refresh"><i class="ti ti-refresh"></i></button>
       </div>
       <label class="checkbox-row" style="margin:12px 0;">
         <input type="checkbox" id="sched-show-all" ${this._state.scheduleShowAll ? 'checked' : ''} />
         <span>Show cancelled, rejected, and expired</span>
       </label>
-      ${bookings.length === 0
-        ? this._emptyBlock({ icon: 'ti-calendar-off', title: 'Nothing scheduled', subtitle: `No bookings for ${new Date(this._state.scheduleDate + 'T00:00:00').toLocaleDateString()}${this._state.scheduleRoomId ? ' in this room' : ''}.` })
-        : `<div class="panel"><table class="data-table">
-            <thead><tr><th>Time</th><th>Room</th><th>Requested By</th><th>Status</th><th></th></tr></thead>
-            <tbody>${bookings.map(b => this._scheduleRow(b)).join('')}</tbody>
-          </table></div>`}
+      <div id="sched-grid">${WeekGrid.html({ weekStart, events: [...bookingEvents, ...blockEvents] })}</div>
     `;
 
-    document.getElementById('sched-prev').addEventListener('click', () => this._shiftScheduleDate(-1));
-    document.getElementById('sched-next').addEventListener('click', () => this._shiftScheduleDate(1));
+    document.getElementById('sched-prev').addEventListener('click', () => this._shiftScheduleWeek(-1));
+    document.getElementById('sched-next').addEventListener('click', () => this._shiftScheduleWeek(1));
     document.getElementById('sched-today').addEventListener('click', () => {
       this._state.scheduleDate = new Date().toISOString().slice(0, 10);
       this._renderTab();
     });
-    document.getElementById('sched-date').addEventListener('change', (e) => {
-      this._state.scheduleDate = e.target.value || this._state.scheduleDate;
-      this._renderTab();
-    });
+    document.getElementById('sched-refresh').addEventListener('click', () => this._renderTab());
     document.getElementById('sched-room-filter').addEventListener('change', (e) => {
       this._state.scheduleRoomId = e.target.value;
       this._renderTab();
@@ -203,31 +235,49 @@ const RoomsView = {
       this._renderTab();
     });
     document.getElementById('sched-new-booking').addEventListener('click', () => this._openBookingFormModal());
-    content.querySelectorAll('[data-view-booking]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const booking = await RoomsAPI.fetchBooking(btn.dataset.viewBooking);
-        this._openBookingDetailModal(booking);
-      });
+
+    WeekGrid.bind(document.getElementById('sched-grid'), {
+      onSlotClick: (day, time) => this._openBookingFormModal({ date: day, time }),
+      onEventClick: (eventId) => {
+        if (eventId.startsWith('bl:')) {
+          this._openBlockDetailModal(this._scheduleBlocksById.get(eventId.slice(3)));
+        } else {
+          this._openBookingDetailModal(this._scheduleBookingsById.get(eventId.slice(2)));
+        }
+      },
     });
   },
 
-  _shiftScheduleDate(days) {
+  _shiftScheduleWeek(dir) {
     const d = new Date(this._state.scheduleDate + 'T00:00:00');
-    d.setDate(d.getDate() + days);
+    d.setDate(d.getDate() + 7 * dir);
     this._state.scheduleDate = d.toISOString().slice(0, 10);
     this._renderTab();
   },
 
-  _scheduleRow(b) {
-    return `
-      <tr>
-        <td data-label="Time">${this._timeRange(b.start_at, b.end_at)}</td>
-        <td data-label="Room">${this._escapeHtml(b.room?.name || '')}</td>
-        <td data-label="Requested By">${this._escapeHtml(b.created_by_user?.full_name || '')}</td>
-        <td data-label="Status">${this._statusBadge(this._effectiveStatus(b))}</td>
-        <td data-label="Actions"><button type="button" class="btn btn-secondary btn-xs" data-view-booking="${b.id}">View</button></td>
-      </tr>
-    `;
+  // Read-only — Room Blocks tab already owns the mutation (Cancel);
+  // this mirrors calendar.js's own equivalent block-detail popup.
+  _openBlockDetailModal(block) {
+    if (!block) return;
+    this._openModal(`
+      <h3>Room Block</h3>
+      <div class="detail-grid">
+        <div><strong>Room</strong><div>${this._escapeHtml(block.room?.name || '')}</div></div>
+        <div><strong>When</strong><div>${new Date(block.start_at).toLocaleString()} – ${new Date(block.end_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div></div>
+        <div><strong>Reason</strong><div>${this._escapeHtml(block.reason || '')}</div></div>
+        <div><strong>Created By</strong><div>${this._escapeHtml(block.created_by_user?.full_name || '')}</div></div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" data-close-modal>Close</button>
+        ${this._isManagerOf(block.room_id) ? `<button type="button" class="btn btn-primary" id="sched-goto-blocks-btn">Open Room Blocks</button>` : ''}
+      </div>
+    `, { medium: true });
+    document.getElementById('sched-goto-blocks-btn')?.addEventListener('click', () => {
+      this._state.tab = 'blocks';
+      this._closeModal();
+      this._highlightTabs();
+      this._renderTab();
+    });
   },
 
   // ── My Bookings tab ──────────────────────────────────────────────
@@ -743,15 +793,18 @@ const RoomsView = {
   },
 
   // ── New Booking form ─────────────────────────────────────────────
-  _defaultBookingTimes() {
-    const base = new Date(this._state.scheduleDate + 'T09:00:00');
+  // Defaults to 09:00 on the schedule's current anchor date, same as
+  // before this milestone — {date, time} lets a week-grid slot click
+  // prefill the exact cell that was clicked instead.
+  _defaultBookingTimes({ date, time } = {}) {
+    const base = new Date(`${date || this._state.scheduleDate}T${time || '09:00'}:00`);
     const start = base.toISOString().slice(0, 16);
     const end = new Date(base.getTime() + 60 * 60 * 1000).toISOString().slice(0, 16);
     return { start, end };
   },
 
-  async _openBookingFormModal() {
-    const { start, end } = this._defaultBookingTimes();
+  async _openBookingFormModal({ date, time } = {}) {
+    const { start, end } = this._defaultBookingTimes({ date, time });
     const preselectedRoom = this._state.scheduleRoomId || (this._rooms[0] && this._rooms[0].id) || '';
     let sections = [];
     try { sections = (await AdminAPI.listSectionsByOrg(this._orgId)).filter(s => s.is_active); }

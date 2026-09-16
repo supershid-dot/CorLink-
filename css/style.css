@@ -3391,26 +3391,9 @@ mark.quote-highlight {
 .calendar-event--booking   { background: var(--color-primary-light); color: var(--color-primary-dark); border-left-color: var(--color-primary); }
 .calendar-event--block     { background: var(--color-warning-bg); color: var(--color-warning-dark); border-left-color: var(--color-warning); }
 
-/* Week view */
-.calendar-week-grid {
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 8px;
-}
-.calendar-week-col {
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 8px;
-  min-height: 220px;
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.calendar-week-col--today { border-color: var(--color-primary); }
-.calendar-week-col-header { font-weight: 600; font-size: 0.8125rem; color: var(--color-text); text-align: center; }
-.calendar-week-col-events { display: flex; flex-direction: column; gap: 4px; }
+/* Week view is now the shared WeekGrid component (js/views/week-
+   grid.js, its own CSS below) — the old list-column week layout was
+   removed along with its CSS. */
 
 /* Day / agenda rows */
 .calendar-day-list { padding: 0; }
@@ -3448,9 +3431,123 @@ mark.quote-highlight {
 }
 
 @media (max-width: 720px) {
-  .calendar-week-grid { grid-template-columns: repeat(2, 1fr); }
   .calendar-month-cell { min-height: 64px; }
   .calendar-event-row { flex-direction: column; gap: 4px; }
   .calendar-event-row-time { width: auto; }
+}
+
+/* ── Shared Week Grid (js/views/week-grid.js) ─────────────────────
+   Positioned day-columns × half-hour-rows schedule, used by both
+   Rooms (Schedule tab) and Calendar (Week mode). Layout only mirrors
+   MeetFlow's grid concept — every color here is CorLink's own
+   existing token system, unchanged between light/dark themes since
+   every value below is a var(--color-*)/var(--radius-*) reference. */
+.week-grid {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.week-grid-header, .week-grid-scroll { display: flex; }
+.week-grid-header {
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg);
+}
+.week-grid-header-spacer { width: 56px; flex-shrink: 0; }
+.week-grid-header-days { flex: 1; display: flex; }
+.week-grid-day-header {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  padding: 8px 4px;
+  border-left: 1px solid var(--color-border);
+}
+.week-grid-day-name { font-size: 0.7rem; font-weight: 700; color: var(--color-text-muted); letter-spacing: 0.03em; }
+.week-grid-day-num { font-size: 0.9375rem; font-weight: 700; color: var(--color-text); }
+.week-grid-day-header--today .week-grid-day-name,
+.week-grid-day-header--today .week-grid-day-num { color: var(--color-primary-dark); }
+
+.week-grid-scroll {
+  max-height: 620px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.week-grid-time-col {
+  position: relative;
+  width: 56px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--color-border);
+}
+.week-grid-time-label {
+  position: absolute;
+  right: 6px;
+  transform: translateY(-50%);
+  font-size: 0.68rem;
+  color: var(--color-text-light);
+  white-space: nowrap;
+}
+.week-grid-time-label--hour { color: var(--color-text-muted); font-weight: 600; }
+
+.week-grid-days-body { flex: 1; display: flex; min-width: 0; }
+.week-grid-day-col {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  border-left: 1px solid var(--color-border);
+}
+.week-grid-slot {
+  position: absolute;
+  left: 0; right: 0;
+  border-top: 1px solid var(--color-border);
+  cursor: pointer;
+}
+.week-grid-slot:hover { background: var(--color-bg); }
+
+.week-grid-event {
+  position: absolute;
+  border-radius: var(--radius-sm);
+  border-left: 3px solid transparent;
+  padding: 2px 5px;
+  font-size: 0.68rem;
+  line-height: 1.25;
+  overflow: hidden;
+  cursor: pointer;
+  z-index: 2;
+  box-shadow: var(--shadow-sm);
+}
+.week-grid-event-title {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.week-grid-event-title i { flex-shrink: 0; font-size: 0.9em; }
+.week-grid-event-meta { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; opacity: 0.85; }
+
+/* Rooms Schedule grid — status-based coloring (Rooms shows one room
+   at a time; the distinguishing dimension is booking status, reusing
+   the exact same status colors _statusBadge() already uses). */
+.week-grid-event--hold      { background: var(--color-warning-bg); color: var(--color-warning-dark); border-left-color: var(--color-warning); }
+.week-grid-event--pending   { background: var(--color-warning-bg); color: var(--color-warning-dark); border-left-color: var(--color-warning); }
+.week-grid-event--confirmed { background: var(--color-success-bg); color: var(--color-success-dark); border-left-color: var(--color-success); }
+.week-grid-event--rejected  { background: var(--color-error-bg); color: var(--color-error-dark); border-left-color: var(--color-error); text-decoration: line-through; }
+.week-grid-event--completed { background: var(--color-primary-light); color: var(--color-primary-dark); border-left-color: var(--color-primary); }
+.week-grid-event--cancelled,
+.week-grid-event--expired   { background: var(--color-bg); color: var(--color-text-muted); border-left-color: var(--color-text-light); text-decoration: line-through; }
+.week-grid-event--block {
+  color: var(--color-warning-dark);
+  border-left-color: var(--color-warning);
+  background: repeating-linear-gradient(45deg, var(--color-warning-bg), var(--color-warning-bg) 6px, transparent 6px, transparent 12px);
+}
+
+@media (max-width: 720px) {
+  .week-grid-day-name { font-size: 0.6rem; }
+  .week-grid-day-num { font-size: 0.8125rem; }
+  .week-grid-time-col { width: 42px; }
+  .week-grid-header-spacer { width: 42px; }
+  .week-grid-event { font-size: 0.6rem; }
 }
 .thread-message--compact:last-child { margin-bottom: 0; }

@@ -283,19 +283,34 @@ const CalendarView = {
         this._loadAndRender();
       });
     });
+    if (this._state.mode === 'week') {
+      WeekGrid.bind(content.querySelector('.week-grid'), {
+        onSlotClick: (day) => {
+          this._state.mode = 'day';
+          this._state.anchor = day;
+          this._loadAndRender();
+        },
+        onEventClick: (prefixedId) => {
+          const i = prefixedId.indexOf(':');
+          this._routeEventClick(prefixedId.slice(0, i), prefixedId.slice(i + 1));
+        },
+      });
+    }
   },
 
   _bindEventClicks(root) {
     root.querySelectorAll('[data-event-type]').forEach(el => {
       el.addEventListener('click', (e) => {
         e.stopPropagation();
-        const type = el.dataset.eventType;
-        const id = el.dataset.eventId;
-        if (type === 'meeting') Router.navigate('meetings', { meetingId: id });
-        else if (type === 'booking') Router.navigate('rooms', { bookingId: id });
-        else if (type === 'block') this._openBlockDetailModal(id);
+        this._routeEventClick(el.dataset.eventType, el.dataset.eventId);
       });
     });
+  },
+
+  _routeEventClick(type, id) {
+    if (type === 'meeting') Router.navigate('meetings', { meetingId: id });
+    else if (type === 'booking') Router.navigate('rooms', { bookingId: id });
+    else if (type === 'block') this._openBlockDetailModal(id);
   },
 
   // ── Month view ───────────────────────────────────────────────────
@@ -333,26 +348,28 @@ const CalendarView = {
     `;
   },
 
-  // ── Week view (7 day-columns, agenda-style within each) ──────────
+  // ── Week view — positioned day-columns × half-hour-rows grid
+  // (docs/22 §3.2 Phase C/D — the shared WeekGrid component,
+  // js/views/week-grid.js, also used by rooms.js's Schedule tab).
+  // Empty-space clicks fall through to WeekGrid's onSlotClick, wired
+  // in _renderView() to switch to Day view for that date (the same
+  // "click empty space -> Day view" behavior the Month grid's
+  // data-cal-day cells already have). Event styling/icons are
+  // unchanged from _eventVisual() — only the layout changed, not the
+  // six-item-type visual language docs/22 §3.2 already established.
   _renderWeek(events) {
     const { from } = this._range;
-    const byDay = this._groupByDay(events);
-    const todayStr = new Date().toISOString().slice(0, 10);
-    let cols = '';
-    for (let i = 0; i < 7; i++) {
-      const d = new Date(from); d.setDate(d.getDate() + i);
-      const dayStr = d.toISOString().slice(0, 10);
-      const dayEvents = byDay.get(dayStr) || [];
-      cols += `
-        <div class="calendar-week-col${dayStr === todayStr ? ' calendar-week-col--today' : ''}" data-cal-day="${dayStr}">
-          <div class="calendar-week-col-header">${d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })}</div>
-          <div class="calendar-week-col-events">
-            ${dayEvents.length === 0 ? `<div class="structure-empty">No events</div>` : dayEvents.map(e => this._eventChip(e, false)).join('')}
-          </div>
-        </div>
-      `;
-    }
-    return `<div class="calendar-week-grid">${cols}</div>`;
+    const gridEvents = events.map(e => {
+      const v = this._eventVisual(e);
+      return {
+        id: `${e.type}:${e.id}`,
+        day: new Date(e.start).toISOString().slice(0, 10),
+        startAt: e.start, endAt: e.end,
+        cls: v.cls, icon: v.icon, title: e.title,
+        meta: `${this._fmtTime(e.start)}–${this._fmtTime(e.end)}`,
+      };
+    });
+    return WeekGrid.html({ weekStart: from, events: gridEvents });
   },
 
   // ── Day view ─────────────────────────────────────────────────────
