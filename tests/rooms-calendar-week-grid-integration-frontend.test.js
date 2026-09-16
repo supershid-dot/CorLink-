@@ -36,11 +36,34 @@ async function check(name, fn) {
 
   const browser = await playwright.chromium.launch({ executablePath: '/opt/pw-browsers/chromium', headless: true });
 
+  // Every fixture below uses '2026-09-16' and neighboring dates as its
+  // hardcoded "today"/booking dates. Without pinning the clock, those
+  // dates silently age into the past as real time moves on, which
+  // (now that WeekGrid enforces non-bookable past slots/days) would
+  // eventually make the "click an empty slot" tests fail simply from
+  // being run on a later date — nothing left in the fixture week would
+  // still be open. Fixing "now" to midnight UTC on 2026-09-16 keeps
+  // every fixture date current/future relative to the mocked clock,
+  // independent of when the suite actually runs.
+  const FIXED_NOW = '2026-09-16T00:00:00Z';
+  const dateOverrideScript = `(${(iso) => {
+    const OrigDate = Date;
+    class FakeDate extends OrigDate {
+      constructor(...args) {
+        if (args.length === 0) super(iso);
+        else super(...args);
+      }
+      static now() { return new OrigDate(iso).getTime(); }
+    }
+    window.Date = FakeDate;
+  }})(${JSON.stringify(FIXED_NOW)});`;
+
   async function newRoomsPage(viewport) {
     const page = await browser.newPage(viewport ? { viewport } : {});
     const pageErrors = [];
     page.on('pageerror', e => pageErrors.push(e.message));
     await page.setContent('<div id="app"></div><div id="modal-root"></div>');
+    await page.addScriptTag({ content: dateOverrideScript });
     await page.addScriptTag({ content: `
       window.getSupabase = () => ({});
       window.AppShell = { topbarHtml: () => '', bottomNavHtml: () => '', bindTopbar: () => {}, isAdmin: () => false, isSupervisorOrAbove: () => false, isModuleEnabled: () => false };
@@ -82,8 +105,7 @@ async function check(name, fn) {
       await v.render(document.getElementById('app'));
       return { scheduleDate: v._state.scheduleDate, scheduleMobileDay: v._state.scheduleMobileDay };
     });
-    const today = new Date().toISOString().slice(0, 10);
-    assert.strictEqual(result.scheduleDate, today);
+    assert.strictEqual(result.scheduleDate, FIXED_NOW.slice(0, 10));
     assert.strictEqual(result.scheduleMobileDay, null);
     await page.close();
   });
@@ -221,6 +243,7 @@ async function check(name, fn) {
     const pageErrors = [];
     page.on('pageerror', e => pageErrors.push(e.message));
     await page.setContent('<div id="app"></div><div id="modal-root"></div>');
+    await page.addScriptTag({ content: dateOverrideScript });
     await page.addScriptTag({ content: `
       window.getSupabase = () => ({});
       window.AppShell = { topbarHtml: () => '', bottomNavHtml: () => '', bindTopbar: () => {} };

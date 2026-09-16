@@ -3511,10 +3511,32 @@ mark.quote-highlight {
   left: 0; right: 0;
   border-top: 1px solid var(--color-border);
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.week-grid-slot:hover { background: var(--color-bg); }
-/* Past the selected room's bookable_until — not clickable (no
-   data-week-grid-slot attribute), visually distinct from an open slot. */
+.week-grid-slot:hover {
+  background: var(--color-primary-light);
+  outline: 1px solid var(--color-primary);
+  outline-offset: -1px;
+}
+.week-grid-slot-add {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: var(--color-primary);
+  font-size: 0.72rem;
+  pointer-events: none;
+}
+.week-grid-slot:hover .week-grid-slot-add { display: flex; }
+/* Past the selected room's bookable_until, or a slot whose time has
+   already passed "now" — not clickable (no data-week-grid-slot
+   attribute), visually distinct from an open slot. Same hatched
+   treatment for both cases; the caller doesn't need to tell them apart
+   visually, only functionally (see WeekGrid._isPastSlot). */
 .week-grid-slot--closed {
   cursor: default;
   background: repeating-linear-gradient(45deg, var(--color-bg), var(--color-bg) 6px, transparent 6px, transparent 12px);

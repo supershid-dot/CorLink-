@@ -25,7 +25,7 @@
 const CalendarView = {
   _state: {
     mode: 'month', // 'day' | 'week' | 'month' | 'agenda'
-    anchor: new Date().toISOString().slice(0, 10),
+    anchor: WeekGrid._dayStr(new Date()),
     filters: { orgId: '', roomId: '', creatorId: '', status: '', meetingType: '', onlyMine: false, showBlocks: true },
     // Which day's agenda list is expanded in Week mode on mobile
     // (docs/22 §3.1) — null means "default to today if in this week,
@@ -98,7 +98,8 @@ const CalendarView = {
     AppShell.bindTopbar();
     document.getElementById('cal-refresh-btn').addEventListener('click', () => this._loadAndRender());
     document.getElementById('cal-today-btn').addEventListener('click', () => {
-      this._state.anchor = new Date().toISOString().slice(0, 10);
+      this._state.anchor = WeekGrid._dayStr(new Date());
+      this._state.weekMobileDay = null;
       this._loadAndRender();
     });
     document.getElementById('cal-prev-btn').addEventListener('click', () => { this._step(-1); this._loadAndRender(); });
@@ -118,7 +119,7 @@ const CalendarView = {
     else if (this._state.mode === 'week') d.setDate(d.getDate() + 7 * dir);
     else if (this._state.mode === 'agenda') d.setDate(d.getDate() + 30 * dir);
     else d.setMonth(d.getMonth() + dir);
-    this._state.anchor = d.toISOString().slice(0, 10);
+    this._state.anchor = WeekGrid._dayStr(d);
     this._state.weekMobileDay = null; // re-derive for the new week
   },
 
@@ -329,12 +330,12 @@ const CalendarView = {
     const { from } = this._range;
     const byDay = this._groupByDay(events);
     const anchorMonth = new Date(this._state.anchor + 'T00:00:00').getMonth();
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = WeekGrid._dayStr(new Date());
     const weekdayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     let cells = '';
     for (let i = 0; i < 42; i++) {
       const d = new Date(from); d.setDate(d.getDate() + i);
-      const dayStr = d.toISOString().slice(0, 10);
+      const dayStr = WeekGrid._dayStr(d);
       const inMonth = d.getMonth() === anchorMonth;
       const dayEvents = byDay.get(dayStr) || [];
       const visible = dayEvents.slice(0, 3);
@@ -374,7 +375,7 @@ const CalendarView = {
       const v = this._eventVisual(e);
       return {
         id: `${e.type}:${e.id}`,
-        day: new Date(e.start).toISOString().slice(0, 10),
+        day: WeekGrid._dayStr(new Date(e.start)),
         startAt: e.start, endAt: e.end,
         cls: v.cls, icon: v.icon, title: e.title,
         meta: `${this._fmtTime(e.start)}–${this._fmtTime(e.end)}`,
@@ -385,7 +386,7 @@ const CalendarView = {
 
   // ── Day view ─────────────────────────────────────────────────────
   _renderDay(events, date) {
-    const dayStr = date.toISOString().slice(0, 10);
+    const dayStr = WeekGrid._dayStr(date);
     const dayEvents = this._groupByDay(events).get(dayStr) || [];
     if (dayEvents.length === 0) {
       return this._emptyBlock({ icon: 'ti-calendar-off', title: 'Nothing scheduled', subtitle: 'No events for this day.' });
@@ -417,7 +418,7 @@ const CalendarView = {
   _groupByDay(events) {
     const map = new Map();
     events.forEach(e => {
-      const dayStr = new Date(e.start).toISOString().slice(0, 10);
+      const dayStr = WeekGrid._dayStr(new Date(e.start));
       if (!map.has(dayStr)) map.set(dayStr, []);
       map.get(dayStr).push(e);
     });

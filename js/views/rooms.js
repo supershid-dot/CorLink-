@@ -18,7 +18,7 @@
 const RoomsView = {
   _state: {
     tab: 'schedule',
-    scheduleDate: new Date().toISOString().slice(0, 10),
+    scheduleDate: WeekGrid._dayStr(new Date()),
     scheduleRoomId: '',
     scheduleShowAll: false,
     // Which day's agenda list is expanded on mobile (docs/22 §3.1) —
@@ -41,7 +41,7 @@ const RoomsView = {
     // than defaulting to today as a freshly-opened schedule should.
     // Room/tab/filter selections are deliberately left alone — only
     // the date needs to always start "now".
-    this._state.scheduleDate = new Date().toISOString().slice(0, 10);
+    this._state.scheduleDate = WeekGrid._dayStr(new Date());
     this._state.scheduleMobileDay = null;
 
     this._user = user;
@@ -204,7 +204,7 @@ const RoomsView = {
       const effective = this._effectiveStatus(b);
       return {
         id: `b:${b.id}`,
-        day: new Date(b.start_at).toISOString().slice(0, 10),
+        day: WeekGrid._dayStr(new Date(b.start_at)),
         startAt: b.start_at, endAt: b.end_at,
         cls: `week-grid-event--${effective}`,
         icon: 'ti-door',
@@ -214,7 +214,7 @@ const RoomsView = {
     });
     const blockEvents = blocks.map(bl => ({
       id: `bl:${bl.id}`,
-      day: new Date(bl.start_at).toISOString().slice(0, 10),
+      day: WeekGrid._dayStr(new Date(bl.start_at)),
       startAt: bl.start_at, endAt: bl.end_at,
       cls: 'week-grid-event--block',
       icon: 'ti-tool',
@@ -279,7 +279,7 @@ const RoomsView = {
   _shiftScheduleWeek(dir) {
     const d = new Date(this._state.scheduleDate + 'T00:00:00');
     d.setDate(d.getDate() + 7 * dir);
-    this._state.scheduleDate = d.toISOString().slice(0, 10);
+    this._state.scheduleDate = WeekGrid._dayStr(d);
     this._state.scheduleMobileDay = null; // re-derive for the new week (today-if-in-week, else its first day)
     this._renderTab();
   },

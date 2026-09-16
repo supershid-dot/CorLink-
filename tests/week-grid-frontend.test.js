@@ -323,6 +323,110 @@ async function check(name, fn) {
     await page.close();
   });
 
+  // ── Fixed-"now" harness for today-highlight / past-slot regression
+  // tests below. Overrides the page's global Date so WeekGrid's own
+  // `new Date()` calls resolve to a fixed instant, and sets the
+  // browser context's timezone so getFullYear()/getMonth()/getDate()
+  // resolve that instant to a specific LOCAL calendar date — this is
+  // what lets us reproduce "UTC date != local date" deterministically
+  // instead of depending on the CI machine's own timezone.
+  async function newPageAt(fixedIso, timezoneId, viewport) {
+    const context = await browser.newContext(viewport ? { timezoneId, viewport } : { timezoneId });
+    const page = await context.newPage();
+    await page.setContent('<div id="app"></div>');
+    // addInitScript doesn't run against page.setContent()'s document (no
+    // real navigation happens), so the Date override is injected as a
+    // plain script tag instead, before the component script that will
+    // call `new Date()`.
+    await page.addScriptTag({ content: `(${(iso) => {
+      const OrigDate = Date;
+      class FakeDate extends OrigDate {
+        constructor(...args) {
+          if (args.length === 0) super(iso);
+          else super(...args);
+        }
+        static now() { return new OrigDate(iso).getTime(); }
+      }
+      window.Date = FakeDate;
+    }})(${JSON.stringify(fixedIso)});` });
+    await page.addScriptTag({ content: gridSource });
+    return { page, context };
+  }
+
+  await check('today highlight reflects the LOCAL calendar date, not the UTC date (regression: "today is 16, shows 17")', async () => {
+    // Local wall-clock: 2026-09-16 23:30 in America/New_York (UTC-4 in
+    // September). That same instant in UTC is 2026-09-17T03:30:00Z —
+    // the exact shape of the reported bug: toISOString().slice(0,10)
+    // would say "17" while the viewer's real local date is "16".
+    const { page, context } = await newPageAt('2026-09-16T23:30:00-04:00', 'America/New_York');
+    const dayStr = await page.evaluate(() => WeekGrid._dayStr(new Date()));
+    assert.strictEqual(dayStr, '2026-09-16');
+
+    const html = await page.evaluate(() => {
+      const weekStart = WeekGrid.weekStartFor('2026-09-13T00:00:00'); // week containing the 16th
+      return WeekGrid.html({ weekStart, events: [] });
+    });
+    // The 16th's header carries the "today" class; the 17th's does not.
+    assert.match(html, /week-grid-day-header--today"[\s\S]{0,80}week-grid-day-num">16</);
+    assert.doesNotMatch(html, /week-grid-day-header--today"[\s\S]{0,80}week-grid-day-num">17</);
+    await context.close();
+  });
+
+  await check('desktop: past slots on today are closed/non-clickable, the slot "now" falls inside stays open, future slots stay open', async () => {
+    // now = 2026-09-16 09:15 UTC. The 09:00-09:30 slot is the one "now"
+    // falls inside (its end, 09:30, is still ahead of now) and per
+    // ordinary calendar-app UX should stay bookable; 07:00 and 08:30
+    // (both already ended) must not.
+    const { page, context } = await newPageAt('2026-09-16T09:15:00Z', 'UTC');
+    const html = await page.evaluate(() => {
+      const weekStart = WeekGrid.weekStartFor('2026-09-13T00:00:00');
+      return WeekGrid.html({ weekStart, events: [] });
+    });
+    assert.doesNotMatch(html, /data-slot-day="2026-09-16" data-slot-time="07:00"/);
+    assert.doesNotMatch(html, /data-slot-day="2026-09-16" data-slot-time="08:30"/);
+    assert.match(html, /data-slot-day="2026-09-16" data-slot-time="09:00"/); // current slot stays bookable
+    assert.match(html, /data-slot-day="2026-09-16" data-slot-time="09:30"/); // future slot stays open
+    await context.close();
+  });
+
+  await check('desktop: an entire past day has no open slots at all', async () => {
+    const { page, context } = await newPageAt('2026-09-16T09:15:00Z', 'UTC');
+    const html = await page.evaluate(() => {
+      const weekStart = WeekGrid.weekStartFor('2026-09-13T00:00:00');
+      return WeekGrid.html({ weekStart, events: [] });
+    });
+    assert.doesNotMatch(html, /data-slot-day="2026-09-15"/); // Tuesday, entirely in the past
+    assert.match(html, /data-slot-day="2026-09-17" data-slot-time="07:00"/); // Thursday, still open
+    await context.close();
+  });
+
+  await check('desktop: open (bookable) slots carry a hover "+" affordance; closed slots do not', async () => {
+    const { page, context } = await newPageAt('2026-09-16T09:15:00Z', 'UTC');
+    const html = await page.evaluate(() => {
+      const weekStart = WeekGrid.weekStartFor('2026-09-13T00:00:00');
+      return WeekGrid.html({ weekStart, events: [] });
+    });
+    const openSlotMatch = html.match(/<div class="week-grid-slot" style="[^"]*" data-week-grid-slot data-slot-day="2026-09-17" data-slot-time="07:00">([\s\S]{0,80})/);
+    assert.ok(openSlotMatch, 'expected to find the open future slot');
+    assert.match(openSlotMatch[1], /week-grid-slot-add/);
+    const closedSlotMatch = html.match(/<div class="week-grid-slot week-grid-slot--closed"[^>]*>([\s\S]{0,20})/);
+    assert.ok(closedSlotMatch, 'expected to find a closed slot');
+    assert.doesNotMatch(closedSlotMatch[1], /week-grid-slot-add/);
+    await context.close();
+  });
+
+  await check('mobile: past slots on today render as non-bookable "Not bookable" rows; the current/future slot stays a "Book" row', async () => {
+    const { page, context } = await newPageAt('2026-09-16T09:15:00Z', 'UTC', { width: 390, height: 800 });
+    const html = await page.evaluate(() => {
+      const weekStart = WeekGrid.weekStartFor('2026-09-13T00:00:00');
+      return WeekGrid.html({ weekStart, events: [], selectedDay: '2026-09-16' });
+    });
+    assert.match(html, /week-grid-mobile-row--closed/);
+    assert.match(html, />07:00<[\s\S]{0,300}Not bookable/);
+    assert.match(html, />09:00<[\s\S]{0,300}Book/); // the slot "now" falls inside stays bookable
+    await context.close();
+  });
+
   await browser.close();
   report();
 })().catch(error => { console.error(error); process.exitCode = 1; });
