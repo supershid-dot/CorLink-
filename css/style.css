@@ -3554,6 +3554,13 @@ mark.quote-highlight {
   background: repeating-linear-gradient(45deg, var(--color-warning-bg), var(--color-warning-bg) 6px, transparent 6px, transparent 12px);
 }
 
+/* Rooms Schedule toolbar — two explicit rows (week nav; room select +
+   actions) rather than one row that wraps unpredictably once it no
+   longer fits — keeps a clean, consistent two-row layout on any
+   width instead of an item occasionally stranding onto its own line. */
+.week-grid-toolbar { display: flex; flex-direction: column; gap: 10px; margin-bottom: 4px; }
+.week-grid-toolbar-row { display: flex; align-items: center; gap: 8px; }
+
 /* Mobile week-grid — a day-picker strip + single-day agenda list
    instead of the 7-column grid (docs/22 §3.1: "7-day grid (desktop) /
    day-agenda (mobile)"). JS switches to this markup at the same
@@ -3561,19 +3568,20 @@ mark.quote-highlight {
    no narrowed-grid overrides needed, just this list's own styling. */
 .week-grid-day-picker-strip {
   display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  padding-bottom: 10px;
-  margin-bottom: 4px;
+  gap: 4px;
+  margin-bottom: 12px;
 }
+/* All 7 chips share the strip's width equally and shrink together —
+   fits any phone width with no horizontal scroll, unlike a fixed
+   min-width-per-chip strip (which is what overflowed here before). */
 .week-grid-day-picker {
-  flex: 0 0 auto;
-  min-width: 52px;
+  flex: 1 1 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: 8px 10px;
+  padding: 8px 4px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface);

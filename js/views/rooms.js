@@ -203,17 +203,19 @@ const RoomsView = {
     this._scheduleBlocksById = new Map(blocks.map(bl => [bl.id, bl]));
 
     content.innerHTML = `
-      <div class="page-header-row" style="align-items:flex-end; flex-wrap:wrap; gap:12px;">
-        <div class="field-row" style="align-items:center; gap:8px;">
+      <div class="week-grid-toolbar">
+        <div class="week-grid-toolbar-row" style="justify-content:center;">
           <button type="button" class="icon-btn-xs" id="sched-prev" aria-label="Previous week"><i class="ti ti-chevron-left"></i></button>
           <span class="calendar-range-label">${this._weekLabel(weekStart)}</span>
           <button type="button" class="icon-btn-xs" id="sched-next" aria-label="Next week"><i class="ti ti-chevron-right"></i></button>
         </div>
-        <select class="field-select" id="sched-room-filter" aria-label="Select room" style="max-width:220px;">
-          ${this._rooms.map(r => `<option value="${r.id}" ${r.id === this._state.scheduleRoomId ? 'selected' : ''}>${this._escapeHtml(r.name)}</option>`).join('')}
-        </select>
-        <button type="button" class="btn btn-primary btn-sm" id="sched-new-booking"><i class="ti ti-plus"></i> Book</button>
-        <button type="button" class="icon-btn" id="sched-refresh" title="Refresh"><i class="ti ti-refresh"></i></button>
+        <div class="week-grid-toolbar-row">
+          <select class="field-select" id="sched-room-filter" aria-label="Select room" style="flex:1; min-width:0;">
+            ${this._rooms.map(r => `<option value="${r.id}" ${r.id === this._state.scheduleRoomId ? 'selected' : ''}>${this._escapeHtml(r.name)}</option>`).join('')}
+          </select>
+          <button type="button" class="btn btn-primary btn-sm" id="sched-new-booking"><i class="ti ti-plus"></i> Book</button>
+          <button type="button" class="icon-btn" id="sched-refresh" title="Refresh"><i class="ti ti-refresh"></i></button>
+        </div>
       </div>
       <label class="checkbox-row" style="margin:12px 0;">
         <input type="checkbox" id="sched-show-all" ${this._state.scheduleShowAll ? 'checked' : ''} />
