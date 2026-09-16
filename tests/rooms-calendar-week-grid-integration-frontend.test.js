@@ -120,7 +120,14 @@ async function check(name, fn) {
         fetchBookings: async () => ([]),
         fetchRoomBlocks: async () => ([]),
       };
-      window.MeetingsView = {
+      // Declared with const, matching meetings.js's own top-level
+      // declaration style exactly (not window.MeetingsView = ...) —
+      // a const at script top level does NOT become a window property,
+      // so rooms.js must find this via a bare-identifier/typeof check,
+      // never window.MeetingsView. A window.-assignment stub here would
+      // pass even if rooms.js's own guard checked window.MeetingsView,
+      // silently hiding exactly the bug this test exists to catch.
+      const MeetingsView = {
         _openScheduleMeetingModal: async (opts) => { window.openedScheduleMeetingCalls.push(opts || {}); },
       };
       ${gridSource}

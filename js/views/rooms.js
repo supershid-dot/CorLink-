@@ -831,7 +831,7 @@ const RoomsView = {
   // split as the room-only path below, so nothing about booking
   // approval changes based on which form was used.
   _openBookOrScheduleModal({ date, time } = {}) {
-    if (AppShell.isModuleEnabled(this._user, 'meetings') && window.MeetingsView) {
+    if (AppShell.isModuleEnabled(this._user, 'meetings') && typeof MeetingsView !== 'undefined') {
       const preselectedRoom = this._state.scheduleRoomId || (this._rooms[0] && this._rooms[0].id) || null;
       return MeetingsView._openScheduleMeetingModal({
         prefillRoomId: preselectedRoom,
