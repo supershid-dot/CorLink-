@@ -125,7 +125,11 @@ const WeekGrid = {
       const minute = m % 60;
       const isHour = minute === 0;
       const label = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
-      timeLabels += `<div class="week-grid-time-label${isHour ? ' week-grid-time-label--hour' : ''}" style="top:${(m / this.SLOT_MINUTES) * this.ROW_HEIGHT_PX}px;">${label}</div>`;
+      // Centered within its own row (vertically, via translateY(-50%)
+      // in CSS) rather than sitting on the boundary line between two
+      // rows — matches the reference layout's mid-row placement.
+      const top = (m / this.SLOT_MINUTES) * this.ROW_HEIGHT_PX + this.ROW_HEIGHT_PX / 2;
+      timeLabels += `<div class="week-grid-time-label${isHour ? ' week-grid-time-label--hour' : ''}" style="top:${top}px;">${label}</div>`;
     }
 
     const dayHeaders = days.map(d => {

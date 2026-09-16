@@ -3492,12 +3492,12 @@ mark.quote-highlight {
   left: 0;
   right: 6px;
   transform: translateY(-50%);
-  font-size: 0.7rem;
+  font-size: 0.78rem;
   color: var(--color-text-light);
   white-space: nowrap;
   text-align: right;
 }
-.week-grid-time-label--hour { color: var(--color-text-muted); font-weight: 600; }
+.week-grid-time-label--hour { color: var(--color-text-muted); font-weight: 600; font-size: 0.82rem; }
 
 .week-grid-days-body { flex: 1; display: flex; min-width: 0; }
 .week-grid-day-col {
