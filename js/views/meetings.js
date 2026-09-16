@@ -151,7 +151,7 @@ const MeetingsView = {
       });
     });
     this._highlightTabs();
-    document.getElementById('new-meeting-btn').addEventListener('click', () => this._openMeetingFormModal());
+    document.getElementById('new-meeting-btn').addEventListener('click', () => this._openScheduleMeetingModal());
     document.getElementById('new-recurring-meeting-btn').addEventListener('click', () => this._openRecurringMeetingModal());
     document.getElementById('meetings-refresh-btn').addEventListener('click', () => this._renderTab());
   },
@@ -581,46 +581,48 @@ const MeetingsView = {
     return { start, end };
   },
 
-  _openMeetingFormModal(meeting = null) {
-    const isEdit = !!meeting;
-    // Completed/cancelled meetings never reach here (edit button is
-    // hidden for both in the detail modal) — defensive guard in case
-    // of a stale reference.
-    if (isEdit && (meeting.status === 'cancelled' || this._effectiveStatus(meeting) === 'completed')) return;
+  // Edit only — creation goes through _openScheduleMeetingModal()
+  // instead (docs/22: one combined room+participants+meeting form,
+  // matching MeetFlow's single-window flow rather than this bare
+  // title/time form followed by separate post-save room/participant
+  // steps). Completed/cancelled meetings never reach here (edit button
+  // is hidden for both in the detail modal) — defensive guard in case
+  // of a stale reference.
+  _openEditMeetingModal(meeting) {
+    if (meeting.status === 'cancelled' || this._effectiveStatus(meeting) === 'completed') return;
 
-    const { start: defStart, end: defEnd } = this._defaultMeetingTimes();
-    const startVal = isEdit ? new Date(meeting.start_at).toISOString().slice(0, 16) : defStart;
-    const endVal = isEdit ? new Date(meeting.end_at).toISOString().slice(0, 16) : defEnd;
-    const locationMode = isEdit ? (meeting.location_mode || '') : '';
+    const startVal = new Date(meeting.start_at).toISOString().slice(0, 16);
+    const endVal = new Date(meeting.end_at).toISOString().slice(0, 16);
+    const locationMode = meeting.location_mode || '';
     // A scheduled meeting can never go back to draft — no status field
     // shown at all in that case (nothing to choose; p_status stays
-    // unset/unchanged). A draft (or new meeting) gets the real choice.
-    const showStatusField = !isEdit || meeting.status === 'draft';
+    // unset/unchanged). A draft gets the real choice.
+    const showStatusField = meeting.status === 'draft';
 
     this._openModal(`
-      <h3>${isEdit ? 'Edit Meeting' : 'New Meeting'}</h3>
+      <h3>Edit Meeting</h3>
       <form id="meeting-form" class="modal-form">
         <div class="field-group">
           <label class="field-label">Title</label>
-          <input class="field-input-plain" name="title" required value="${isEdit ? this._escapeHtml(meeting.title) : ''}" />
+          <input class="field-input-plain" name="title" required value="${this._escapeHtml(meeting.title)}" />
         </div>
         <div class="field-group">
           <label class="field-label">Description (optional)</label>
-          <textarea class="field-input-plain" name="description" rows="3">${isEdit ? this._escapeHtml(meeting.description || '') : ''}</textarea>
+          <textarea class="field-input-plain" name="description" rows="3">${this._escapeHtml(meeting.description || '')}</textarea>
         </div>
         <div class="field-row">
           <div class="field-group">
             <label class="field-label">Meeting Type</label>
             <select class="field-select" name="meetingType">
               ${['general', 'interview', 'training', 'operational', 'administrative', 'other'].map(t =>
-                `<option value="${t}" ${isEdit && meeting.meeting_type === t ? 'selected' : ''}>${this._capitalize(t)}</option>`).join('')}
+                `<option value="${t}" ${meeting.meeting_type === t ? 'selected' : ''}>${this._capitalize(t)}</option>`).join('')}
             </select>
           </div>
           <div class="field-group">
             <label class="field-label">Visibility</label>
             <select class="field-select" name="visibility">
               ${['private', 'participants', 'organization'].map(v =>
-                `<option value="${v}" ${(isEdit ? meeting.visibility : 'participants') === v ? 'selected' : ''}>${this._capitalize(v)}</option>`).join('')}
+                `<option value="${v}" ${meeting.visibility === v ? 'selected' : ''}>${this._capitalize(v)}</option>`).join('')}
             </select>
           </div>
         </div>
@@ -628,8 +630,8 @@ const MeetingsView = {
           <div class="field-group">
             <label class="field-label">Status</label>
             <select class="field-select" name="status">
-              <option value="draft" ${(isEdit ? meeting.status : 'scheduled') === 'draft' ? 'selected' : ''}>Draft (not announced yet — added participants can still see it)</option>
-              <option value="scheduled" ${(isEdit ? meeting.status : 'scheduled') === 'scheduled' ? 'selected' : ''}>Scheduled (publish now)</option>
+              <option value="draft" ${meeting.status === 'draft' ? 'selected' : ''}>Draft (not announced yet — added participants can still see it)</option>
+              <option value="scheduled" ${meeting.status !== 'draft' ? 'selected' : ''}>Scheduled (publish now)</option>
             </select>
           </div>
         ` : `<p class="field-hint">This meeting is scheduled. It can be cancelled, but not returned to draft.</p>`}
@@ -647,30 +649,30 @@ const MeetingsView = {
           <label class="field-label">Timezone</label>
           <select class="field-select" name="timezone">
             ${['Indian/Maldives', 'Asia/Colombo', 'Asia/Kolkata', 'Asia/Dubai', 'UTC'].map(tz =>
-              `<option value="${tz}" ${(isEdit ? meeting.timezone : 'Indian/Maldives') === tz ? 'selected' : ''}>${tz}</option>`).join('')}
+              `<option value="${tz}" ${meeting.timezone === tz ? 'selected' : ''}>${tz}</option>`).join('')}
           </select>
         </div>
         <div class="field-group">
           <label class="field-label">Location</label>
           <select class="field-select" name="locationMode" id="meeting-location-mode">
             <option value="" ${locationMode === '' ? 'selected' : ''}>Not decided yet</option>
-            <option value="room" ${locationMode === 'room' ? 'selected' : ''}>Room (assign a room after saving)</option>
+            <option value="room" ${locationMode === 'room' ? 'selected' : ''}>Room (assign a room from the detail view)</option>
             <option value="external" ${locationMode === 'external' ? 'selected' : ''}>External location</option>
             <option value="virtual" ${locationMode === 'virtual' ? 'selected' : ''}>Virtual</option>
           </select>
         </div>
         <div class="field-group hidden" id="external-location-group">
           <label class="field-label">External Location</label>
-          <input class="field-input-plain" name="externalLocation" value="${isEdit ? this._escapeHtml(meeting.external_location || '') : ''}" />
+          <input class="field-input-plain" name="externalLocation" value="${this._escapeHtml(meeting.external_location || '')}" />
         </div>
         <div class="field-group hidden" id="virtual-link-group">
           <label class="field-label">Virtual Link (https:// only)</label>
-          <input class="field-input-plain" type="url" name="virtualLink" placeholder="https://…" value="${isEdit ? this._escapeHtml(meeting.virtual_link || '') : ''}" />
+          <input class="field-input-plain" type="url" name="virtualLink" placeholder="https://…" value="${this._escapeHtml(meeting.virtual_link || '')}" />
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
-          <button type="submit" class="btn btn-primary" id="meeting-form-submit">${isEdit ? 'Save Changes' : 'Create Meeting'}</button>
+          <button type="submit" class="btn btn-primary" id="meeting-form-submit">Save Changes</button>
         </div>
       </form>
     `, { medium: true });
@@ -716,7 +718,7 @@ const MeetingsView = {
       }
 
       submitBtn.disabled = true;
-      submitBtn.textContent = isEdit ? 'Saving…' : 'Creating…';
+      submitBtn.textContent = 'Saving…';
       try {
         const payload = {
           title: fd.get('title'),
@@ -729,22 +731,448 @@ const MeetingsView = {
           externalLocation: locationMode === 'external' ? externalLocation : null,
           virtualLink: locationMode === 'virtual' ? virtualLink : null,
         };
-        if (isEdit) {
-          if (showStatusField) payload.status = fd.get('status');
-          await MeetingsAPI.updateMeeting(meeting.id, payload);
-        } else {
-          payload.status = fd.get('status');
-          await MeetingsAPI.createMeeting(payload);
-        }
+        if (showStatusField) payload.status = fd.get('status');
+        await MeetingsAPI.updateMeeting(meeting.id, payload);
         this._closeModal();
         await this._renderTab();
       } catch (err) {
-        errEl.textContent = err.message || (isEdit
-          ? "This meeting could not be updated — it was not changed."
-          : 'Failed to create the meeting.');
+        errEl.textContent = err.message || "This meeting could not be updated — it was not changed.";
         errEl.classList.remove('hidden');
         submitBtn.disabled = false;
-        submitBtn.textContent = isEdit ? 'Save Changes' : 'Create Meeting';
+        submitBtn.textContent = 'Save Changes';
+      }
+    });
+  },
+
+  // ── Combined create flow (docs/22: one window that books the room
+  // and schedules the meeting together, matching MeetFlow's single-
+  // form UX rather than CorLink's previous create-then-assign-room-
+  // then-add-participants sequence). Every step below already existed
+  // as an independent, already-tested RPC (create_meeting /
+  // create_recurring_meeting, assign_room_booking, add_participant,
+  // apply_group_to_meeting) — this only sequences them behind one
+  // submit button; no new backend surface. `assign_room_booking`
+  // itself already preserves the manager-vs-request-approval split
+  // (create_room_booking vs submit_booking_request) regardless of
+  // whether the caller reaches it via Rooms or via this form.
+  async _openScheduleMeetingModal({ prefillRoomId = null, prefillDate = null, prefillTime = null, onSuccess = null } = {}) {
+    this._user = this._user || Auth.getCachedProfile();
+    if (!this._user) return;
+    this._orgId = this._orgId || this._user.org_id;
+    if (this._roomsEnabled === undefined) this._roomsEnabled = AppShell.isModuleEnabled(this._user, 'rooms');
+
+    let rooms = [], groups = [], orgUsers = [];
+    try {
+      const fetches = [MeetingsAPI.fetchMeetingGroups(this._orgId), AdminAPI.listUsersByOrg(this._orgId)];
+      if (this._roomsEnabled) fetches.push(RoomsAPI.fetchRooms(this._orgId));
+      const results = await Promise.all(fetches);
+      groups = results[0] || [];
+      orgUsers = (results[1] || []).filter(u => u.is_active && u.id !== this._user.id);
+      if (this._roomsEnabled) rooms = (results[2] || []).filter(r => r.is_active);
+    } catch (err) {
+      console.error('CorLink: failed to load rooms/groups/staff for the schedule-meeting form', err);
+    }
+
+    const { start: defStart } = this._defaultMeetingTimes();
+    const defDate = prefillDate || defStart.slice(0, 10);
+    const defStartTime = prefillTime || defStart.slice(11, 16);
+    const defSeriesEnd = (() => {
+      const d = new Date(`${defDate}T00:00:00`);
+      d.setMonth(d.getMonth() + 3);
+      return this._dateStr(d);
+    })();
+    const defLocationMode = prefillRoomId ? 'room' : '';
+
+    this._openModal(`
+      <h3>Schedule Meeting</h3>
+      <form id="schedule-meeting-form" class="modal-form">
+        <div class="modal-two-col">
+          <div class="modal-two-col-main">
+            <div class="field-group">
+              <label class="field-label">Title</label>
+              <input class="field-input-plain" name="title" required />
+            </div>
+            <div class="field-row">
+              <div class="field-group">
+                <label class="field-label">Meeting Type</label>
+                <select class="field-select" name="meetingType">
+                  ${['general', 'interview', 'training', 'operational', 'administrative', 'other'].map(t =>
+                    `<option value="${t}">${this._capitalize(t)}</option>`).join('')}
+                </select>
+              </div>
+              <div class="field-group">
+                <label class="field-label">Format</label>
+                <select class="field-select" name="locationMode" id="sm-location-mode">
+                  <option value="" ${defLocationMode === '' ? 'selected' : ''}>Not decided yet</option>
+                  ${this._roomsEnabled ? `<option value="room" ${defLocationMode === 'room' ? 'selected' : ''}>In person — Room</option>` : ''}
+                  <option value="external">In person — External location</option>
+                  <option value="virtual">Online — Virtual link</option>
+                </select>
+              </div>
+            </div>
+            ${this._roomsEnabled ? `
+              <div class="field-group hidden" id="sm-room-group">
+                <label class="field-label">Meeting Room</label>
+                <select class="field-select" name="roomId">
+                  <option value="">Select a room…</option>
+                  ${rooms.map(r => `<option value="${r.id}" ${r.id === prefillRoomId ? 'selected' : ''}>${this._escapeHtml(r.name)}</option>`).join('')}
+                </select>
+                <div id="sm-availability-indicator" class="field-hint"></div>
+                <button type="button" class="btn btn-secondary btn-xs" id="sm-check-availability-btn" style="margin-top:4px;">Check Availability</button>
+              </div>
+            ` : ''}
+            <div class="field-group hidden" id="sm-external-group">
+              <label class="field-label">External Location</label>
+              <input class="field-input-plain" name="externalLocation" />
+            </div>
+            <div class="field-group hidden" id="sm-virtual-group">
+              <label class="field-label">Virtual Link (https:// only)</label>
+              <input class="field-input-plain" type="url" name="virtualLink" placeholder="https://…" />
+            </div>
+            <div class="field-row">
+              <div class="field-group">
+                <label class="field-label">Date</label>
+                <input class="field-input-plain" type="date" name="date" required value="${defDate}" />
+              </div>
+              <div class="field-group">
+                <label class="field-label">Start Time</label>
+                <input class="field-input-plain" type="time" name="startTime" required value="${defStartTime}" />
+              </div>
+              <div class="field-group">
+                <label class="field-label">Duration</label>
+                <select class="field-select" name="duration">
+                  ${[15, 30, 45, 60, 90, 120, 180, 240, 300].map(m =>
+                    `<option value="${m}" ${m === 60 ? 'selected' : ''}>${m < 60 ? `${m} min` : `${m / 60}h${m % 60 ? ' 30min' : ''}`}</option>`).join('')}
+                </select>
+              </div>
+            </div>
+            <div class="field-group">
+              <label class="field-label">Timezone</label>
+              <select class="field-select" name="timezone">
+                ${['Indian/Maldives', 'Asia/Colombo', 'Asia/Kolkata', 'Asia/Dubai', 'UTC'].map(tz =>
+                  `<option value="${tz}" ${tz === 'Indian/Maldives' ? 'selected' : ''}>${tz}</option>`).join('')}
+              </select>
+            </div>
+            <div class="field-group">
+              <label class="field-label">Recurrence</label>
+              <div class="tabs" id="sm-recurrence-tabs">
+                <button type="button" class="tab-btn tab-btn--active" data-recur="none">None</button>
+                <button type="button" class="tab-btn" data-recur="weekly:1">Weekly</button>
+                <button type="button" class="tab-btn" data-recur="weekly:2">Every 2 weeks</button>
+                <button type="button" class="tab-btn" data-recur="monthly:1">Monthly</button>
+              </div>
+            </div>
+            <div class="field-group hidden" id="sm-series-end-group">
+              <label class="field-label">Series End Date</label>
+              <input class="field-input-plain" type="date" name="seriesEndDate" value="${defSeriesEnd}" />
+            </div>
+            <div class="field-group">
+              <label class="field-label">Agenda / Notes (optional)</label>
+              <textarea class="field-input-plain" name="description" rows="3"></textarea>
+            </div>
+          </div>
+          <div class="modal-two-col-side">
+            <div class="field-group">
+              <label class="field-label">Privacy</label>
+              <select class="field-select" name="visibility">
+                <option value="organization">Public — visible to the organization</option>
+                <option value="participants" selected>Private — participants only</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label class="field-label">Participants</label>
+              <div class="participant-chip-list" id="sm-participant-list"></div>
+            </div>
+            <div class="tabs" id="sm-participant-type-tabs">
+              <button type="button" class="tab-btn tab-btn--active" data-ptype="internal">Staff</button>
+              <button type="button" class="tab-btn" data-ptype="group">Group</button>
+              <button type="button" class="tab-btn" data-ptype="external">Guest</button>
+            </div>
+            <div id="sm-internal-fields">
+              <input class="field-input-plain" id="sm-staff-search" placeholder="Search by name…" style="margin-bottom:6px;" />
+              <select class="field-select" id="sm-staff-select" size="5" style="height:auto;"></select>
+              <button type="button" class="btn btn-secondary btn-xs" id="sm-add-staff-btn" style="margin-top:6px;">+ Add</button>
+            </div>
+            <div id="sm-group-fields" class="hidden">
+              <select class="field-select" id="sm-group-select">
+                <option value="">Select a group…</option>
+                ${groups.map(g => `<option value="${g.id}">${this._escapeHtml(g.name)}</option>`).join('')}
+              </select>
+              <p class="field-hint">The group's current members are added as attendees at creation time. Only one group can be added.</p>
+              <button type="button" class="btn btn-secondary btn-xs" id="sm-add-group-btn">+ Add Group</button>
+            </div>
+            <div id="sm-external-fields" class="hidden">
+              <input class="field-input-plain" id="sm-guest-name" placeholder="Guest name" style="margin-bottom:6px;" />
+              <input class="field-input-plain" id="sm-guest-email" type="email" placeholder="Guest email (optional)" style="margin-bottom:6px;" />
+              <button type="button" class="btn btn-secondary btn-xs" id="sm-add-guest-btn">+ Add Guest</button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary" id="sm-submit-btn">Schedule</button>
+        </div>
+      </form>
+    `, { large: true });
+
+    this._bindScheduleMeetingModal({ rooms, orgUsers, groups, onSuccess });
+  },
+
+  _dateStr(date) {
+    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  },
+
+  _bindScheduleMeetingModal({ rooms, orgUsers, groups, onSuccess }) {
+    const form = document.getElementById('schedule-meeting-form');
+    const errEl = form.querySelector('.modal-error');
+    const submitBtn = document.getElementById('sm-submit-btn');
+
+    // ── Format / location toggles ──────────────────────────────────
+    const locSelect = document.getElementById('sm-location-mode');
+    const roomGroup = document.getElementById('sm-room-group');
+    const extGroup = document.getElementById('sm-external-group');
+    const virtGroup = document.getElementById('sm-virtual-group');
+    const syncLocationFields = () => {
+      if (roomGroup) roomGroup.classList.toggle('hidden', locSelect.value !== 'room');
+      extGroup.classList.toggle('hidden', locSelect.value !== 'external');
+      virtGroup.classList.toggle('hidden', locSelect.value !== 'virtual');
+    };
+    locSelect.addEventListener('change', syncLocationFields);
+    syncLocationFields();
+
+    if (roomGroup) {
+      const roomSelect = form.querySelector('[name="roomId"]');
+      const availEl = document.getElementById('sm-availability-indicator');
+      document.getElementById('sm-check-availability-btn').addEventListener('click', async () => {
+        const roomId = roomSelect.value;
+        const fd = new FormData(form);
+        const duration = parseInt(fd.get('duration'), 10) || 60;
+        if (!roomId || !fd.get('date') || !fd.get('startTime')) return;
+        const startAt = new Date(`${fd.get('date')}T${fd.get('startTime')}:00`);
+        const endAt = new Date(startAt.getTime() + duration * 60000);
+        availEl.textContent = 'Checking…';
+        try {
+          const free = await RoomsAPI.checkRoomAvailability({ roomId, startAt: startAt.toISOString(), endAt: endAt.toISOString() });
+          availEl.innerHTML = free
+            ? `<span style="color:var(--color-success-dark);"><i class="ti ti-circle-check"></i> This slot is available.</span>`
+            : `<span style="color:var(--color-error-dark);"><i class="ti ti-circle-x"></i> This slot conflicts with an existing booking or block.</span>`;
+        } catch (err) {
+          availEl.textContent = err.message || 'Could not check availability.';
+        }
+      });
+    }
+
+    // ── Recurrence quick-picks ─────────────────────────────────────
+    let recurrence = 'none';
+    const seriesEndGroup = document.getElementById('sm-series-end-group');
+    document.querySelectorAll('#sm-recurrence-tabs [data-recur]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        recurrence = btn.dataset.recur;
+        document.querySelectorAll('#sm-recurrence-tabs [data-recur]').forEach(b => b.classList.toggle('tab-btn--active', b === btn));
+        seriesEndGroup.classList.toggle('hidden', recurrence === 'none');
+      });
+    });
+
+    // ── Participants (queued client-side, applied after the meeting/
+    // series is created — every one of these RPCs already existed and
+    // is already covered by its own tests; this only sequences them) ──
+    const pending = []; // { type: 'internal'|'external', userId?/name?/email?, label }
+    let pendingGroup = null; // { groupId, label } — at most one, matching create_recurring_meeting's own single p_group_id
+    const queuedInternalIds = new Set();
+    const listEl = document.getElementById('sm-participant-list');
+
+    const renderPendingList = () => {
+      const organizerChip = `<div class="participant-chip participant-chip--organizer"><i class="ti ti-user-check"></i> You (organizer)</div>`;
+      const groupChip = pendingGroup
+        ? `<div class="participant-chip"><i class="ti ti-users-group"></i> ${this._escapeHtml(pendingGroup.label)} (group) <button type="button" class="participant-chip-remove" data-remove-group aria-label="Remove group">&times;</button></div>`
+        : '';
+      const chips = pending.map((item, i) =>
+        `<div class="participant-chip"><i class="ti ${item.type === 'internal' ? 'ti-user' : 'ti-user-plus'}"></i> ${this._escapeHtml(item.label)}${item.type === 'external' ? ' (guest)' : ''} <button type="button" class="participant-chip-remove" data-remove-idx="${i}" aria-label="Remove">&times;</button></div>`
+      ).join('');
+      listEl.innerHTML = organizerChip + groupChip + chips;
+      listEl.querySelectorAll('[data-remove-idx]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const idx = parseInt(btn.dataset.removeIdx, 10);
+          const removed = pending.splice(idx, 1)[0];
+          if (removed && removed.type === 'internal') queuedInternalIds.delete(removed.userId);
+          renderPendingList();
+          renderStaffOptions(staffSearch.value);
+        });
+      });
+      const removeGroupBtn = listEl.querySelector('[data-remove-group]');
+      if (removeGroupBtn) removeGroupBtn.addEventListener('click', () => { pendingGroup = null; renderPendingList(); });
+    };
+
+    // Type tabs
+    const internalFields = document.getElementById('sm-internal-fields');
+    const groupFields = document.getElementById('sm-group-fields');
+    const externalFields = document.getElementById('sm-external-fields');
+    document.querySelectorAll('#sm-participant-type-tabs [data-ptype]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const ptype = btn.dataset.ptype;
+        document.querySelectorAll('#sm-participant-type-tabs [data-ptype]').forEach(b => b.classList.toggle('tab-btn--active', b === btn));
+        internalFields.classList.toggle('hidden', ptype !== 'internal');
+        groupFields.classList.toggle('hidden', ptype !== 'group');
+        externalFields.classList.toggle('hidden', ptype !== 'external');
+      });
+    });
+
+    // Staff search/add
+    const staffSearch = document.getElementById('sm-staff-search');
+    const staffSelect = document.getElementById('sm-staff-select');
+    const renderStaffOptions = (filter = '') => {
+      const f = filter.trim().toLowerCase();
+      const available = orgUsers.filter(u => !queuedInternalIds.has(u.id) && (!f || u.full_name.toLowerCase().includes(f)));
+      staffSelect.innerHTML = available.length > 0
+        ? available.map(u => `<option value="${u.id}">${this._escapeHtml(u.full_name)}</option>`).join('')
+        : `<option value="" disabled>No matches</option>`;
+    };
+    renderStaffOptions();
+    staffSearch.addEventListener('input', () => renderStaffOptions(staffSearch.value));
+    document.getElementById('sm-add-staff-btn').addEventListener('click', () => {
+      const id = staffSelect.value;
+      if (!id) return;
+      const u = orgUsers.find(x => x.id === id);
+      if (!u) return;
+      pending.push({ type: 'internal', userId: id, label: u.full_name });
+      queuedInternalIds.add(id);
+      renderStaffOptions(staffSearch.value);
+      renderPendingList();
+    });
+
+    // Group add (replaces any previously queued group)
+    const groupSelect = document.getElementById('sm-group-select');
+    document.getElementById('sm-add-group-btn').addEventListener('click', () => {
+      const id = groupSelect.value;
+      if (!id) return;
+      const g = groups.find(x => x.id === id);
+      if (!g) return;
+      pendingGroup = { groupId: id, label: g.name };
+      renderPendingList();
+    });
+
+    // External guest add
+    const guestNameInput = document.getElementById('sm-guest-name');
+    const guestEmailInput = document.getElementById('sm-guest-email');
+    document.getElementById('sm-add-guest-btn').addEventListener('click', () => {
+      const name = guestNameInput.value.trim();
+      if (!name) return;
+      const email = guestEmailInput.value.trim();
+      pending.push({ type: 'external', name, email: email || null, label: name });
+      guestNameInput.value = '';
+      guestEmailInput.value = '';
+      renderPendingList();
+    });
+
+    renderPendingList();
+
+    // ── Submit: create (single or series), then assign the room and
+    // apply every queued participant/group in sequence. Each post-
+    // creation step is caught individually — a failure there (e.g. a
+    // room conflict, a participant already removed) does not roll back
+    // the meeting that was already created; it's surfaced afterward so
+    // the user can finish that one step from the meeting's own detail
+    // view, same as any other partial-failure flow in this app (see
+    // entry.js/request-detail.js's own `alert(failures.join('\n'))`
+    // pattern for attachment uploads). ──────────────────────────────
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errEl.classList.add('hidden');
+      const fd = new FormData(form);
+      const title = (fd.get('title') || '').trim();
+      if (!title) { errEl.textContent = 'Title is required.'; errEl.classList.remove('hidden'); return; }
+      const date = fd.get('date'), startTimeStr = fd.get('startTime');
+      if (!date || !startTimeStr) { errEl.textContent = 'Date and start time are required.'; errEl.classList.remove('hidden'); return; }
+      const durationMin = parseInt(fd.get('duration'), 10) || 60;
+      const startAt = new Date(`${date}T${startTimeStr}:00`);
+      const endAt = new Date(startAt.getTime() + durationMin * 60000);
+      const locationMode = fd.get('locationMode') || null;
+      const roomId = roomGroup ? (fd.get('roomId') || null) : null;
+      const externalLocation = fd.get('externalLocation') || null;
+      const virtualLink = fd.get('virtualLink') || null;
+
+      if (locationMode === 'room' && !roomId) {
+        errEl.textContent = 'Select a room, or choose a different format.'; errEl.classList.remove('hidden'); return;
+      }
+      if (locationMode === 'external' && !externalLocation) {
+        errEl.textContent = 'External location is required for an in-person meeting without a room.'; errEl.classList.remove('hidden'); return;
+      }
+      if (locationMode === 'virtual' && (!virtualLink || !/^https:\/\//.test(virtualLink))) {
+        errEl.textContent = 'A valid https:// virtual link is required for an online meeting.'; errEl.classList.remove('hidden'); return;
+      }
+      const seriesEndDate = fd.get('seriesEndDate');
+      if (recurrence !== 'none' && (!seriesEndDate || seriesEndDate < date)) {
+        errEl.textContent = 'Series end date is required and must not be before the start date.'; errEl.classList.remove('hidden'); return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Scheduling…';
+      const warnings = [];
+      try {
+        let allMeetingIds = [];
+        if (recurrence === 'none') {
+          const meetingId = await MeetingsAPI.createMeeting({
+            title, description: fd.get('description') || null, meetingType: fd.get('meetingType'),
+            visibility: fd.get('visibility'), startAt: startAt.toISOString(), endAt: endAt.toISOString(),
+            timezone: fd.get('timezone'), locationMode,
+            externalLocation: locationMode === 'external' ? externalLocation : null,
+            virtualLink: locationMode === 'virtual' ? virtualLink : null,
+            status: 'scheduled',
+          });
+          allMeetingIds = [meetingId];
+          if (locationMode === 'room' && roomId) {
+            try { await MeetingsAPI.assignRoomBooking(meetingId, roomId); }
+            catch (err) { warnings.push(`Room booking: ${err.message}`); }
+          }
+          if (pendingGroup) {
+            try { await MeetingsAPI.applyGroupToMeeting(meetingId, pendingGroup.groupId); }
+            catch (err) { warnings.push(`${pendingGroup.label}: ${err.message}`); }
+          }
+        } else {
+          const [pattern, interval] = recurrence.split(':');
+          const endTimeStr = `${String(endAt.getHours()).padStart(2, '0')}:${String(endAt.getMinutes()).padStart(2, '0')}`;
+          const occurrences = await MeetingsAPI.createRecurringMeeting({
+            title, description: fd.get('description') || null, meetingType: fd.get('meetingType'),
+            visibility: fd.get('visibility'), recurrencePattern: pattern, intervalCount: parseInt(interval, 10) || 1,
+            seriesStartDate: date, seriesEndDate, startTime: startTimeStr, endTime: endTimeStr,
+            timezone: fd.get('timezone'), locationMode,
+            externalLocation: locationMode === 'external' ? externalLocation : null,
+            virtualLink: locationMode === 'virtual' ? virtualLink : null,
+            roomId: locationMode === 'room' ? roomId : null,
+            groupId: pendingGroup ? pendingGroup.groupId : null,
+          });
+          allMeetingIds = occurrences.map(o => o.meeting_id);
+        }
+
+        for (const mid of allMeetingIds) {
+          for (const item of pending) {
+            try {
+              if (item.type === 'internal') await MeetingsAPI.addParticipant(mid, { userId: item.userId });
+              else await MeetingsAPI.addParticipant(mid, { externalName: item.name, externalEmail: item.email });
+            } catch (err) {
+              warnings.push(`${item.label}: ${err.message}`);
+            }
+          }
+        }
+
+        this._closeModal();
+        if (warnings.length > 0) alert(`Meeting scheduled, but some steps failed:\n${warnings.join('\n')}`);
+        const firstMeetingId = allMeetingIds[0] || null;
+        if (onSuccess) {
+          await onSuccess({ meetingId: firstMeetingId, allMeetingIds });
+        } else {
+          await this._renderTab();
+          if (firstMeetingId) {
+            try { this._openMeetingDetailModal(await MeetingsAPI.fetchMeeting(firstMeetingId)); }
+            catch (err) { console.error('CorLink: meeting scheduled but failed to open its detail view', err); }
+          }
+        }
+      } catch (err) {
+        errEl.textContent = err.message || 'Failed to schedule the meeting.';
+        errEl.classList.remove('hidden');
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Schedule';
       }
     });
   },
@@ -754,7 +1182,7 @@ const MeetingsView = {
   // generated date, all in one server-side transaction
   // (create_recurring_meeting) — no edit path exists here (docs/23:
   // series-wide editing is Phase 2), so this modal is create-only,
-  // unlike _openMeetingFormModal which doubles as both create and edit.
+  // unlike _openEditMeetingModal, which is edit-only.
   async _openRecurringMeetingModal() {
     let rooms = [], groups = [];
     try {
@@ -1177,7 +1605,7 @@ const MeetingsView = {
   // choice on top of an action already known to be permitted.
   _openSeriesActionScopeDialog(meeting, action, booking = null) {
     if (!meeting.series_id) {
-      if (action === 'edit') this._openMeetingFormModal(meeting);
+      if (action === 'edit') this._openEditMeetingModal(meeting);
       else this._openCancelMeetingModal(meeting, booking);
       return;
     }
@@ -1200,7 +1628,7 @@ const MeetingsView = {
 
     document.getElementById('scope-this-btn').addEventListener('click', () => {
       this._closeModal();
-      if (action === 'edit') this._openMeetingFormModal(meeting);
+      if (action === 'edit') this._openEditMeetingModal(meeting);
       else this._openCancelMeetingModal(meeting, booking);
     });
     // "This and future" edit and "Entire series" edit both open the
@@ -1229,7 +1657,7 @@ const MeetingsView = {
   // Only the fields update_entire_series() actually accepts: template
   // fields plus time-of-day (TIME, not a date) and timezone. No date,
   // no recurrence field, no room id/selector — a date change stays a
-  // per-occurrence edit via _openMeetingFormModal(), and room
+  // per-occurrence edit via _openEditMeetingModal(), and room
   // reassignment stays a per-occurrence action via
   // _openAssignRoomModal()/_openChangeRoomModal(): this RPC never
   // assigns a room, it only reschedules an occurrence's EXISTING

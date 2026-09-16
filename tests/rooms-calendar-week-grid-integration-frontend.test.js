@@ -93,6 +93,71 @@ async function check(name, fn) {
     return { page, pageErrors };
   }
 
+  // Meetings-module-enabled variant of newRoomsPage — verifies Rooms
+  // routes its booking flow to the combined Schedule Meeting form
+  // (docs/22) instead of the room-only fallback once Meetings is
+  // available for the org. MeetingsView itself is stubbed (its own
+  // combined-form behavior is covered independently by
+  // schedule-meeting-combined-form-frontend.test.js) — this only checks
+  // that rooms.js calls it with the right prefill.
+  async function newRoomsPageWithMeetingsEnabled(viewport) {
+    const page = await browser.newPage(viewport ? { viewport } : {});
+    const pageErrors = [];
+    page.on('pageerror', e => pageErrors.push(e.message));
+    await page.setContent('<div id="app"></div><div id="modal-root"></div>');
+    await page.addScriptTag({ content: dateOverrideScript });
+    await page.addScriptTag({ content: `
+      window.getSupabase = () => ({});
+      window.AppShell = { topbarHtml: () => '', bottomNavHtml: () => '', bindTopbar: () => {}, isAdmin: () => false, isSupervisorOrAbove: () => false, isModuleEnabled: () => true };
+      window.Auth = { getCachedProfile: () => ({ id: 'u1', org_id: 'org-1' }) };
+      window.Router = { navigate: (...args) => { window.__navCalls = window.__navCalls || []; window.__navCalls.push(args); } };
+      window.AdminAPI = { listSectionsByOrg: async () => [] };
+      window.openedScheduleMeetingCalls = [];
+      window.openedBookingFormCalls = [];
+      window.RoomsAPI = {
+        fetchRooms: async () => ([{ id: 'r1', name: 'HQ Meeting Room A', is_active: true }, { id: 'r2', name: 'HQ Meeting Room B', is_active: true }]),
+        fetchMyManagedRoomIds: async () => [],
+        fetchBookings: async () => ([]),
+        fetchRoomBlocks: async () => ([]),
+      };
+      window.MeetingsView = {
+        _openScheduleMeetingModal: async (opts) => { window.openedScheduleMeetingCalls.push(opts || {}); },
+      };
+      ${gridSource}
+      ${roomsSource}
+      window.__view = RoomsView;
+      window.__view._openBookingFormModal = async (opts) => { window.openedBookingFormCalls.push(opts || {}); };
+    ` });
+    return { page, pageErrors };
+  }
+
+  await check('clicking an empty slot in Rooms routes to the combined Schedule Meeting form when the Meetings module is enabled, prefilled with room/day/time', async () => {
+    const { page } = await newRoomsPageWithMeetingsEnabled();
+    await page.evaluate(async () => {
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._isAdmin = false; v._isSupervisor = false; v._orgId = 'org-1';
+      v._rooms = await window.RoomsAPI.fetchRooms();
+      v._myManagedRoomIds = new Set();
+      v._state.tab = 'schedule';
+      v._state.scheduleRoomId = 'r2';
+      v._state.scheduleDate = '2026-09-16';
+      document.body.insertAdjacentHTML('beforeend', `<div id="rooms-tab-content"></div>`);
+      await v._renderTab();
+    });
+    await page.locator('[data-week-grid-slot]').first().click();
+    const result = await page.evaluate(() => ({
+      scheduleCalls: window.openedScheduleMeetingCalls.map(c => ({ prefillRoomId: c.prefillRoomId, prefillDate: c.prefillDate, prefillTime: c.prefillTime, hasOnSuccess: typeof c.onSuccess === 'function' })),
+      fallbackCallCount: window.openedBookingFormCalls.length,
+    }));
+    assert.strictEqual(result.scheduleCalls.length, 1);
+    assert.strictEqual(result.scheduleCalls[0].prefillRoomId, 'r2');
+    assert.ok(result.scheduleCalls[0].prefillDate && result.scheduleCalls[0].prefillTime);
+    assert.strictEqual(result.scheduleCalls[0].hasOnSuccess, true);
+    assert.strictEqual(result.fallbackCallCount, 0, 'the room-only fallback must not also open');
+    await page.close();
+  });
+
   await check('Rooms.render() resets scheduleDate/scheduleMobileDay to today on every fresh navigation', async () => {
     const { page } = await newRoomsPage();
     const result = await page.evaluate(async () => {

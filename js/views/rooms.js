@@ -258,10 +258,10 @@ const RoomsView = {
       this._state.scheduleShowAll = e.target.checked;
       this._renderTab();
     });
-    document.getElementById('sched-new-booking').addEventListener('click', () => this._openBookingFormModal());
+    document.getElementById('sched-new-booking').addEventListener('click', () => this._openBookOrScheduleModal());
 
     WeekGrid.bind(document.getElementById('sched-grid'), {
-      onSlotClick: (day, time) => this._openBookingFormModal({ date: day, time }),
+      onSlotClick: (day, time) => this._openBookOrScheduleModal({ date: day, time }),
       onEventClick: (eventId) => {
         if (eventId.startsWith('bl:')) {
           this._openBlockDetailModal(this._scheduleBlocksById.get(eventId.slice(3)));
@@ -821,7 +821,30 @@ const RoomsView = {
     });
   },
 
-  // ── New Booking form ─────────────────────────────────────────────
+  // Books the room and schedules the meeting in one window (docs/22)
+  // via MeetingsView's combined form, prefilled with whichever room/
+  // day/time the grid click was for — only when the Meetings module is
+  // enabled for this org; otherwise there's no meeting flow to route
+  // to, so this falls back to the room-only New Booking form exactly
+  // as before. assign_room_booking (called inside that combined form)
+  // already preserves the same manager-confirms/non-manager-requests
+  // split as the room-only path below, so nothing about booking
+  // approval changes based on which form was used.
+  _openBookOrScheduleModal({ date, time } = {}) {
+    if (AppShell.isModuleEnabled(this._user, 'meetings') && window.MeetingsView) {
+      const preselectedRoom = this._state.scheduleRoomId || (this._rooms[0] && this._rooms[0].id) || null;
+      return MeetingsView._openScheduleMeetingModal({
+        prefillRoomId: preselectedRoom,
+        prefillDate: date,
+        prefillTime: time,
+        onSuccess: async () => { await this._renderTab(); },
+      });
+    }
+    return this._openBookingFormModal({ date, time });
+  },
+
+  // ── New Booking form (room-only — the Meetings-module-disabled
+  // fallback for _openBookOrScheduleModal above) ───────────────────
   // Defaults to 09:00 on the schedule's current anchor date, same as
   // before this milestone — {date, time} lets a week-grid slot click
   // prefill the exact cell that was clicked instead.

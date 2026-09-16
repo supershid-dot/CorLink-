@@ -2312,6 +2312,54 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
   margin-top: 4px;
 }
 
+/* Schedule Meeting's combined form (js/views/meetings.js
+   _openScheduleMeetingModal) — meeting details on the left, privacy +
+   participants on the right, matching the reference two-panel layout;
+   collapses to one column under the same breakpoint .field-row uses so
+   both patterns stay consistent inside the same wide modal. */
+.modal-two-col {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 24px;
+  align-items: start;
+}
+.modal-two-col-main, .modal-two-col-side {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+@media (max-width: 760px) {
+  .modal-two-col { grid-template-columns: 1fr; }
+}
+.participant-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 32px;
+}
+.participant-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius-pill, 999px);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  font-size: 0.8rem;
+}
+.participant-chip--organizer { color: var(--color-text-muted); }
+.participant-chip-remove {
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: 0.95rem;
+  line-height: 1;
+  padding: 0 0 0 2px;
+}
+.participant-chip-remove:hover { color: var(--color-error-dark); }
+
 /* Groups a related cluster of fields/rows into a bordered card instead
    of one flat field-group sequence — mirrors .structure-node's card
    treatment, applied inside modals (e.g. Manage User's Profile / Access
