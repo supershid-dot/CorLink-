@@ -204,7 +204,6 @@ const RoomsView = {
           <button type="button" class="icon-btn-xs" id="sched-prev" aria-label="Previous week"><i class="ti ti-chevron-left"></i></button>
           <span class="calendar-range-label">${this._weekLabel(weekStart)}</span>
           <button type="button" class="icon-btn-xs" id="sched-next" aria-label="Next week"><i class="ti ti-chevron-right"></i></button>
-          <button type="button" class="btn btn-secondary btn-xs" id="sched-today">Today</button>
         </div>
         <select class="field-select" id="sched-room-filter" aria-label="Select room" style="max-width:220px;">
           ${this._rooms.map(r => `<option value="${r.id}" ${r.id === this._state.scheduleRoomId ? 'selected' : ''}>${this._escapeHtml(r.name)}</option>`).join('')}
@@ -221,10 +220,6 @@ const RoomsView = {
 
     document.getElementById('sched-prev').addEventListener('click', () => this._shiftScheduleWeek(-1));
     document.getElementById('sched-next').addEventListener('click', () => this._shiftScheduleWeek(1));
-    document.getElementById('sched-today').addEventListener('click', () => {
-      this._state.scheduleDate = new Date().toISOString().slice(0, 10);
-      this._renderTab();
-    });
     document.getElementById('sched-refresh').addEventListener('click', () => this._renderTab());
     document.getElementById('sched-room-filter').addEventListener('change', (e) => {
       this._state.scheduleRoomId = e.target.value;

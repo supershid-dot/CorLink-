@@ -168,15 +168,24 @@ const WeekGrid = {
       return `<div class="week-grid-day-col" style="height:${totalHeight}px;" data-day="${dayStr}">${slots}${eventEls}</div>`;
     }).join('');
 
+    // Header and body are siblings inside the SAME scrolling element
+    // (header pinned via position:sticky), not two separate blocks —
+    // that's what keeps the day columns aligned with their headers
+    // regardless of the vertical scrollbar's width. Two separate
+    // fixed/scrolling blocks would each compute "100% width" against
+    // a different available width once the body's scrollbar appears,
+    // drifting the columns out of alignment column by column.
     return `
       <div class="week-grid">
-        <div class="week-grid-header">
-          <div class="week-grid-header-spacer"></div>
-          <div class="week-grid-header-days">${dayHeaders}</div>
-        </div>
         <div class="week-grid-scroll">
-          <div class="week-grid-time-col" style="height:${totalHeight}px;">${timeLabels}</div>
-          <div class="week-grid-days-body">${dayCols}</div>
+          <div class="week-grid-header">
+            <div class="week-grid-header-spacer"></div>
+            <div class="week-grid-header-days">${dayHeaders}</div>
+          </div>
+          <div class="week-grid-body-row">
+            <div class="week-grid-time-col" style="height:${totalHeight}px;">${timeLabels}</div>
+            <div class="week-grid-days-body">${dayCols}</div>
+          </div>
         </div>
       </div>
     `;

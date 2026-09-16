@@ -3448,13 +3448,27 @@ mark.quote-highlight {
   border-radius: var(--radius-lg);
   overflow: hidden;
 }
-.week-grid-header, .week-grid-scroll { display: flex; }
+/* Header and body-row are both direct children of .week-grid-scroll
+   (the ONLY scrolling element) so a vertical scrollbar removes the
+   same amount of width from both — keeping every day column aligned
+   with its header regardless of scrollbar width/presence. The header
+   pins to the top of that same scroll via position:sticky instead of
+   living in a separate, non-scrolling block. */
+.week-grid-scroll {
+  max-height: 660px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.week-grid-header, .week-grid-body-row { display: flex; }
 .week-grid-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-bg);
 }
-.week-grid-header-spacer { width: 56px; flex-shrink: 0; }
-.week-grid-header-days { flex: 1; display: flex; }
+.week-grid-header-spacer { width: 64px; flex-shrink: 0; }
+.week-grid-header-days { flex: 1; display: flex; min-width: 0; }
 .week-grid-day-header {
   flex: 1;
   min-width: 0;
@@ -3467,24 +3481,21 @@ mark.quote-highlight {
 .week-grid-day-header--today .week-grid-day-name,
 .week-grid-day-header--today .week-grid-day-num { color: var(--color-primary-dark); }
 
-.week-grid-scroll {
-  max-height: 620px;
-  overflow-y: auto;
-  overflow-x: hidden;
-}
 .week-grid-time-col {
   position: relative;
-  width: 56px;
+  width: 64px;
   flex-shrink: 0;
   border-right: 1px solid var(--color-border);
 }
 .week-grid-time-label {
   position: absolute;
+  left: 0;
   right: 6px;
   transform: translateY(-50%);
-  font-size: 0.68rem;
+  font-size: 0.7rem;
   color: var(--color-text-light);
   white-space: nowrap;
+  text-align: right;
 }
 .week-grid-time-label--hour { color: var(--color-text-muted); font-weight: 600; }
 
