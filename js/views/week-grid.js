@@ -61,11 +61,18 @@ const WeekGrid = {
 
   // Auto-expands the visible hour range to cover every event that
   // week (clamped to sane 24h bounds), so nothing silently clips off
-  // the top/bottom of the grid — defaults to a plain business-hours
-  // window when nothing falls outside it.
-  _computeRange(events) {
+  // the top/bottom of the grid. When the caller passes a room's own
+  // bookable_until (Rooms only — Calendar aggregates every room, so
+  // it never passes this), that becomes the baseline "no bookings"
+  // end hour instead of the generic default — an existing booking
+  // that runs later than the current policy still always expands the
+  // grid to show it; the policy only shrinks the EMPTY-slot range,
+  // never hides real data.
+  _computeRange(events, bookableUntilMinutes = null) {
     let startHour = this.DEFAULT_START_HOUR;
-    let endHour = this.DEFAULT_END_HOUR;
+    let endHour = bookableUntilMinutes != null
+      ? Math.max(startHour + 1, Math.ceil(bookableUntilMinutes / 60))
+      : this.DEFAULT_END_HOUR;
     for (const e of events) {
       const s = new Date(e.startAt), en = new Date(e.endAt);
       startHour = Math.min(startHour, Math.max(0, s.getHours()));
@@ -143,7 +150,11 @@ const WeekGrid = {
   // starting mid-way through the first's span still gets its own row
   // at the correct point, so genuine overlap degrades to "two rows
   // back to back" rather than one silently winning.
-  _buildDayRows(dayEvents, startHour, endHour) {
+  // A "closed" row/slot is a room-policy-driven non-bookable empty
+  // slot (past bookable_until) — visually distinct from, and never
+  // applied to, an actual event; real bookings always render and stay
+  // clickable regardless of the room's current policy.
+  _buildDayRows(dayEvents, startHour, endHour, bookableUntilMinutes) {
     const totalMinutes = (endHour - startHour) * 60;
     const rendered = new Set();
     const rows = [];
@@ -153,14 +164,20 @@ const WeekGrid = {
       if (newOnes.length > 0) {
         newOnes.forEach(e => { rendered.add(e.id); rows.push({ type: 'event', event: e }); });
       } else if (active.length === 0) {
-        rows.push({ type: 'empty', startMin: m, endMin: m + this.SLOT_MINUTES });
+        const closed = bookableUntilMinutes != null && (startHour * 60 + m) >= bookableUntilMinutes;
+        rows.push({ type: closed ? 'closed' : 'empty', startMin: m, endMin: m + this.SLOT_MINUTES });
       }
     }
     return rows;
   },
 
-  html({ weekStart, events = [], todayStr = new Date().toISOString().slice(0, 10), selectedDay } = {}) {
-    const { startHour, endHour } = this._computeRange(events);
+  // `bookableUntilMinutes` (Rooms only — minutes-since-midnight from
+  // the selected room's own bookable_until, or null) narrows which
+  // EMPTY slots are offered as bookable; it never hides or disables an
+  // actual event, and Calendar never passes it (it aggregates every
+  // room, so no single room's policy applies).
+  html({ weekStart, events = [], todayStr = new Date().toISOString().slice(0, 10), selectedDay, bookableUntilMinutes = null } = {}) {
+    const { startHour, endHour } = this._computeRange(events, bookableUntilMinutes);
     const days = [];
     for (let i = 0; i < 7; i++) {
       const d = new Date(weekStart);
@@ -170,11 +187,11 @@ const WeekGrid = {
     const byDay = this._bucketEvents(days, events, startHour, endHour);
 
     return this.isMobile()
-      ? this._mobileHtml({ days, byDay, startHour, endHour, todayStr, selectedDay })
-      : this._desktopHtml({ days, byDay, startHour, endHour, todayStr });
+      ? this._mobileHtml({ days, byDay, startHour, endHour, todayStr, selectedDay, bookableUntilMinutes })
+      : this._desktopHtml({ days, byDay, startHour, endHour, todayStr, bookableUntilMinutes });
   },
 
-  _desktopHtml({ days, byDay, startHour, endHour, todayStr }) {
+  _desktopHtml({ days, byDay, startHour, endHour, todayStr, bookableUntilMinutes }) {
     const totalMinutes = (endHour - startHour) * 60;
     const totalHeight = (totalMinutes / this.SLOT_MINUTES) * this.ROW_HEIGHT_PX;
 
@@ -203,7 +220,11 @@ const WeekGrid = {
 
       let slots = '';
       for (let m = 0; m <= totalMinutes - this.SLOT_MINUTES; m += this.SLOT_MINUTES) {
-        slots += `<div class="week-grid-slot" style="top:${(m / this.SLOT_MINUTES) * this.ROW_HEIGHT_PX}px;height:${this.ROW_HEIGHT_PX}px;" data-week-grid-slot data-slot-day="${dayStr}" data-slot-time="${this._fmtHM(startHour, m)}"></div>`;
+        const style = `top:${(m / this.SLOT_MINUTES) * this.ROW_HEIGHT_PX}px;height:${this.ROW_HEIGHT_PX}px;`;
+        const closed = bookableUntilMinutes != null && (startHour * 60 + m) >= bookableUntilMinutes;
+        slots += closed
+          ? `<div class="week-grid-slot week-grid-slot--closed" style="${style}" title="Not bookable at this time"></div>`
+          : `<div class="week-grid-slot" style="${style}" data-week-grid-slot data-slot-day="${dayStr}" data-slot-time="${this._fmtHM(startHour, m)}"></div>`;
       }
 
       const eventEls = dayEvents.map(e => {
@@ -262,13 +283,13 @@ const WeekGrid = {
     }).join('');
   },
 
-  _mobileHtml({ days, byDay, startHour, endHour, todayStr, selectedDay }) {
+  _mobileHtml({ days, byDay, startHour, endHour, todayStr, selectedDay, bookableUntilMinutes }) {
     const dayStrs = days.map(d => this._dayStr(d));
     const activeDay = (selectedDay && dayStrs.includes(selectedDay))
       ? selectedDay
       : (dayStrs.includes(todayStr) ? todayStr : dayStrs[0]);
 
-    const rows = this._buildDayRows(byDay.get(activeDay) || [], startHour, endHour);
+    const rows = this._buildDayRows(byDay.get(activeDay) || [], startHour, endHour, bookableUntilMinutes);
     const rowsHtml = rows.length === 0
       ? `<p class="structure-empty" style="padding:12px;">Nothing in range.</p>`
       : rows.map(row => {
@@ -281,6 +302,14 @@ const WeekGrid = {
                   <span class="week-grid-mobile-title"><i class="ti ${e.icon || 'ti-calendar-event'}"></i> ${this._escapeHtml(e.title)}</span>
                   ${e.meta ? `<span class="week-grid-mobile-meta">${this._escapeHtml(e.meta)}</span>` : ''}
                 </div>
+              </div>
+            `;
+          }
+          if (row.type === 'closed') {
+            return `
+              <div class="week-grid-mobile-row week-grid-mobile-row--closed">
+                <div class="week-grid-mobile-times"><span>${this._fmtHM(startHour, row.startMin)}</span><span>${this._fmtHM(startHour, row.endMin)}</span></div>
+                <div class="week-grid-mobile-body week-grid-mobile-body--empty"><i class="ti ti-lock"></i> Not bookable</div>
               </div>
             `;
           }

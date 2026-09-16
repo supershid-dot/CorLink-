@@ -3513,6 +3513,13 @@ mark.quote-highlight {
   cursor: pointer;
 }
 .week-grid-slot:hover { background: var(--color-bg); }
+/* Past the selected room's bookable_until — not clickable (no
+   data-week-grid-slot attribute), visually distinct from an open slot. */
+.week-grid-slot--closed {
+  cursor: default;
+  background: repeating-linear-gradient(45deg, var(--color-bg), var(--color-bg) 6px, transparent 6px, transparent 12px);
+}
+.week-grid-slot--closed:hover { background: repeating-linear-gradient(45deg, var(--color-bg), var(--color-bg) 6px, transparent 6px, transparent 12px); }
 
 .week-grid-event {
   position: absolute;
@@ -3608,6 +3615,7 @@ mark.quote-highlight {
 }
 .week-grid-mobile-row--empty { background: var(--color-surface); color: var(--color-text-light); }
 .week-grid-mobile-row--empty:hover { background: var(--color-bg); }
+.week-grid-mobile-row--closed { background: var(--color-bg); color: var(--color-text-light); cursor: default; opacity: 0.7; }
 .week-grid-mobile-times {
   flex-shrink: 0;
   display: flex;

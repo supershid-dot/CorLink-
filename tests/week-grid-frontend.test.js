@@ -247,6 +247,82 @@ async function check(name, fn) {
     await page.close();
   });
 
+  // ── bookableUntilMinutes (Rooms only — a room's own policy caps
+  // which EMPTY slots are offered as bookable; never hides a real
+  // booking/block, which always renders regardless) ────────────────
+  await check('mobile: slots past bookableUntilMinutes render as non-bookable "Not bookable" rows', async () => {
+    const { page } = await newMobilePage();
+    const html = await page.evaluate(() => {
+      const weekStart = WeekGrid.weekStartFor('2026-09-16T00:00:00');
+      // Policy is 16:00 (960 min), but a real 17:00-18:00 booking
+      // forces the range to expand past it — the gap between the
+      // policy cutoff and that booking (16:00-17:00) is where the
+      // "closed" (non-bookable) rows should actually appear.
+      const events = [{ id: 'e1', day: '2026-09-16', startAt: '2026-09-16T17:00:00', endAt: '2026-09-16T18:00:00', cls: 'a', title: 'Existing booking' }];
+      return WeekGrid.html({ weekStart, events, todayStr: '2026-09-16', selectedDay: '2026-09-16', bookableUntilMinutes: 960 });
+    });
+    assert.match(html, /week-grid-mobile-row--closed/);
+    assert.match(html, /Not bookable/);
+    // the 16:00 row specifically must be closed, not a bookable "+Book" slot
+    const closedRowMatch = html.match(/<div class="week-grid-mobile-row week-grid-mobile-row--closed">[\s\S]{0,120}/);
+    assert.ok(closedRowMatch, 'expected at least one closed row');
+    assert.doesNotMatch(closedRowMatch[0], /data-week-grid-slot/);
+    await page.close();
+  });
+
+  await check('mobile: an existing booking past bookableUntilMinutes still renders and stays clickable', async () => {
+    const { page } = await newMobilePage();
+    const html = await page.evaluate(() => {
+      const weekStart = WeekGrid.weekStartFor('2026-09-16T00:00:00');
+      const events = [{ id: 'e1', day: '2026-09-16', startAt: '2026-09-16T17:00:00', endAt: '2026-09-16T18:00:00', cls: 'week-grid-event--confirmed', icon: 'ti-door', title: 'Late booking' }];
+      return WeekGrid.html({ weekStart, events, todayStr: '2026-09-16', selectedDay: '2026-09-16', bookableUntilMinutes: 960 });
+    });
+    assert.match(html, /Late booking/);
+    assert.match(html, /week-grid-mobile-row--event/);
+    assert.match(html, /data-event-id="e1"/);
+    await page.close();
+  });
+
+  await check('desktop: slots past bookableUntilMinutes are non-clickable (no data-week-grid-slot)', async () => {
+    const { page } = await newPage();
+    const html = await page.evaluate(() => {
+      const weekStart = WeekGrid.weekStartFor('2026-09-16T00:00:00');
+      // Same reasoning as the mobile equivalent above: an event past
+      // the 16:00 policy is what forces the range wide enough to have
+      // any "closed" slots to check in the first place.
+      const events = [{ id: 'e1', day: '2026-09-16', startAt: '2026-09-16T17:00:00', endAt: '2026-09-16T18:00:00', cls: 'a', title: 'Existing booking' }];
+      return WeekGrid.html({ weekStart, events, bookableUntilMinutes: 960 }); // 16:00
+    });
+    assert.match(html, /week-grid-slot--closed/);
+    // the 16:00 slot itself must be closed, not clickable
+    assert.doesNotMatch(html, /data-slot-time="16:00"/);
+    // an earlier slot (15:30) must still be open/clickable
+    assert.match(html, /data-slot-time="15:30"/);
+    await page.close();
+  });
+
+  await check('range: with no events, the grid defaults its end to bookableUntilMinutes rather than the generic default', async () => {
+    const { page } = await newPage();
+    const html = await page.evaluate(() => {
+      const weekStart = WeekGrid.weekStartFor('2026-09-16T00:00:00');
+      return WeekGrid.html({ weekStart, events: [], bookableUntilMinutes: 600 }); // 10:00
+    });
+    assert.doesNotMatch(html, /12:00/); // grid shouldn't extend to the generic 19:00 default
+    await page.close();
+  });
+
+  await check('range: an existing event past bookableUntilMinutes still expands the visible range to show it', async () => {
+    const { page } = await newPage();
+    const html = await page.evaluate(() => {
+      const weekStart = WeekGrid.weekStartFor('2026-09-16T00:00:00');
+      const events = [{ id: 'e1', day: '2026-09-16', startAt: '2026-09-16T17:00:00', endAt: '2026-09-16T18:00:00', cls: 'a', title: 'Late' }];
+      return WeekGrid.html({ weekStart, events, bookableUntilMinutes: 600 }); // policy says 10:00, but a real event runs until 18:00
+    });
+    assert.match(html, /Late/);
+    assert.match(html, />17:30</); // range expanded well past the 10:00 policy to show the real event
+    await page.close();
+  });
+
   await browser.close();
   report();
 })().catch(error => { console.error(error); process.exitCode = 1; });

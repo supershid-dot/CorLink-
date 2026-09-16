@@ -70,6 +70,24 @@ async function check(name, fn) {
     return { page, pageErrors };
   }
 
+  await check('Rooms.render() resets scheduleDate/scheduleMobileDay to today on every fresh navigation', async () => {
+    const { page } = await newRoomsPage();
+    const result = await page.evaluate(async () => {
+      const v = window.__view;
+      // Simulate state left over from a PRIOR visit to Rooms (a
+      // different date, a picked mobile day) — render() should reset
+      // both back to today, not carry them forward silently.
+      v._state.scheduleDate = '2026-01-01';
+      v._state.scheduleMobileDay = '2026-01-03';
+      await v.render(document.getElementById('app'));
+      return { scheduleDate: v._state.scheduleDate, scheduleMobileDay: v._state.scheduleMobileDay };
+    });
+    const today = new Date().toISOString().slice(0, 10);
+    assert.strictEqual(result.scheduleDate, today);
+    assert.strictEqual(result.scheduleMobileDay, null);
+    await page.close();
+  });
+
   await check('Rooms Schedule tab renders a .week-grid with the fetched booking positioned', async () => {
     const { page } = await newRoomsPage();
     await page.evaluate(async () => {

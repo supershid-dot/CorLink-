@@ -33,6 +33,17 @@ const RoomsView = {
     const user = Auth.getCachedProfile();
     if (!user) { Router.navigate('login'); return; }
 
+    // _state is a singleton on this view object, not re-created per
+    // navigation — router.js calls render() fresh every time the user
+    // opens Rooms, but without this reset the schedule's date/mobile-
+    // day-picker selection would still hold whatever was last picked
+    // in a PRIOR visit (even after navigating away and back), rather
+    // than defaulting to today as a freshly-opened schedule should.
+    // Room/tab/filter selections are deliberately left alone — only
+    // the date needs to always start "now".
+    this._state.scheduleDate = new Date().toISOString().slice(0, 10);
+    this._state.scheduleMobileDay = null;
+
     this._user = user;
     this._isAdmin = AppShell.isAdmin(user);
     this._isSupervisor = AppShell.isSupervisorOrAbove(user);
@@ -157,6 +168,16 @@ const RoomsView = {
     return `${weekStart.toLocaleDateString(undefined, opts)} – ${end.toLocaleDateString(undefined, opts)}`;
   },
 
+  // meeting_rooms.bookable_until is a TIME ('HH:MM:SS' or null) —
+  // converted to minutes-since-midnight for WeekGrid, which uses it
+  // to mark empty slots past that time as not bookable. Never applied
+  // to an actual booking/block — those always render regardless.
+  _bookableUntilMinutes(room) {
+    if (!room?.bookable_until) return null;
+    const [h, m] = room.bookable_until.split(':').map(Number);
+    return h * 60 + m;
+  },
+
   async _renderScheduleTab(content) {
     if (this._rooms.length === 0) {
       content.innerHTML = this._emptyBlock({ icon: 'ti-door', title: 'No rooms yet', subtitle: this._hasAnyManagerAuthority() ? 'Add a room in the Rooms tab to start booking.' : 'Ask an administrator to add a bookable room.' });
@@ -201,6 +222,8 @@ const RoomsView = {
       meta: this._timeRange(bl.start_at, bl.end_at),
     }));
     this._scheduleBlocksById = new Map(blocks.map(bl => [bl.id, bl]));
+    const selectedRoom = this._rooms.find(r => r.id === this._state.scheduleRoomId);
+    const bookableUntilMinutes = this._bookableUntilMinutes(selectedRoom);
 
     content.innerHTML = `
       <div class="week-grid-toolbar">
@@ -221,7 +244,7 @@ const RoomsView = {
         <input type="checkbox" id="sched-show-all" ${this._state.scheduleShowAll ? 'checked' : ''} />
         <span>Show cancelled, rejected, and expired</span>
       </label>
-      <div id="sched-grid">${WeekGrid.html({ weekStart, events: [...bookingEvents, ...blockEvents], selectedDay: this._state.scheduleMobileDay })}</div>
+      <div id="sched-grid">${WeekGrid.html({ weekStart, events: [...bookingEvents, ...blockEvents], selectedDay: this._state.scheduleMobileDay, bookableUntilMinutes })}</div>
     `;
 
     document.getElementById('sched-prev').addEventListener('click', () => this._shiftScheduleWeek(-1));
