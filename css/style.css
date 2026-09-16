@@ -3554,11 +3554,73 @@ mark.quote-highlight {
   background: repeating-linear-gradient(45deg, var(--color-warning-bg), var(--color-warning-bg) 6px, transparent 6px, transparent 12px);
 }
 
-@media (max-width: 720px) {
-  .week-grid-day-name { font-size: 0.6rem; }
-  .week-grid-day-num { font-size: 0.8125rem; }
-  .week-grid-time-col { width: 42px; }
-  .week-grid-header-spacer { width: 42px; }
-  .week-grid-event { font-size: 0.6rem; }
+/* Mobile week-grid — a day-picker strip + single-day agenda list
+   instead of the 7-column grid (docs/22 §3.1: "7-day grid (desktop) /
+   day-agenda (mobile)"). JS switches to this markup at the same
+   720px breakpoint, so the desktop grid's own DOM never exists here —
+   no narrowed-grid overrides needed, just this list's own styling. */
+.week-grid-day-picker-strip {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 10px;
+  margin-bottom: 4px;
 }
+.week-grid-day-picker {
+  flex: 0 0 auto;
+  min-width: 52px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  cursor: pointer;
+}
+.week-grid-day-picker--today .week-grid-day-name,
+.week-grid-day-picker--today .week-grid-day-num { color: var(--color-primary-dark); }
+.week-grid-day-picker--active {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+.week-grid-day-picker--active .week-grid-day-name,
+.week-grid-day-picker--active .week-grid-day-num { color: #fff; }
+
+.week-grid-mobile-list { display: flex; flex-direction: column; gap: 8px; }
+.week-grid-mobile-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.week-grid-mobile-row--empty { background: var(--color-surface); color: var(--color-text-light); }
+.week-grid-mobile-row--empty:hover { background: var(--color-bg); }
+.week-grid-mobile-times {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 52px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+.week-grid-mobile-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.week-grid-mobile-body--empty { flex-direction: row; align-items: center; gap: 6px; }
+.week-grid-mobile-title {
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.week-grid-mobile-meta { font-size: 0.8rem; opacity: 0.85; }
+
 .thread-message--compact:last-child { margin-bottom: 0; }

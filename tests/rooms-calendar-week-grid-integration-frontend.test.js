@@ -36,8 +36,8 @@ async function check(name, fn) {
 
   const browser = await playwright.chromium.launch({ executablePath: '/opt/pw-browsers/chromium', headless: true });
 
-  async function newRoomsPage() {
-    const page = await browser.newPage();
+  async function newRoomsPage(viewport) {
+    const page = await browser.newPage(viewport ? { viewport } : {});
     const pageErrors = [];
     page.on('pageerror', e => pageErrors.push(e.message));
     await page.setContent('<div id="app"></div><div id="modal-root"></div>');
@@ -176,9 +176,30 @@ async function check(name, fn) {
     await page.close();
   });
 
+  await check('Rooms Schedule tab on mobile renders the day-picker/agenda list instead of the grid, and picking a day persists across re-render', async () => {
+    const { page } = await newRoomsPage({ width: 390, height: 800 });
+    await page.evaluate(async () => {
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._isAdmin = false; v._isSupervisor = false; v._orgId = 'org-1';
+      v._rooms = await window.RoomsAPI.fetchRooms();
+      v._myManagedRoomIds = new Set();
+      v._state.tab = 'schedule';
+      v._state.scheduleDate = '2026-09-16';
+      document.body.insertAdjacentHTML('beforeend', `<div id="rooms-tab-content"></div>`);
+      await v._renderTab();
+    });
+    assert.strictEqual(await page.locator('.week-grid-day-picker-strip').count(), 1);
+    assert.strictEqual(await page.locator('.week-grid-day-col').count(), 0);
+    await page.evaluate(() => document.querySelector('[data-week-grid-day-pick][data-day="2026-09-18"]').click());
+    const persistedDay = await page.evaluate(() => window.__view._state.scheduleMobileDay);
+    assert.strictEqual(persistedDay, '2026-09-18');
+    await page.close();
+  });
+
   // ── Calendar week mode ──────────────────────────────────────────
-  async function newCalendarPage() {
-    const page = await browser.newPage();
+  async function newCalendarPage(viewport) {
+    const page = await browser.newPage(viewport ? { viewport } : {});
     const pageErrors = [];
     page.on('pageerror', e => pageErrors.push(e.message));
     await page.setContent('<div id="app"></div><div id="modal-root"></div>');
@@ -266,6 +287,29 @@ async function check(name, fn) {
     await page.locator('[data-week-grid-slot]').first().click();
     const mode = await page.evaluate(() => window.__view._state.mode);
     assert.strictEqual(mode, 'day');
+    await page.close();
+  });
+
+  await check('Calendar week mode on mobile renders the day-picker/agenda list, and picking a day persists across re-render', async () => {
+    const { page } = await newCalendarPage({ width: 390, height: 800 });
+    await page.evaluate(async () => {
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._state.mode = 'week';
+      v._state.anchor = '2026-09-16';
+      document.body.insertAdjacentHTML('beforeend', `
+        <span id="cal-range-label"></span>
+        <div id="cal-filters"></div>
+        <div id="calendar-content"></div>
+      `);
+      await v._loadAndRender();
+    });
+    assert.strictEqual(await page.locator('.week-grid-day-picker-strip').count(), 1);
+    assert.strictEqual(await page.locator('.week-grid-day-col').count(), 0);
+    await page.evaluate(() => document.querySelector('[data-week-grid-day-pick][data-day="2026-09-18"]').click());
+    const persistedDay = await page.evaluate(() => window.__view._state.weekMobileDay);
+    assert.strictEqual(persistedDay, '2026-09-18');
     await page.close();
   });
 

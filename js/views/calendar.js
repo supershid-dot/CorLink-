@@ -27,6 +27,12 @@ const CalendarView = {
     mode: 'month', // 'day' | 'week' | 'month' | 'agenda'
     anchor: new Date().toISOString().slice(0, 10),
     filters: { orgId: '', roomId: '', creatorId: '', status: '', meetingType: '', onlyMine: false, showBlocks: true },
+    // Which day's agenda list is expanded in Week mode on mobile
+    // (docs/22 §3.1) — null means "default to today if in this week,
+    // else the first day", handled by WeekGrid itself. Distinct from
+    // `anchor` (the week's own anchor date), so picking a different
+    // day in the strip doesn't jump modes or refetch.
+    weekMobileDay: null,
   },
 
   async render(container, params = {}) {
@@ -113,6 +119,7 @@ const CalendarView = {
     else if (this._state.mode === 'agenda') d.setDate(d.getDate() + 30 * dir);
     else d.setMonth(d.getMonth() + dir);
     this._state.anchor = d.toISOString().slice(0, 10);
+    this._state.weekMobileDay = null; // re-derive for the new week
   },
 
   // ── Date range for the current mode ─────────────────────────────
@@ -294,6 +301,10 @@ const CalendarView = {
           const i = prefixedId.indexOf(':');
           this._routeEventClick(prefixedId.slice(0, i), prefixedId.slice(i + 1));
         },
+        onDayPick: (day) => {
+          this._state.weekMobileDay = day;
+          this._renderView();
+        },
       });
     }
   },
@@ -369,7 +380,7 @@ const CalendarView = {
         meta: `${this._fmtTime(e.start)}–${this._fmtTime(e.end)}`,
       };
     });
-    return WeekGrid.html({ weekStart: from, events: gridEvents });
+    return WeekGrid.html({ weekStart: from, events: gridEvents, selectedDay: this._state.weekMobileDay });
   },
 
   // ── Day view ─────────────────────────────────────────────────────

@@ -158,6 +158,95 @@ async function check(name, fn) {
     await page.close();
   });
 
+  // ── Mobile mode (docs/22 §3.1: day-picker strip + single-day
+  // agenda list below 720px, instead of the 7-column grid) ─────────
+  async function newMobilePage() {
+    const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
+    const pageErrors = [];
+    page.on('pageerror', e => pageErrors.push(e.message));
+    await page.setContent('<div id="app"></div>');
+    await page.addScriptTag({ content: gridSource });
+    return { page, pageErrors };
+  }
+
+  await check('mobile: below 720px, renders a day-picker strip and single-day list instead of the grid', async () => {
+    const { page } = await newMobilePage();
+    const html = await page.evaluate(() => {
+      const weekStart = WeekGrid.weekStartFor('2026-09-16T00:00:00');
+      return WeekGrid.html({ weekStart, events: [], todayStr: '2026-09-16' });
+    });
+    assert.match(html, /week-grid-day-picker-strip/);
+    assert.match(html, /week-grid-mobile-list/);
+    assert.doesNotMatch(html, /week-grid-day-col/); // desktop grid markup absent
+    const pickerCount = (html.match(/data-week-grid-day-pick/g) || []).length;
+    assert.strictEqual(pickerCount, 7);
+    await page.close();
+  });
+
+  await check('mobile: defaults to today\'s agenda when today falls in this week', async () => {
+    const { page } = await newMobilePage();
+    const html = await page.evaluate(() => {
+      const weekStart = WeekGrid.weekStartFor('2026-09-16T00:00:00');
+      return WeekGrid.html({ weekStart, events: [], todayStr: '2026-09-16' });
+    });
+    assert.match(html, /week-grid-day-picker--active"[^>]*data-day="2026-09-16"/);
+    await page.close();
+  });
+
+  await check('mobile: respects an explicit selectedDay override', async () => {
+    const { page } = await newMobilePage();
+    const html = await page.evaluate(() => {
+      const weekStart = WeekGrid.weekStartFor('2026-09-16T00:00:00');
+      return WeekGrid.html({ weekStart, events: [], todayStr: '2026-09-16', selectedDay: '2026-09-18' });
+    });
+    assert.match(html, /week-grid-day-picker--active"[^>]*data-day="2026-09-18"/);
+    await page.close();
+  });
+
+  await check('mobile: a multi-slot event renders as one merged row (start/end), not one row per half-hour', async () => {
+    const { page } = await newMobilePage();
+    const html = await page.evaluate(() => {
+      const weekStart = WeekGrid.weekStartFor('2026-09-16T00:00:00');
+      const events = [{ id: 'e1', day: '2026-09-16', startAt: '2026-09-16T12:30:00', endAt: '2026-09-16T14:30:00', cls: 'week-grid-event--confirmed', icon: 'ti-door', title: 'Meeting with HQ' }];
+      return WeekGrid.html({ weekStart, events, todayStr: '2026-09-16', selectedDay: '2026-09-16' });
+    });
+    const rowMatches = html.match(/week-grid-mobile-row--event/g) || [];
+    assert.strictEqual(rowMatches.length, 1); // one row, not four (12:30/13:00/13:30/14:00)
+    assert.match(html, /Meeting with HQ/);
+    assert.match(html, />12:30</);
+    assert.match(html, />14:30</);
+    await page.close();
+  });
+
+  await check('mobile: empty half-hour slots render a bookable row wired to onSlotClick', async () => {
+    const { page } = await newMobilePage();
+    const result = await page.evaluate(() => {
+      const weekStart = WeekGrid.weekStartFor('2026-09-16T00:00:00');
+      document.getElementById('app').innerHTML = WeekGrid.html({ weekStart, events: [], todayStr: '2026-09-16', selectedDay: '2026-09-16' });
+      let slotCall = null;
+      WeekGrid.bind(document.getElementById('app'), { onSlotClick: (day, time) => { slotCall = { day, time }; } });
+      document.querySelector('[data-week-grid-slot]').click();
+      return slotCall;
+    });
+    assert.strictEqual(result.day, '2026-09-16');
+    assert.ok(result.time);
+    await page.close();
+  });
+
+  await check('mobile: clicking a day-picker chip fires onDayPick with that day', async () => {
+    const { page } = await newMobilePage();
+    const picked = await page.evaluate(() => {
+      const weekStart = WeekGrid.weekStartFor('2026-09-16T00:00:00');
+      document.getElementById('app').innerHTML = WeekGrid.html({ weekStart, events: [], todayStr: '2026-09-16' });
+      let pickedDay = null;
+      WeekGrid.bind(document.getElementById('app'), { onDayPick: (day) => { pickedDay = day; } });
+      document.querySelector('[data-week-grid-day-pick][data-day="2026-09-18"]').click();
+      return pickedDay;
+    });
+    assert.strictEqual(picked, '2026-09-18');
+    await page.close();
+  });
+
   await browser.close();
   report();
 })().catch(error => { console.error(error); process.exitCode = 1; });

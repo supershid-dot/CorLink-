@@ -21,6 +21,10 @@ const RoomsView = {
     scheduleDate: new Date().toISOString().slice(0, 10),
     scheduleRoomId: '',
     scheduleShowAll: false,
+    // Which day's agenda list is expanded on mobile (docs/22 §3.1) —
+    // null means "default to today if in this week, else the first
+    // day", handled by WeekGrid itself.
+    scheduleMobileDay: null,
     blocksRoomId: '',
     blocksShowInactive: false,
   },
@@ -215,7 +219,7 @@ const RoomsView = {
         <input type="checkbox" id="sched-show-all" ${this._state.scheduleShowAll ? 'checked' : ''} />
         <span>Show cancelled, rejected, and expired</span>
       </label>
-      <div id="sched-grid">${WeekGrid.html({ weekStart, events: [...bookingEvents, ...blockEvents] })}</div>
+      <div id="sched-grid">${WeekGrid.html({ weekStart, events: [...bookingEvents, ...blockEvents], selectedDay: this._state.scheduleMobileDay })}</div>
     `;
 
     document.getElementById('sched-prev').addEventListener('click', () => this._shiftScheduleWeek(-1));
@@ -240,6 +244,10 @@ const RoomsView = {
           this._openBookingDetailModal(this._scheduleBookingsById.get(eventId.slice(2)));
         }
       },
+      onDayPick: (day) => {
+        this._state.scheduleMobileDay = day;
+        this._renderTab();
+      },
     });
   },
 
@@ -247,6 +255,7 @@ const RoomsView = {
     const d = new Date(this._state.scheduleDate + 'T00:00:00');
     d.setDate(d.getDate() + 7 * dir);
     this._state.scheduleDate = d.toISOString().slice(0, 10);
+    this._state.scheduleMobileDay = null; // re-derive for the new week (today-if-in-week, else its first day)
     this._renderTab();
   },
 
