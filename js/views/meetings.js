@@ -1678,26 +1678,50 @@ const MeetingsView = {
     // (supabase/patch-meetings-rsvp.sql's own documented scope).
     const myParticipant = participants.find(p => p.user_id === this._user.id);
 
+    const formatLabel = meeting.location_mode === 'virtual'
+      ? 'Online'
+      : (meeting.virtual_link ? 'Hybrid' : 'In person');
+    const metaParts = [`Created ${new Date(meeting.created_at).toLocaleDateString()} by ${this._escapeHtml(meeting.created_by_user?.full_name || '')}`];
+    if (meeting.updated_by_user) metaParts.push(`last updated ${new Date(meeting.updated_at).toLocaleDateString()} by ${this._escapeHtml(meeting.updated_by_user.full_name)}`);
+
     this._openModal(`
-      <h3>${this._escapeHtml(meeting.title)}</h3>
+      <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+        <h3 style="margin:0;">${this._escapeHtml(meeting.title)}</h3>
+        ${this._statusLabel(meeting)}
+      </div>
+      <div class="detail-pill-row">
+        <span class="detail-pill detail-pill--outline">${this._capitalize(meeting.meeting_type)}</span>
+        <span class="detail-pill detail-pill--outline">${formatLabel}</span>
+        <span class="detail-pill detail-pill--outline">${this._capitalize(meeting.visibility)}</span>
+      </div>
+      ${meeting.status === 'cancelled' ? `<div class="alert alert-error" style="margin-bottom:12px;"><i class="ti ti-ban"></i> Cancelled by ${this._escapeHtml(meeting.cancelled_by_user?.full_name || '')}${meeting.cancellation_reason ? ` — ${this._escapeHtml(meeting.cancellation_reason)}` : ''}</div>` : ''}
       ${locked ? `<div class="alert alert-warning" style="margin-bottom:12px;"><i class="ti ti-lock"></i> This meeting is locked. Only its creator, an organization administrator (within their own organization), or a super administrator can make changes.</div>` : ''}
       ${meeting.status === 'draft' ? `<div class="alert alert-info" style="margin-bottom:12px;"><i class="ti ti-pencil"></i> This is a draft. It is not automatically announced to participants — anyone already added can still see it, but no notifications are sent, and RSVPs, attendance, minutes, and locking stay unavailable until you change its status to Scheduled via Edit.</div>` : ''}
       ${meeting.series_id ? this._renderSeriesBanner(meeting) : ''}
       ${myParticipant && meeting.status !== 'draft' ? this._renderMyRsvp(myParticipant, meeting) : ''}
-      <div class="detail-grid">
-        <div><strong>Status</strong><div>${this._capitalize(meeting.status)}</div></div>
-        <div><strong>Effective Status</strong><div>${this._statusLabel(meeting)}</div></div>
-        <div><strong>Type</strong><div>${this._capitalize(meeting.meeting_type)}</div></div>
-        <div><strong>When</strong><div>${new Date(meeting.start_at).toLocaleString()} – ${new Date(meeting.end_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div></div>
-        <div><strong>Timezone</strong><div>${this._escapeHtml(meeting.timezone)}</div></div>
-        <div><strong>Visibility</strong><div>${this._capitalize(meeting.visibility)}</div></div>
-        ${meeting.section ? `<div><strong>Section</strong><div>${this._escapeHtml(meeting.section.name)}</div></div>` : ''}
-        <div><strong>Creator</strong><div>${this._escapeHtml(meeting.created_by_user?.full_name || '')}</div></div>
-        ${meeting.updated_by_user ? `<div><strong>Last Updated By</strong><div>${this._escapeHtml(meeting.updated_by_user.full_name)}</div></div>` : ''}
-        ${meeting.status === 'cancelled' ? `<div><strong>Cancelled By</strong><div>${this._escapeHtml(meeting.cancelled_by_user?.full_name || '')}${meeting.cancellation_reason ? ` — ${this._escapeHtml(meeting.cancellation_reason)}` : ''}</div></div>` : ''}
-        <div><strong>Created</strong><div>${new Date(meeting.created_at).toLocaleString()}</div></div>
-        <div><strong>Last Updated</strong><div>${new Date(meeting.updated_at).toLocaleString()}</div></div>
+
+      <div class="detail-facts">
+        <div>
+          <div class="detail-fact-label">Date</div>
+          <div class="detail-fact-value">${new Date(meeting.start_at).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</div>
+        </div>
+        <div>
+          <div class="detail-fact-label">Time</div>
+          <div class="detail-fact-value">${this._timeRange(meeting.start_at, meeting.end_at)} <span class="structure-empty" style="font-weight:400;">Indian/Maldives</span></div>
+        </div>
+        <div>
+          <div class="detail-fact-label">Location</div>
+          <div class="detail-fact-value" style="font-weight:400;">
+            ${this._renderLocationDetail(meeting, booking)}
+            ${canManageRoom ? this._renderRoomActions(meeting, booking) : (!this._roomsEnabled && meeting.location_mode === 'room' ? `<p class="field-hint">Room assignment requires the Rooms module to be enabled for your organization.</p>` : '')}
+          </div>
+        </div>
+        <div>
+          <div class="detail-fact-label">Organised By</div>
+          <div class="detail-fact-value">${this._escapeHtml(meeting.created_by_user?.full_name || '')}${meeting.section ? ` <span class="badge badge-primary">${this._escapeHtml(meeting.section.name)}</span>` : ''}</div>
+        </div>
       </div>
+      <div class="structure-empty" style="font-size:0.78rem; margin-top:-8px; margin-bottom:16px;">${metaParts.join(' · ')}</div>
 
       ${meeting.description ? `
         <div style="margin-top:12px;">
@@ -1706,42 +1730,34 @@ const MeetingsView = {
         </div>
       ` : ''}
 
-      <div style="margin-top:12px;">
-        <label class="field-label">Location</label>
-        <div style="margin-top:6px;">
-          ${this._renderLocationDetail(meeting, booking)}
-          ${canManageRoom ? this._renderRoomActions(meeting, booking) : (!this._roomsEnabled && meeting.location_mode === 'room' ? `<p class="field-hint">Room assignment requires the Rooms module to be enabled for your organization.</p>` : '')}
-        </div>
-      </div>
+      <div class="detail-section-label">Participants (${participants.length})</div>
+      <div>${this._renderParticipants(participants, meeting, canManageParticipants)}</div>
 
-      <div style="margin-top:12px;">
-        <label class="field-label">Participants (${participants.length})</label>
-        <div style="margin-top:6px;">${this._renderParticipants(participants, meeting, canManageParticipants)}</div>
-      </div>
-
-      <div style="margin-top:12px;">
-        <label class="field-label">Attachments</label>
-        <div style="margin-top:6px;">${this._renderAttachments('meeting', meeting.id, attachments, canUploadAttachments)}</div>
-      </div>
+      ${myParticipant ? this._renderMyNotesPanel(meeting, myParticipant, myNotes) : ''}
 
       ${this._renderMinutesPanel(meeting, canManage, canOverrideLock)}
+
+      <div class="detail-section-label">Documents</div>
+      <div>${this._renderAttachments('meeting', meeting.id, attachments, canUploadAttachments)}</div>
 
       ${this._renderSupportingTasksPanel(meeting)}
 
       ${meeting.series_id ? this._renderActivityPanel() : ''}
 
-      ${myParticipant ? this._renderMyNotesPanel(meeting, myNotes) : ''}
-
-      <div class="modal-actions" style="margin-top:16px;">
+      <div class="detail-actions-row">
         <button type="button" class="btn btn-secondary" data-close-modal>Close</button>
         ${this._renderLockControls(meeting, canOverrideLock)}
-        ${canEdit ? `<button type="button" class="btn btn-secondary" id="detail-edit-btn">Edit</button>` : ''}
-        ${canCancel && meeting.status !== 'draft' ? `<button type="button" class="btn" style="background:var(--color-error-bg); color:var(--color-error-dark);" id="detail-cancel-btn">Cancel Meeting</button>` : ''}
-        ${canManageEffective && meeting.status === 'draft' ? `<button type="button" class="btn" style="background:var(--color-error-bg); color:var(--color-error-dark);" id="detail-delete-draft-btn">Delete Draft</button>` : ''}
       </div>
+      ${(canEdit || (canCancel && meeting.status !== 'draft') || (canManageEffective && meeting.status === 'draft')) ? `
+        <div class="detail-actions-row detail-actions-row--secondary">
+          ${canEdit ? `<button type="button" class="detail-action-link detail-action-link--primary" id="detail-edit-btn"><i class="ti ti-pencil"></i> Edit</button>` : ''}
+          ${canCancel && meeting.status !== 'draft' ? `<button type="button" class="detail-action-link detail-action-link--danger" id="detail-cancel-btn"><i class="ti ti-ban"></i> Cancel Meeting</button>` : ''}
+          ${canManageEffective && meeting.status === 'draft' ? `<button type="button" class="detail-action-link detail-action-link--danger" id="detail-delete-draft-btn"><i class="ti ti-trash"></i> Delete Draft</button>` : ''}
+        </div>
+      ` : ''}
     `, { large: true });
 
-    this._bindMeetingDetailModal(meeting, participants, booking, attachments, { canManageParticipants, canManageRoom, myParticipant, myNotes });
+    this._bindMeetingDetailModal(meeting, participants, booking, attachments, { canManageParticipants, canManageRoom });
 
     document.getElementById('detail-edit-btn')?.addEventListener('click', () => {
       this._closeModal();
@@ -2551,22 +2567,19 @@ const MeetingsView = {
     if (participant.invitation_status === 'not_required') return '';
     const status = participant.invitation_status;
     const respondable = meeting.status !== 'cancelled';
-    const badgeClass = status === 'accepted' ? 'badge-success' : status === 'declined' ? 'badge-error' : 'badge-warning';
+    const bannerMod = status === 'declined' ? ' detail-rsvp-banner--declined' : status === 'pending' ? ' detail-rsvp-banner--pending' : '';
     return `
-      <div class="alert" style="margin-bottom:12px;">
-        <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
-          <div>
-            <strong>Your RSVP</strong>
-            <span class="badge ${badgeClass}" style="margin-left:8px;">${this._capitalize(status)}</span>
-            ${participant.invitation_note ? `<div class="structure-empty" style="margin-top:4px;">${this._escapeHtml(participant.invitation_note)}</div>` : ''}
+      <div class="detail-rsvp-banner${bannerMod}">
+        <span>
+          ${status === 'pending' ? 'Your response is pending' : `You responded: ${this._capitalize(status)}`}
+          ${participant.invitation_note ? ` — ${this._escapeHtml(participant.invitation_note)}` : ''}
+        </span>
+        ${respondable ? `
+          <div style="display:flex; gap:14px;">
+            ${status !== 'accepted' ? `<button type="button" class="detail-action-link" style="color:inherit;" id="rsvp-accept-btn">Accept</button>` : ''}
+            ${status !== 'declined' ? `<button type="button" class="detail-action-link" style="color:inherit;" id="rsvp-decline-btn">Decline</button>` : ''}
           </div>
-          ${respondable ? `
-            <div class="field-row" style="gap:8px;">
-              ${status !== 'accepted' ? `<button type="button" class="btn btn-primary btn-xs" id="rsvp-accept-btn">Accept</button>` : ''}
-              ${status !== 'declined' ? `<button type="button" class="btn btn-secondary btn-xs" id="rsvp-decline-btn">Decline</button>` : ''}
-            </div>
-          ` : ''}
-        </div>
+        ` : ''}
       </div>
     `;
   },
@@ -2624,17 +2637,15 @@ const MeetingsView = {
     const hasMinutes = !!(meeting.minutes && meeting.minutes.trim() !== '');
     const canFinalize = notCancelled && notBlockedByLock && this._isSupervisor && !meeting.minutes_finalized && hasMinutes;
     return `
-      <div style="margin-top:12px;">
-        <label class="field-label">Minutes${meeting.minutes_finalized ? ' <span class="badge badge-outline">Finalized</span>' : ''}</label>
-        <div style="margin-top:6px;">
-          ${hasMinutes ? `<div style="white-space:pre-wrap;">${this._escapeHtml(meeting.minutes)}</div>` : `<div class="structure-empty">No minutes yet.</div>`}
-          ${canEditNow || canFinalize ? `
-            <div class="field-row" style="gap:8px; margin-top:8px;">
-              ${canEditNow ? `<button type="button" class="btn btn-secondary btn-xs" id="edit-minutes-btn">${hasMinutes ? 'Edit Minutes' : 'Add Minutes'}</button>` : ''}
-              ${canFinalize ? `<button type="button" class="btn btn-secondary btn-xs" id="finalize-minutes-btn">Finalize</button>` : ''}
-            </div>
-          ` : ''}
-        </div>
+      <div class="detail-section-label">Meeting Minutes <span class="field-hint">shared with participants</span>${meeting.minutes_finalized ? ' <span class="badge badge-outline">Finalized</span>' : ''}</div>
+      <div>
+        ${hasMinutes ? `<div style="white-space:pre-wrap;">${this._escapeHtml(meeting.minutes)}</div>` : `<div class="structure-empty">No minutes yet.</div>`}
+        ${canEditNow || canFinalize ? `
+          <div class="field-row" style="gap:8px; margin-top:8px;">
+            ${canEditNow ? `<button type="button" class="btn btn-secondary btn-xs" id="edit-minutes-btn">${hasMinutes ? 'Edit Minutes' : 'Add Minutes'}</button>` : ''}
+            ${canFinalize ? `<button type="button" class="btn btn-secondary btn-xs" id="finalize-minutes-btn">Finalize</button>` : ''}
+          </div>
+        ` : ''}
       </div>
     `;
   },
@@ -3038,59 +3049,27 @@ const MeetingsView = {
   // mirroring RSVP's identical carve-out). Only gated on the
   // meeting's own cancelled status, matching update_my_notes()'s own
   // server-side rule — reads always work regardless of status.
-  _renderMyNotesPanel(meeting, myNotes) {
-    const hasNotes = !!(myNotes && myNotes.trim() !== '');
+  // Always-visible inline editor (not a separate modal) — private to
+  // the viewing participant, saved via its own dedicated own-row RPC
+  // (update_my_notes, supabase/patch-meetings-personal-notes.sql),
+  // gated only on the meeting's own cancelled status, matching that
+  // RPC's server-side rule exactly.
+  _renderMyNotesPanel(meeting, participant, myNotes) {
     const canEditNotes = meeting.status !== 'cancelled';
-    const dvClass = hasNotes ? RichEditor.dvClass(myNotes) : '';
+    const lang = RichEditor.isDivehi(myNotes || '') ? 'dv' : 'en';
     return `
-      <div style="margin-top:12px;">
-        <label class="field-label">My Notes <span class="structure-empty">(private — visible only to you)</span></label>
-        <div style="margin-top:6px;">
-          ${hasNotes
-            ? `<div class="${dvClass}" style="white-space:pre-wrap;">${this._escapeHtml(myNotes)}</div>`
-            : `<div class="structure-empty">No personal notes yet.</div>`}
-          ${canEditNotes ? `<button type="button" class="btn btn-secondary btn-xs" id="edit-my-notes-btn" style="margin-top:8px;">${hasNotes ? 'Edit Notes' : 'Add Notes'}</button>` : ''}
+      <div class="detail-section-label">My Notes <span class="field-hint">private — visible only to you</span></div>
+      ${canEditNotes ? `
+        <div id="my-notes-panel">
+          ${RichEditor.langToggleHtml('myNotesLanguage', lang)}
+          <textarea class="field-input-plain${lang === 'dv' ? ' field-divehi' : ''}" id="my-notes-textarea" rows="4" placeholder="Add a private note — only you can see this.">${this._escapeHtml(myNotes || '')}</textarea>
+          <div class="modal-error alert alert-error hidden" id="my-notes-error"></div>
+          <button type="button" class="btn btn-secondary btn-xs" id="save-my-notes-btn" style="margin-top:8px;">Save</button>
         </div>
-      </div>
+      ` : `
+        <div>${myNotes && myNotes.trim() !== '' ? `<div class="${RichEditor.dvClass(myNotes).trim()}" style="white-space:pre-wrap;">${this._escapeHtml(myNotes)}</div>` : `<div class="structure-empty">No personal notes yet.</div>`}</div>
+      `}
     `;
-  },
-
-  _openEditMyNotesModal(meeting, participant, currentNotes) {
-    const lang = RichEditor.isDivehi(currentNotes || '') ? 'dv' : 'en';
-    this._openModal(`
-      <h3>${currentNotes ? 'Edit' : 'Add'} My Notes</h3>
-      <p class="field-hint">Private — only you can see these notes.</p>
-      <form id="edit-my-notes-form" class="modal-form">
-        <div class="field-group">
-          <label class="field-label">Notes</label>
-          ${RichEditor.langToggleHtml('notesLanguage', lang)}
-          <textarea class="field-input-plain${lang === 'dv' ? ' field-divehi' : ''}" name="notes" rows="8" id="my-notes-textarea">${this._escapeHtml(currentNotes || '')}</textarea>
-        </div>
-        <div class="modal-error alert alert-error hidden"></div>
-        <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
-          <button type="submit" class="btn btn-primary">Save</button>
-        </div>
-      </form>
-    `);
-    const form = document.getElementById('edit-my-notes-form');
-    const textarea = document.getElementById('my-notes-textarea');
-    const syncDir = (newLang) => textarea.classList.toggle('field-divehi', newLang === 'dv');
-    RichEditor.bindLangToggle(form, 'notesLanguage', syncDir);
-    RichEditor.bindAutoDetect(textarea, form, 'notesLanguage', syncDir);
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const notes = (new FormData(form).get('notes') || '').trim();
-      try {
-        await MeetingsAPI.updateMyNotes(participant.id, notes || null);
-        this._closeModal();
-        await this._openMeetingDetailModal(meeting);
-      } catch (err) {
-        const errEl = form.querySelector('.modal-error');
-        errEl.textContent = err.message;
-        errEl.classList.remove('hidden');
-      }
-    });
   },
 
   _renderLocationDetail(meeting, booking) {
@@ -3137,23 +3116,33 @@ const MeetingsView = {
     if (participants.length === 0) {
       return `<div class="structure-empty">No participants yet.</div>${canManage ? `<button type="button" class="btn btn-secondary btn-xs" id="add-participant-btn" style="margin-top:6px;"><i class="ti ti-plus"></i> Add Participant</button>` : ''}`;
     }
+    const invBadgeClass = { accepted: 'badge-success', declined: 'badge-error', pending: 'badge-warning', not_required: 'badge-outline' };
     return `
-      <div class="panel"><table class="data-table">
-        <thead><tr><th>Name</th><th>Role</th><th>Contact</th><th>Invitation</th><th>Attendance</th>${canManage ? '<th></th>' : ''}</tr></thead>
-        <tbody>${participants.map(p => `
-          <tr>
-            <td data-label="Name">${this._escapeHtml(p.user_id ? (this._participantUserName(p) || 'CorLink user') : (p.external_name || ''))}${p.is_organizer ? ' <span class="badge badge-outline">Organizer</span>' : ''}${!p.user_id ? ' <span class="structure-empty">(external)</span>' : ''}</td>
-            <td data-label="Role">${this._capitalize(p.participant_role)}</td>
-            <td data-label="Contact">${p.user_id ? '<span class="structure-empty">Internal user</span>' : this._externalContact(p)}</td>
-            <td data-label="Invitation">${this._capitalize(p.invitation_status)}${p.invitation_note ? `<div class="structure-empty" style="font-size:12px;">${this._escapeHtml(p.invitation_note)}</div>` : ''}</td>
-            <td data-label="Attendance">${this._capitalize(p.attendance_status)}${p.attendance_note ? `<div class="structure-empty" style="font-size:12px;">${this._escapeHtml(p.attendance_note)}</div>` : ''}</td>
-            ${canManage ? `<td data-label="Actions" style="white-space:nowrap;">
-              ${canMarkAttendance ? `<button type="button" class="btn btn-secondary btn-xs" data-mark-attendance="${p.id}">Attendance</button>` : ''}
-              ${p.is_organizer ? '' : `<button type="button" class="btn btn-secondary btn-xs" data-remove-participant="${p.id}" style="margin-left:4px;">Remove</button>`}
-            </td>` : ''}
-          </tr>
-        `).join('')}</tbody>
-      </table></div>
+      <div class="detail-participant-list">${participants.map(p => {
+        const name = p.user_id ? (this._participantUserName(p) || 'CorLink user') : (p.external_name || 'Guest');
+        const metaBits = [this._capitalize(p.participant_role)];
+        metaBits.push(p.user_id ? 'Internal user' : this._externalContact(p));
+        return `
+          <div class="detail-participant-row">
+            <div class="detail-participant-avatar">${this._initials(name)}</div>
+            <div class="detail-participant-info">
+              <div class="detail-participant-name">
+                ${this._escapeHtml(name)}
+                ${p.is_organizer ? '<span class="badge badge-outline">Organizer</span>' : ''}
+                <span class="badge ${invBadgeClass[p.invitation_status] || 'badge-outline'}">${this._capitalize(p.invitation_status)}</span>
+                ${p.attendance_status && p.attendance_status !== 'unknown' ? `<span class="badge badge-outline">${this._capitalize(p.attendance_status)}</span>` : ''}
+              </div>
+              <div class="detail-participant-meta">${metaBits.join(' · ')}${p.invitation_note ? ` · ${this._escapeHtml(p.invitation_note)}` : ''}${p.attendance_note ? ` · ${this._escapeHtml(p.attendance_note)}` : ''}</div>
+            </div>
+            ${canManage ? `
+              <div class="detail-participant-actions">
+                ${canMarkAttendance ? `<button type="button" class="detail-icon-btn detail-icon-btn--success" data-mark-attendance="${p.id}" title="Mark attendance"><i class="ti ti-user-check"></i></button>` : ''}
+                ${p.is_organizer ? '' : `<button type="button" class="detail-icon-btn detail-icon-btn--danger" data-remove-participant="${p.id}" title="Remove participant"><i class="ti ti-x"></i></button>`}
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }).join('')}</div>
       ${canManage ? `<button type="button" class="btn btn-secondary btn-xs" id="add-participant-btn" style="margin-top:8px;"><i class="ti ti-plus"></i> Add Participant</button>` : ''}
     `;
   },
@@ -3167,6 +3156,16 @@ const MeetingsView = {
     return this._orgUserNames?.[p.user_id] || null;
   },
 
+  // Two-letter avatar-circle initials for the participant list —
+  // first + last name initial, or the first two letters of a single-
+  // word name/guest label.
+  _initials(name) {
+    const parts = (name || '').trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return '?';
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  },
+
   _externalContact(p) {
     const parts = [];
     if (p.external_email) parts.push(this._escapeHtml(p.external_email));
@@ -3176,7 +3175,7 @@ const MeetingsView = {
     return parts.join(' · ');
   },
 
-  async _bindMeetingDetailModal(meeting, participants, booking, attachments, { canManageParticipants, canManageRoom, myNotes }) {
+  async _bindMeetingDetailModal(meeting, participants, booking, attachments, { canManageParticipants, canManageRoom }) {
     const myParticipant = participants.find(p => p.user_id === this._user.id);
     document.getElementById('rsvp-accept-btn')?.addEventListener('click', () => {
       this._closeModal();
@@ -3229,10 +3228,25 @@ const MeetingsView = {
       this._closeModal();
       this._openFinalizeMinutesModal(meeting);
     });
-    document.getElementById('edit-my-notes-btn')?.addEventListener('click', () => {
-      this._closeModal();
-      this._openEditMyNotesModal(meeting, myParticipant, myNotes);
-    });
+    const myNotesPanel = document.getElementById('my-notes-panel');
+    if (myNotesPanel && myParticipant) {
+      const notesTextarea = document.getElementById('my-notes-textarea');
+      const syncDir = (newLang) => notesTextarea.classList.toggle('field-divehi', newLang === 'dv');
+      RichEditor.bindLangToggle(myNotesPanel, 'myNotesLanguage', syncDir);
+      RichEditor.bindAutoDetect(notesTextarea, myNotesPanel, 'myNotesLanguage', syncDir);
+      document.getElementById('save-my-notes-btn')?.addEventListener('click', async () => {
+        const notes = notesTextarea.value.trim();
+        try {
+          await MeetingsAPI.updateMyNotes(myParticipant.id, notes || null);
+          this._closeModal();
+          await this._openMeetingDetailModal(meeting);
+        } catch (err) {
+          const errEl = document.getElementById('my-notes-error');
+          errEl.textContent = err.message;
+          errEl.classList.remove('hidden');
+        }
+      });
+    }
   },
 
   // ── Cancel meeting ────────────────────────────────────────────────

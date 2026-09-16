@@ -2083,6 +2083,83 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
 .badge-error   { background: var(--color-error-bg); color: var(--color-error-dark); border-color: transparent; }
 .badge-outline { background: transparent; }
 
+/* Meeting detail view (js/views/meetings.js _renderMeetingDetailModal
+   and friends) — docs/117 UAT correction: "exactly same as in
+   MeetFlow" layout (pill badges up top, uppercase section labels,
+   avatar-row participants, two-row action bar) but in CorLink's own
+   gold theme, never MeetFlow's literal teal/green branding. */
+.detail-pill-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.detail-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: var(--radius-full);
+  font-size: 0.8rem; font-weight: 600; line-height: 1;
+  background: var(--color-primary-light); color: var(--color-primary-dark);
+  border: 1px solid transparent;
+}
+.detail-pill--outline { background: transparent; border-color: var(--color-border); color: var(--color-text-muted); }
+.detail-pill--success { background: var(--color-success-bg); color: var(--color-success-dark); }
+
+.detail-facts { display: flex; flex-direction: column; gap: 14px; margin-bottom: 18px; }
+.detail-fact-label {
+  font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--color-text-muted); margin-bottom: 3px;
+}
+.detail-fact-value { font-size: 0.95rem; color: var(--color-text); font-weight: 600; }
+.detail-fact-value .badge { margin-left: 6px; font-weight: 500; vertical-align: middle; }
+
+.detail-section-label {
+  font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--color-primary-dark); display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; flex-wrap: wrap; margin-top: 22px; margin-bottom: 8px;
+}
+.detail-section-label .field-hint { text-transform: none; letter-spacing: normal; font-weight: 400; font-size: 0.75rem; margin: 0; }
+.detail-section-label-action {
+  text-transform: none; letter-spacing: normal; font-weight: 600; font-size: 0.78rem;
+  color: var(--color-primary-dark); background: none; border: none; cursor: pointer; padding: 0;
+}
+
+.detail-participant-list { display: flex; flex-direction: column; }
+.detail-participant-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 0; border-bottom: 1px solid var(--color-border);
+}
+.detail-participant-row:last-child { border-bottom: none; }
+.detail-participant-avatar {
+  width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+  background: var(--color-primary-light); color: var(--color-primary-dark);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.78rem; font-weight: 700;
+}
+.detail-participant-info { flex: 1; min-width: 0; }
+.detail-participant-name { font-weight: 600; font-size: 0.9rem; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.detail-participant-meta { font-size: 0.78rem; color: var(--color-text-muted); margin-top: 2px; }
+.detail-participant-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.detail-icon-btn {
+  width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--color-border);
+  background: var(--color-surface); display: flex; align-items: center; justify-content: center;
+  cursor: pointer; color: var(--color-text-muted); flex-shrink: 0; padding: 0;
+}
+.detail-icon-btn:hover { background: var(--color-bg); }
+.detail-icon-btn--success:hover { color: var(--color-success-dark); border-color: var(--color-success-dark); }
+.detail-icon-btn--danger:hover { color: var(--color-error-dark); border-color: var(--color-error-dark); }
+
+.detail-rsvp-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 10px 14px; border-radius: var(--radius-md); margin-bottom: 16px;
+  background: var(--color-success-bg); color: var(--color-success-dark); font-weight: 600; font-size: 0.85rem;
+}
+.detail-rsvp-banner--declined { background: var(--color-error-bg); color: var(--color-error-dark); }
+.detail-rsvp-banner--pending { background: var(--color-warning-bg); color: var(--color-warning-dark); }
+
+.detail-actions-row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 20px; }
+.detail-actions-row--secondary { margin-top: 10px; }
+.detail-action-link {
+  display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 0.85rem;
+  background: none; border: none; cursor: pointer; padding: 4px 2px;
+}
+.detail-action-link--primary { color: var(--color-primary-dark); }
+.detail-action-link--danger { color: var(--color-error-dark); }
+
 /* A pill radius (border-radius: 9999px) only looks right on a single line
    of text — the browser has to shrink each corner's radius to fit the
    box, and on a multi-line badge that warps the whole shape into a lens/
