@@ -3144,7 +3144,6 @@ const MeetingsView = {
       return `
         <div>
           <i class="ti ti-door"></i> ${this._escapeHtml(booking.room?.name || 'Room')}
-          — ${new Date(booking.start_at).toLocaleString()} to ${new Date(booking.end_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           <span class="badge ${booking.status === 'confirmed' ? 'badge-success' : 'badge-warning'}" style="margin-left:6px;">${this._capitalize(booking.status)}</span>
         </div>
       `;

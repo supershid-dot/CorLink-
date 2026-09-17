@@ -272,6 +272,11 @@ async function check(name, fn) {
     assert.doesNotMatch(html, /id="assign-room-btn"/);
     // the room name/status itself must still be shown, just without actions
     assert.match(html, /HQ Meeting Room A/);
+    // the booking's own date/time range is redundant with the Date/Time
+    // facts already shown above (a room is always booked for the
+    // meeting's own time window) — UAT: "In location the date and time
+    // is not need to display".
+    assert.doesNotMatch(html, /9:00:00 AM to 10:00/);
     await page.close();
   });
 
