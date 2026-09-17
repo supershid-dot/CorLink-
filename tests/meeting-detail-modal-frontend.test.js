@@ -102,7 +102,7 @@ async function check(name, fn) {
         updateMyNotes: async (participantId, notes) => { record('MeetingsAPI.updateMyNotes', [participantId, notes]); },
         updateMinutes: async (meetingId, minutes) => { record('MeetingsAPI.updateMinutes', [meetingId, minutes]); },
         respondToInvitation: async (...args) => { record('MeetingsAPI.respondToInvitation', args); },
-        fetchMeeting: async (id) => (${JSON.stringify(meeting)}),
+        fetchMeeting: async (id) => { record('MeetingsAPI.fetchMeeting', [id]); return ${JSON.stringify(meeting)}; },
       };
       window.AttachmentsAPI = {
         list: async () => ([]),
@@ -302,23 +302,45 @@ async function check(name, fn) {
     await page.close();
   });
 
-  await check('cancelling out of Add Minutes returns to the meeting detail view, not a bare close (UAT: "the previous window is lost")', async () => {
+  // The topmost (last) .modal-overlay layer is whatever sub-modal is
+  // currently open — Detail's own "Close" button also matches
+  // [data-close-modal] and sits in the layer(s) beneath it, so the
+  // click must be scoped to the last layer specifically.
+  const TOP_LAYER_CLOSE = '#modal-root > .modal-overlay:last-of-type [data-close-modal]';
+
+  await check('opening Add Minutes stacks it on top of the detail view — the detail view\'s own DOM is never destroyed (UAT: "the previous window is lost")', async () => {
     const { page } = await newPage();
     await page.evaluate(() => window.__view._openMeetingDetailModal(window.__meeting));
     await page.waitForTimeout(30);
     await page.click('#edit-minutes-btn');
     await page.waitForTimeout(30);
-    let html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    const layerCount = await page.evaluate(() => document.querySelectorAll('#modal-root > .modal-overlay').length);
+    assert.strictEqual(layerCount, 2, 'expected the detail view\'s own layer to still be in the DOM underneath Add Minutes, not replaced by it');
+    const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
     assert.match(html, /Add Minutes/);
-    await page.click('#edit-minutes-cancel-btn');
-    await page.waitForTimeout(30);
-    html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
-    assert.match(html, /Q3 Budget Review/, 'expected the detail view to reopen, not an empty/closed modal');
-    assert.doesNotMatch(html, /Add Minutes<\/h3>/);
+    assert.match(html, /Q3 Budget Review/, 'the detail view underneath must still be present in the DOM');
     await page.close();
   });
 
-  await check('cancelling out of Add Participant returns to the meeting detail view', async () => {
+  await check('cancelling out of Add Minutes pops back to the detail view instantly, with no re-fetch', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openMeetingDetailModal(window.__meeting));
+    await page.waitForTimeout(30);
+    await page.click('#edit-minutes-btn');
+    await page.waitForTimeout(30);
+    await page.click(TOP_LAYER_CLOSE);
+    await page.waitForTimeout(30);
+    const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /Q3 Budget Review/, 'expected the detail view to reopen, not an empty/closed modal');
+    assert.doesNotMatch(html, /Add Minutes<\/h3>/);
+    const layerCount = await page.evaluate(() => document.querySelectorAll('#modal-root > .modal-overlay').length);
+    assert.strictEqual(layerCount, 1, 'only the detail view\'s own layer should remain');
+    const calls = await page.evaluate(() => window.calls);
+    assert.strictEqual(calls.filter(c => c.name === 'MeetingsAPI.fetchMeeting').length, 0, 'cancelling should never need to re-fetch the meeting — the revealed detail view was never destroyed');
+    await page.close();
+  });
+
+  await check('cancelling out of Add Participant pops back to the detail view', async () => {
     const { page } = await newPage();
     await page.evaluate(() => window.__view._openMeetingDetailModal(window.__meeting));
     await page.waitForTimeout(30);
@@ -326,35 +348,35 @@ async function check(name, fn) {
     await page.waitForTimeout(30);
     let html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
     assert.match(html, /Add Participant/);
-    await page.click('#add-participant-cancel-btn');
+    await page.click(TOP_LAYER_CLOSE);
     await page.waitForTimeout(30);
     html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
     assert.match(html, /Q3 Budget Review/, 'expected the detail view to reopen, not an empty/closed modal');
     await page.close();
   });
 
-  await check('cancelling out of Remove Participant, Mark Attendance, and Lock Meeting all return to the meeting detail view', async () => {
+  await check('cancelling out of Remove Participant, Mark Attendance, and Lock Meeting all pop back to the detail view', async () => {
     const { page } = await newPage();
     await page.evaluate(() => window.__view._openMeetingDetailModal(window.__meeting));
     await page.waitForTimeout(30);
 
     await page.click('[data-remove-participant="p2"]');
     await page.waitForTimeout(30);
-    await page.click('#remove-participant-keep-btn');
+    await page.click(TOP_LAYER_CLOSE);
     await page.waitForTimeout(30);
     let html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
     assert.match(html, /Q3 Budget Review/);
 
     await page.click('[data-mark-attendance="p2"]');
     await page.waitForTimeout(30);
-    await page.click('#mark-attendance-cancel-btn');
+    await page.click(TOP_LAYER_CLOSE);
     await page.waitForTimeout(30);
     html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
     assert.match(html, /Q3 Budget Review/);
 
     await page.click('#lock-meeting-btn');
     await page.waitForTimeout(30);
-    await page.click('#lock-meeting-cancel-btn');
+    await page.click(TOP_LAYER_CLOSE);
     await page.waitForTimeout(30);
     html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
     assert.match(html, /Q3 Budget Review/);

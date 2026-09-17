@@ -720,12 +720,11 @@ const MeetingsView = {
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" id="meeting-form-cancel-btn">Cancel</button>
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
           <button type="submit" class="btn btn-primary" id="meeting-form-submit">Save Changes</button>
         </div>
       </form>
-    `, { large: true });
-    this._bindBackToDetail('meeting-form-cancel-btn', meeting);
+    `, { large: true, stack: true });
 
     const form = document.getElementById('meeting-form');
     const errEl = form.querySelector('.modal-error');
@@ -1811,23 +1810,18 @@ const MeetingsView = {
     this._bindMeetingDetailModal(meeting, participants, booking, attachments, { canManageParticipants, myNotes });
 
     document.getElementById('detail-edit-btn')?.addEventListener('click', () => {
-      this._closeModal();
       this._openSeriesActionScopeDialog(meeting, 'edit', booking);
     });
     document.getElementById('detail-cancel-btn')?.addEventListener('click', () => {
-      this._closeModal();
       this._openSeriesActionScopeDialog(meeting, 'cancel', booking);
     });
     document.getElementById('detail-delete-draft-btn')?.addEventListener('click', () => {
-      this._closeModal();
       this._openDeleteDraftModal(meeting);
     });
     document.getElementById('lock-meeting-btn')?.addEventListener('click', () => {
-      this._closeModal();
       this._openLockMeetingModal(meeting);
     });
     document.getElementById('unlock-meeting-btn')?.addEventListener('click', () => {
-      this._closeModal();
       this._openUnlockMeetingModal(meeting);
     });
     document.getElementById('view-series-btn')?.addEventListener('click', () => {
@@ -1866,13 +1860,12 @@ const MeetingsView = {
       <h3>Recurring Meeting</h3>
       <p>Choose which meetings you want this action to affect.</p>
       <div class="modal-actions">
-        <button type="button" class="btn btn-secondary" id="scope-dialog-cancel-btn">Cancel</button>
+        <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
         <button type="button" class="${btnClass}"${btnStyle} id="scope-this-btn">This meeting</button>
         ${canManageSeries ? `<button type="button" class="${btnClass}"${btnStyle} id="scope-future-btn">This and future</button>` : ''}
         ${canManageSeries ? `<button type="button" class="${btnClass}"${btnStyle} id="scope-series-btn">Entire series</button>` : ''}
       </div>
-    `);
-    this._bindBackToDetail('scope-dialog-cancel-btn', meeting);
+    `, { stack: true });
 
     document.getElementById('scope-this-btn').addEventListener('click', () => {
       this._closeModal();
@@ -2521,7 +2514,7 @@ const MeetingsView = {
       <div class="modal-actions">
         <button type="button" class="btn btn-secondary" data-close-modal>Close</button>
       </div>
-    `, { medium: true });
+    `, { medium: true, stack: true });
     document.querySelectorAll('[data-view-occurrence]').forEach(btn => {
       btn.addEventListener('click', async () => {
         try {
@@ -2563,11 +2556,10 @@ const MeetingsView = {
       <p>Locking this meeting will prevent anyone other than you (its creator), an organization administrator within your organization, or a super administrator from editing, rescheduling, cancelling, managing participants, marking attendance, or modifying its minutes.</p>
       <div class="modal-error alert alert-error hidden"></div>
       <div class="modal-actions">
-        <button type="button" class="btn btn-secondary" id="lock-meeting-cancel-btn">Cancel</button>
+        <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
         <button type="button" class="btn btn-primary" id="confirm-lock-meeting-btn">Lock Meeting</button>
       </div>
-    `);
-    this._bindBackToDetail('lock-meeting-cancel-btn', meeting);
+    `, { stack: true });
     document.getElementById('confirm-lock-meeting-btn').addEventListener('click', async () => {
       try {
         await MeetingsAPI.lockMeeting(meeting.id);
@@ -2588,11 +2580,10 @@ const MeetingsView = {
       <p>Unlocking this meeting will allow its normal meeting managers to make changes again.</p>
       <div class="modal-error alert alert-error hidden"></div>
       <div class="modal-actions">
-        <button type="button" class="btn btn-secondary" id="unlock-meeting-cancel-btn">Cancel</button>
+        <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
         <button type="button" class="btn btn-primary" id="confirm-unlock-meeting-btn">Unlock Meeting</button>
       </div>
-    `);
-    this._bindBackToDetail('unlock-meeting-cancel-btn', meeting);
+    `, { stack: true });
     document.getElementById('confirm-unlock-meeting-btn').addEventListener('click', async () => {
       try {
         await MeetingsAPI.unlockMeeting(meeting.id);
@@ -2648,12 +2639,11 @@ const MeetingsView = {
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" id="rsvp-cancel-btn">Cancel</button>
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
           <button type="submit" class="btn btn-primary">${verb}</button>
         </div>
       </form>
-    `);
-    this._bindBackToDetail('rsvp-cancel-btn', meeting);
+    `, { stack: true });
     const form = document.getElementById('rsvp-form');
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -2721,12 +2711,11 @@ const MeetingsView = {
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" id="edit-minutes-cancel-btn">Cancel</button>
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
           <button type="submit" class="btn btn-primary">Save</button>
         </div>
       </form>
-    `);
-    this._bindBackToDetail('edit-minutes-cancel-btn', meeting);
+    `, { stack: true });
     const form = document.getElementById('edit-minutes-form');
     const editor = RichEditor.create(document.getElementById('edit-minutes-body'), { language: lang });
     editor.setHTML(meeting.minutes || '');
@@ -2752,11 +2741,10 @@ const MeetingsView = {
       <p>Once finalized, only an organization administrator or super administrator will be able to edit these minutes. This cannot be undone.</p>
       <div class="modal-error alert alert-error hidden"></div>
       <div class="modal-actions">
-        <button type="button" class="btn btn-secondary" id="finalize-minutes-cancel-btn">Cancel</button>
+        <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
         <button type="button" class="btn btn-primary" id="confirm-finalize-minutes-btn">Finalize</button>
       </div>
-    `);
-    this._bindBackToDetail('finalize-minutes-cancel-btn', meeting);
+    `, { stack: true });
     document.getElementById('confirm-finalize-minutes-btn').addEventListener('click', async () => {
       try {
         await MeetingsAPI.finalizeMinutes(meeting.id);
@@ -2882,11 +2870,9 @@ const MeetingsView = {
 
   _bindSupportingTasksPanel(meeting) {
     document.getElementById('create-meeting-task-btn')?.addEventListener('click', () => {
-      this._closeModal();
       this._openCreateMeetingTaskModal(meeting);
     });
     document.getElementById('link-existing-meeting-task-btn')?.addEventListener('click', () => {
-      this._closeModal();
       this._openLinkExistingMeetingTaskModal(meeting);
     });
     document.getElementById('load-more-meeting-tasks-btn')?.addEventListener('click', (e) => {
@@ -2994,12 +2980,11 @@ const MeetingsView = {
         ` : ''}
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" id="create-meeting-task-cancel-btn">Cancel</button>
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
           <button type="submit" class="btn btn-primary">Create Task</button>
         </div>
       </form>
-    `, { large: true });
-    this._bindBackToDetail('create-meeting-task-cancel-btn', meeting);
+    `, { large: true, stack: true });
 
     const form = document.getElementById('create-meeting-task-form');
     form.addEventListener('submit', async (e) => {
@@ -3071,11 +3056,10 @@ const MeetingsView = {
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" id="link-meeting-task-cancel-btn">Cancel</button>
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
         </div>
       </form>
-    `, { large: true });
-    this._bindBackToDetail('link-meeting-task-cancel-btn', meeting);
+    `, { large: true, stack: true });
 
     const form = document.getElementById('link-meeting-task-form');
     const searchInput = document.getElementById('link-meeting-task-search');
@@ -3230,39 +3214,32 @@ const MeetingsView = {
   async _bindMeetingDetailModal(meeting, participants, booking, attachments, { canManageParticipants, myNotes }) {
     const myParticipant = participants.find(p => p.user_id === this._user.id);
     document.getElementById('rsvp-accept-btn')?.addEventListener('click', () => {
-      this._closeModal();
       this._openRsvpModal(meeting, myParticipant, 'accepted');
     });
     document.getElementById('rsvp-decline-btn')?.addEventListener('click', () => {
-      this._closeModal();
       this._openRsvpModal(meeting, myParticipant, 'declined');
     });
     document.getElementById('add-participant-btn')?.addEventListener('click', () => {
-      this._closeModal();
       this._openAddParticipantModal(meeting, participants);
     });
     document.querySelectorAll('[data-mark-attendance]').forEach(btn => {
       btn.addEventListener('click', () => {
         const p = participants.find(x => x.id === btn.dataset.markAttendance);
-        this._closeModal();
         this._openMarkAttendanceModal(meeting, p);
       });
     });
     document.querySelectorAll('[data-remove-participant]').forEach(btn => {
       btn.addEventListener('click', () => {
         const p = participants.find(x => x.id === btn.dataset.removeParticipant);
-        this._closeModal();
         this._openRemoveParticipantModal(meeting, p);
       });
     });
     this._bindAttachmentEvents(document.getElementById('modal-root'), () => this._openMeetingDetailModal(meeting));
     this._bindSupportingTasksPanel(meeting);
     document.getElementById('edit-minutes-btn')?.addEventListener('click', () => {
-      this._closeModal();
       this._openEditMinutesModal(meeting);
     });
     document.getElementById('finalize-minutes-btn')?.addEventListener('click', () => {
-      this._closeModal();
       this._openFinalizeMinutesModal(meeting);
     });
     const myNotesPanel = document.getElementById('my-notes-panel');
@@ -3299,12 +3276,11 @@ const MeetingsView = {
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" id="cancel-meeting-keep-btn">Keep Meeting</button>
+          <button type="button" class="btn btn-secondary" data-close-modal>Keep Meeting</button>
           <button type="submit" class="btn btn-primary">Cancel Meeting</button>
         </div>
       </form>
-    `);
-    this._bindBackToDetail('cancel-meeting-keep-btn', meeting);
+    `, { stack: true });
     const form = document.getElementById('cancel-meeting-form');
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -3332,11 +3308,10 @@ const MeetingsView = {
       <p>This will permanently delete "${this._escapeHtml(meeting.title)}". This cannot be undone. Any room reservation held for it will be released.</p>
       <div class="modal-error alert alert-error hidden"></div>
       <div class="modal-actions">
-        <button type="button" class="btn btn-secondary" id="delete-draft-keep-btn">Keep Draft</button>
+        <button type="button" class="btn btn-secondary" data-close-modal>Keep Draft</button>
         <button type="button" class="btn" style="background:var(--color-error-bg); color:var(--color-error-dark);" id="confirm-delete-draft-btn">Delete Draft</button>
       </div>
-    `);
-    this._bindBackToDetail('delete-draft-keep-btn', meeting);
+    `, { stack: true });
     document.getElementById('confirm-delete-draft-btn').addEventListener('click', async () => {
       try {
         await MeetingsAPI.deleteDraftMeeting(meeting.id);
@@ -3428,12 +3403,11 @@ const MeetingsView = {
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" id="add-participant-cancel-btn">Cancel</button>
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
           <button type="submit" class="btn btn-primary" id="add-participant-submit">Add Participant</button>
         </div>
       </form>
-    `);
-    this._bindBackToDetail('add-participant-cancel-btn', meeting);
+    `, { stack: true });
 
     let ptype = 'internal';
     const internalFields = document.getElementById('internal-fields');
@@ -3541,12 +3515,11 @@ const MeetingsView = {
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" id="mark-attendance-cancel-btn">Cancel</button>
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
           <button type="submit" class="btn btn-primary">Save</button>
         </div>
       </form>
-    `);
-    this._bindBackToDetail('mark-attendance-cancel-btn', meeting);
+    `, { stack: true });
     const form = document.getElementById('mark-attendance-form');
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -3575,12 +3548,11 @@ const MeetingsView = {
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" id="remove-participant-keep-btn">Keep Participant</button>
+          <button type="button" class="btn btn-secondary" data-close-modal>Keep Participant</button>
           <button type="submit" class="btn btn-primary">Remove</button>
         </div>
       </form>
-    `);
-    this._bindBackToDetail('remove-participant-keep-btn', meeting);
+    `, { stack: true });
     const form = document.getElementById('remove-participant-form');
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -3683,38 +3655,38 @@ const MeetingsView = {
     return div.innerHTML;
   },
 
-  // ── Generic Modal Helpers (same shape as rooms.js) ────────────────
-  _openModal(innerHtml, { large = false, medium = false } = {}) {
+  // ── Generic Modal Helpers ─────────────────────────────────────────
+  // `stack: true` layers this modal on TOP of whatever is already in
+  // #modal-root instead of replacing it — used for every sub-modal
+  // opened FROM the meeting detail view (Add Participant, Edit
+  // Minutes, Lock/Unlock, RSVP, Mark Attendance, Remove Participant,
+  // Cancel/Delete, Supporting Tasks, Edit Meeting, the recurring-series
+  // scope dialog). The detail view's own DOM is never destroyed while
+  // stacked on top of it — closeModal() below just pops the top layer,
+  // instantly revealing the detail view exactly as the user left it
+  // (no re-fetch, no rebuild) — UAT: "the original form should not
+  // close" when opening a sub-action from it. A plain (non-stacked)
+  // open — every other call site in this file: the detail view's own
+  // first render, Meeting Groups, Schedule Meeting, etc. — clears
+  // #modal-root first, same as before this existed.
+  _openModal(innerHtml, { large = false, medium = false, stack = false } = {}) {
     const root = document.getElementById('modal-root');
-    root.innerHTML = `
-      <div class="modal-overlay" id="modal-overlay">
-        <div class="modal-box${large ? ' modal-box--lg' : ''}${medium ? ' modal-box--md' : ''}">${innerHtml}</div>
-      </div>
-    `;
-    root.querySelectorAll('[data-close-modal]').forEach(btn => {
+    if (!stack) root.innerHTML = '';
+    const layer = document.createElement('div');
+    layer.className = 'modal-overlay';
+    layer.innerHTML = `<div class="modal-box${large ? ' modal-box--lg' : ''}${medium ? ' modal-box--md' : ''}">${innerHtml}</div>`;
+    root.appendChild(layer);
+    layer.querySelectorAll('[data-close-modal]').forEach(btn => {
       btn.addEventListener('click', () => this._closeModal());
     });
   },
 
+  // Removes only the topmost layer, revealing whatever was stacked
+  // beneath it untouched — equivalent to the old "clear everything"
+  // behavior when there was only ever one layer (true for every call
+  // site that doesn't open with `stack: true`).
   _closeModal() {
-    document.getElementById('modal-root').innerHTML = '';
-  },
-
-  // Wires a "Cancel"/"Keep X" button on a sub-modal reached FROM the
-  // meeting detail view (Add Participant, Edit Minutes, Lock/Unlock,
-  // RSVP, Mark Attendance, Remove Participant, Supporting Tasks, etc.)
-  // to return to that detail view instead of the generic
-  // data-close-modal's bare close. Every one of these already reopens
-  // the detail view on its SUCCESS path — without this, backing out
-  // via Cancel instead just closed everything, dropping the user back
-  // to whatever page was behind the whole flow (e.g. Rooms' grid, if
-  // the meeting was reached via a linked booking, docs/117) — UAT:
-  // "when i click add minutes or add participants, the previous
-  // window is lost".
-  _bindBackToDetail(buttonId, meeting) {
-    document.getElementById(buttonId)?.addEventListener('click', () => {
-      this._closeModal();
-      this._openMeetingDetailModal(meeting);
-    });
+    const root = document.getElementById('modal-root');
+    if (root.lastElementChild) root.lastElementChild.remove();
   },
 };
