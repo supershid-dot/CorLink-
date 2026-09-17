@@ -219,7 +219,14 @@ async function check(name, fn) {
   });
 
   await check('mobile: empty half-hour slots render a bookable row wired to onSlotClick', async () => {
-    const { page } = await newMobilePage();
+    // Frozen to a fixed instant (newPageAt, defined below — hoisted
+    // function declaration, safe to call before its own textual
+    // definition) rather than newMobilePage()'s real wall clock: this
+    // test hardcodes the day under test to 2026-09-16, and WeekGrid's
+    // own past-slot lockout (real `new Date()`) would otherwise mark
+    // every slot on that day as closed once the real calendar date
+    // moves past it, leaving no `[data-week-grid-slot]` to click.
+    const { page } = await newPageAt('2026-09-16T00:00:00', 'UTC', { width: 390, height: 800 });
     const result = await page.evaluate(() => {
       const weekStart = WeekGrid.weekStartFor('2026-09-16T00:00:00');
       document.getElementById('app').innerHTML = WeekGrid.html({ weekStart, events: [], todayStr: '2026-09-16', selectedDay: '2026-09-16' });

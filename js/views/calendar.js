@@ -535,9 +535,6 @@ const CalendarView = {
         <div class="modal-box${large ? ' modal-box--lg' : ''}${medium ? ' modal-box--md' : ''}">${innerHtml}</div>
       </div>
     `;
-    document.getElementById('modal-overlay').addEventListener('click', (e) => {
-      if (e.target.id === 'modal-overlay') this._closeModal();
-    });
     root.querySelectorAll('[data-close-modal]').forEach(btn => {
       btn.addEventListener('click', () => this._closeModal());
     });

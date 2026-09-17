@@ -1875,9 +1875,6 @@ const TaskDetailView = {
       </div>
     `;
     const overlay = document.getElementById('modal-overlay');
-    overlay.addEventListener('click', (e) => {
-      if (e.target.id === 'modal-overlay') this._closeModal();
-    });
     overlay.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { e.preventDefault(); this._closeModal(); return; }
       if (e.key !== 'Tab') return;

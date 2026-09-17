@@ -39,9 +39,6 @@ const TaskCreateModal = (() => {
         <div class="modal-box">${innerHtml}</div>
       </div>
     `;
-    document.getElementById('task-create-modal-overlay').addEventListener('click', (e) => {
-      if (e.target.id === 'task-create-modal-overlay') closeModal();
-    });
     root.querySelectorAll('[data-close-modal]').forEach(btn => {
       btn.addEventListener('click', closeModal);
     });

@@ -1112,6 +1112,29 @@ const AdminView = {
       designationOptions.push({ id: user.designation_id, name: `${user.designations?.name || 'Unknown'} (inactive)` });
     }
 
+    // This panel bundles several independent actions (profile save,
+    // status/access toggles, assignment add/remove) in one modal — the
+    // user should be able to do more than one of them in a row without
+    // the whole panel closing and forcing them to re-open it each time
+    // (UAT feedback: "when i close[click] any button this automatically
+    // closes"). Every success handler below calls this instead of
+    // this._closeModal() — it refreshes the underlying Users list (kept
+    // in sync in the background) and re-fetches this user's own row
+    // fresh, then re-renders the same modal in place with up-to-date
+    // data, rather than dismissing it. Only the explicit Close button
+    // (and the temp-password screen's own Done button) actually closes it.
+    const refreshManageUserModal = async () => {
+      await this._renderTab();
+      try {
+        const freshUsers = await AdminAPI.listUsersByOrg(org.id);
+        const freshUser = freshUsers.find(u => u.id === user.id) || user;
+        this._openManageUserModal(freshUser, scopes, org, designations);
+      } catch (err) {
+        console.error('CorLink: failed to refresh Manage User panel', err);
+        this._closeModal();
+      }
+    };
+
     this._openModal(`
       <h3>Manage — ${user.full_name}</h3>
 
@@ -1219,8 +1242,7 @@ const AdminView = {
           full_name: fd.get('fullName'), email: fd.get('email'),
           designation_id: fd.get('designationId') || null,
         });
-        this._closeModal();
-        await this._renderTab();
+        await refreshManageUserModal();
       } catch (err) {
         errEl.textContent = err.message;
         errEl.classList.remove('hidden');
@@ -1228,15 +1250,25 @@ const AdminView = {
     });
 
     document.getElementById('toggle-user-active').addEventListener('click', async () => {
-      await AdminAPI.updateUser(user.id, { is_active: !user.is_active });
-      this._closeModal();
-      await this._renderTab();
+      const errEl = document.querySelector('.modal-error');
+      try {
+        await AdminAPI.updateUser(user.id, { is_active: !user.is_active });
+        await refreshManageUserModal();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
     });
 
     document.getElementById('toggle-prisoner-letters-staff').addEventListener('click', async () => {
-      await AdminAPI.updateUser(user.id, { is_prisoner_letters_staff: !user.is_prisoner_letters_staff });
-      this._closeModal();
-      await this._renderTab();
+      const errEl = document.querySelector('.modal-error');
+      try {
+        await AdminAPI.updateUser(user.id, { is_prisoner_letters_staff: !user.is_prisoner_letters_staff });
+        await refreshManageUserModal();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
     });
 
     document.getElementById('reset-password-btn').addEventListener('click', async () => {
@@ -1270,8 +1302,7 @@ const AdminView = {
             userId: user.id, scopeType: 'organization', scopeId: org.id, role: adminRole,
           });
         }
-        this._closeModal();
-        await this._renderTab();
+        await refreshManageUserModal();
       } catch (err) {
         errEl.textContent = err.message;
         errEl.classList.remove('hidden');
@@ -1280,17 +1311,27 @@ const AdminView = {
 
     document.querySelectorAll('[data-remove-assignment]').forEach(btn => {
       btn.addEventListener('click', async () => {
-        await AdminAPI.deactivateAssignment(btn.dataset.removeAssignment);
-        this._closeModal();
-        await this._renderTab();
+        const errEl = document.querySelector('.modal-error');
+        try {
+          await AdminAPI.deactivateAssignment(btn.dataset.removeAssignment);
+          await refreshManageUserModal();
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.classList.remove('hidden');
+        }
       });
     });
 
     document.querySelectorAll('[data-set-primary]').forEach(btn => {
       btn.addEventListener('click', async () => {
-        await AdminAPI.setPrimaryAssignment(user.id, btn.dataset.setPrimary);
-        this._closeModal();
-        await this._renderTab();
+        const errEl = document.querySelector('.modal-error');
+        try {
+          await AdminAPI.setPrimaryAssignment(user.id, btn.dataset.setPrimary);
+          await refreshManageUserModal();
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.classList.remove('hidden');
+        }
       });
     });
 
@@ -1304,8 +1345,7 @@ const AdminView = {
         await AdminAPI.createAssignment({
           userId: user.id, scopeType, scopeId, role: fd.get('role'),
         });
-        this._closeModal();
-        await this._renderTab();
+        await refreshManageUserModal();
       } catch (err) {
         errEl.textContent = err.message;
         errEl.classList.remove('hidden');
@@ -1322,9 +1362,6 @@ const AdminView = {
         <div class="modal-box${sizeClass}">${innerHtml}</div>
       </div>
     `;
-    document.getElementById('modal-overlay').addEventListener('click', (e) => {
-      if (e.target.id === 'modal-overlay') this._closeModal();
-    });
     root.querySelectorAll('[data-close-modal]').forEach(btn => {
       btn.addEventListener('click', () => this._closeModal());
     });
