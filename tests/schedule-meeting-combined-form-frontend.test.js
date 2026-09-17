@@ -42,7 +42,7 @@ async function check(name, fn) {
 
   // Records every RPC-shaped call each stub API makes, so assertions can
   // check payloads without a real backend.
-  async function newPage({ roomsEnabled = true } = {}) {
+  async function newPage({ roomsEnabled = true, isAdmin = false } = {}) {
     const page = await browser.newPage();
     const pageErrors = [];
     page.on('pageerror', e => pageErrors.push(e.message));
@@ -54,7 +54,7 @@ async function check(name, fn) {
       window.Auth = { getCachedProfile: () => ({ id: 'u1', org_id: 'org-1', full_name: 'Jane Staff' }) };
       window.AppShell = {
         isModuleEnabled: (user, mod) => mod === 'rooms' ? ${roomsEnabled} : true,
-        isAdmin: () => false, isSupervisorOrAbove: () => false,
+        isAdmin: () => ${isAdmin}, isSupervisorOrAbove: () => false,
         topbarHtml: () => '', bottomNavHtml: () => '', bindTopbar: () => {},
       };
       window.Router = { navigate: (...args) => record('Router.navigate', args) };
@@ -67,6 +67,20 @@ async function check(name, fn) {
         listSectionsByOrg: async () => ([
           { id: 'sec-1', name: 'Programs', is_active: true },
           { id: 'sec-2', name: 'Legal', is_active: true },
+          { id: 'sec-3', name: 'Finance', is_active: true },
+        ]),
+      };
+      // The Section field now offers the caller's OWN assigned sections
+      // (RequestsAPI.mySections(), already my_section_ids()-backed) for
+      // a non-admin, rather than every section in the org
+      // (AdminAPI.listSectionsByOrg) — this test file's user is always
+      // isAdmin:false, so it exercises that path. Same two sections as
+      // the AdminAPI stub above so every existing Section-field
+      // assertion (sec-1/sec-2) stays valid unchanged.
+      window.RequestsAPI = {
+        mySections: async () => ([
+          { id: 'sec-1', name: 'Programs' },
+          { id: 'sec-2', name: 'Legal' },
         ]),
       };
       window.RoomsAPI = {
@@ -88,7 +102,7 @@ async function check(name, fn) {
         assignRoomBooking: async (meetingId, roomId) => { record('MeetingsAPI.assignRoomBooking', [meetingId, roomId]); },
         addParticipant: async (meetingId, payload) => { record('MeetingsAPI.addParticipant', [meetingId, payload]); },
         applyGroupToMeeting: async (meetingId, groupId) => { record('MeetingsAPI.applyGroupToMeeting', [meetingId, groupId]); },
-        fetchMeeting: async (id) => ({ id, title: 'Fetched Meeting' }),
+        fetchMeeting: async (id) => { record('MeetingsAPI.fetchMeeting', [id]); return { id, title: 'Fetched Meeting' }; },
         updateMeeting: async (meetingId, payload) => { record('MeetingsAPI.updateMeeting', [meetingId, payload]); },
       };
       ${richEditorSource}
@@ -357,6 +371,24 @@ async function check(name, fn) {
     await page.close();
   });
 
+  await check('a non-admin only sees their own assigned sections (RequestsAPI.mySections()), not every section in the org', async () => {
+    const { page } = await newPage({ isAdmin: false });
+    await page.evaluate(() => window.__view._openScheduleMeetingModal());
+    const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /Programs/);
+    assert.match(html, /Legal/);
+    assert.doesNotMatch(html, /Finance/, 'Finance only exists in the org-wide AdminAPI.listSectionsByOrg() list, not this user\'s mySections()');
+    await page.close();
+  });
+
+  await check('an org admin still sees every section in the org (AdminAPI.listSectionsByOrg), since can_manage_meeting() already grants them org-wide access regardless of section', async () => {
+    const { page } = await newPage({ isAdmin: true });
+    await page.evaluate(() => window.__view._openScheduleMeetingModal());
+    const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /Finance/);
+    await page.close();
+  });
+
   // ── Edit Meeting — docs/117 UAT correction: should look/behave the
   // same as the combined Schedule Meeting form (Format/Section/Date+
   // Start+Duration/Privacy/bilingual Agenda, no Timezone or Meeting
@@ -424,6 +456,25 @@ async function check(name, fn) {
     assert.strictEqual(updateCall.args[1].startAt, new Date('2026-09-20T14:00:00').toISOString());
     assert.strictEqual(updateCall.args[1].endAt, new Date('2026-09-20T15:30:00').toISOString());
     assert.strictEqual(updateCall.args[1].sectionId, 'sec-2');
+    await page.close();
+  });
+
+  await check('after saving Edit Meeting, the detail view reopens with a freshly re-fetched meeting (not the stale pre-edit object)', async () => {
+    const { page } = await newPage();
+    await page.evaluate((meeting) => window.__view._openEditMeetingModal(meeting), fixtureMeeting);
+    await page.evaluate(() => document.getElementById('meeting-form-submit').click());
+    await page.waitForTimeout(50);
+    const calls = await page.evaluate(() => window.calls);
+    const updateIdx = calls.findIndex(c => c.name === 'MeetingsAPI.updateMeeting');
+    const fetchIdx = calls.findIndex(c => c.name === 'MeetingsAPI.fetchMeeting');
+    const reopenIdx = calls.findIndex(c => c.name === '_openMeetingDetailModal');
+    assert.ok(updateIdx !== -1 && fetchIdx !== -1 && reopenIdx !== -1, 'expected updateMeeting, fetchMeeting, and a detail reopen, in that order');
+    assert.ok(updateIdx < fetchIdx && fetchIdx < reopenIdx);
+    const reopenCall = calls[reopenIdx];
+    // fetchMeeting's stub returns { id, title: 'Fetched Meeting' } —
+    // distinct from fixtureMeeting's own title, so this only passes if
+    // the FRESH record was passed through, not the stale closed-over one.
+    assert.strictEqual(reopenCall.args[0].title, 'Fetched Meeting');
     await page.close();
   });
 

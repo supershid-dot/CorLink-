@@ -100,6 +100,7 @@ async function check(name, fn) {
         listMeetingTasks: async () => ({ items: [], totalCount: 0 }),
         fetchMyNotes: async () => (${JSON.stringify(myNotes)}),
         updateMyNotes: async (participantId, notes) => { record('MeetingsAPI.updateMyNotes', [participantId, notes]); },
+        updateMinutes: async (meetingId, minutes) => { record('MeetingsAPI.updateMinutes', [meetingId, minutes]); },
         respondToInvitation: async (...args) => { record('MeetingsAPI.respondToInvitation', args); },
         fetchMeeting: async (id) => (${JSON.stringify(meeting)}),
       };
@@ -152,7 +153,11 @@ async function check(name, fn) {
     assert.match(html, /detail-participant-avatar">JS</); // Jane Staff
     assert.match(html, /detail-participant-avatar">GP</); // Guest Person
     assert.match(html, /detail-icon-btn/);
-    assert.doesNotMatch(html, /data-table/);
+    // Narrower than a bare /data-table/ substring check — the rich-text
+    // editor's own table-insert toolbar (My Notes, below) legitimately
+    // renders data-table-op="..." attributes elsewhere in this same
+    // modal, which would otherwise false-positive here.
+    assert.doesNotMatch(html, /<table class="data-table">/);
     await page.close();
   });
 
@@ -186,30 +191,34 @@ async function check(name, fn) {
     await page.close();
   });
 
-  await check('My Notes renders as an always-visible textarea with a Save button (no separate Edit Notes modal)', async () => {
+  await check('My Notes renders as an always-visible full rich-text editor with a Save button (no separate Edit Notes modal, no plain textarea)', async () => {
     const { page } = await newPage({ myNotes: 'Existing note' });
     await page.evaluate(() => window.__view._openMeetingDetailModal(window.__meeting));
     await page.waitForTimeout(30);
     const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
-    assert.match(html, /id="my-notes-textarea"/);
+    assert.match(html, /id="my-notes-panel"/);
+    assert.match(html, /rich-editor-toolbar/, 'expected the same full RichEditor toolbar used in the Requests module');
     assert.match(html, /Existing note/);
     assert.match(html, /id="save-my-notes-btn"/);
     assert.doesNotMatch(html, /id="edit-my-notes-btn"/);
+    assert.doesNotMatch(html, /id="my-notes-textarea"/, 'the old plain textarea must be gone');
     await page.close();
   });
 
-  await check('saving My Notes calls updateMyNotes with the textarea content', async () => {
+  await check('saving My Notes calls updateMyNotes with the rich editor\'s sanitized HTML content', async () => {
     const { page } = await newPage({ myNotes: null });
     await page.evaluate(() => window.__view._openMeetingDetailModal(window.__meeting));
     await page.waitForTimeout(30);
-    await page.fill('#my-notes-textarea', 'A fresh private note');
+    await page.evaluate(() => {
+      document.querySelector('#my-notes-panel .rich-editor-body').innerHTML = '<p>A fresh private note</p>';
+    });
     await page.click('#save-my-notes-btn');
     await page.waitForTimeout(30);
     const calls = await page.evaluate(() => window.calls);
     const saveCall = calls.find(c => c.name === 'MeetingsAPI.updateMyNotes');
     assert.ok(saveCall, 'expected updateMyNotes to be called');
     assert.strictEqual(saveCall.args[0], 'p1');
-    assert.strictEqual(saveCall.args[1], 'A fresh private note');
+    assert.strictEqual(saveCall.args[1], '<p>A fresh private note</p>');
     await page.close();
   });
 
@@ -248,6 +257,43 @@ async function check(name, fn) {
     assert.match(html, /Room unavailable/);
     assert.doesNotMatch(html, /id="detail-edit-btn"/);
     assert.doesNotMatch(html, /id="detail-cancel-btn"/);
+    await page.close();
+  });
+
+  await check('the Location fact has no timezone text and no Assign/Change/Detach/View-in-Rooms room-action buttons', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openMeetingDetailModal(window.__meeting));
+    await page.waitForTimeout(30);
+    const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.doesNotMatch(html, /Indian\/Maldives/);
+    assert.doesNotMatch(html, /id="view-booking-in-rooms"/);
+    assert.doesNotMatch(html, /id="change-room-btn"/);
+    assert.doesNotMatch(html, /id="detach-room-btn"/);
+    assert.doesNotMatch(html, /id="assign-room-btn"/);
+    // the room name/status itself must still be shown, just without actions
+    assert.match(html, /HQ Meeting Room A/);
+    await page.close();
+  });
+
+  await check('Meeting Minutes uses the same full rich-text editor as Requests, and Save sends its sanitized HTML', async () => {
+    const { page } = await newPage({ meetingOverrides: { minutes: null } });
+    await page.evaluate(() => window.__view._openMeetingDetailModal(window.__meeting));
+    await page.waitForTimeout(30);
+    await page.click('#edit-minutes-btn');
+    await page.waitForTimeout(30);
+    const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /rich-editor-toolbar/, 'expected the same full RichEditor toolbar used in the Requests module');
+    assert.doesNotMatch(html, /<textarea[^>]*name="minutes"/, 'the old plain textarea must be gone');
+    await page.evaluate(() => {
+      document.querySelector('#edit-minutes-form .rich-editor-body').innerHTML = '<p>Decided to proceed.</p>';
+    });
+    await page.evaluate(() => document.getElementById('edit-minutes-form').requestSubmit());
+    await page.waitForTimeout(30);
+    const calls = await page.evaluate(() => window.calls);
+    const saveCall = calls.find(c => c.name === 'MeetingsAPI.updateMinutes');
+    assert.ok(saveCall, 'expected updateMinutes to be called');
+    assert.strictEqual(saveCall.args[0], 'meeting-1');
+    assert.strictEqual(saveCall.args[1], '<p>Decided to proceed.</p>');
     await page.close();
   });
 

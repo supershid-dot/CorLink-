@@ -604,10 +604,18 @@ const MeetingsView = {
   // itself; re-deriving that here would either duplicate it or silently
   // diverge from it.
   async _openEditMeetingModal(meeting) {
+    if (!this._ensureUserContext()) return;
     if (meeting.status === 'cancelled' || this._effectiveStatus(meeting) === 'completed') return;
 
+    // Mirrors _canOverrideLock()'s own same-org admin check: a super
+    // admin sees every org's full section list; an org admin only
+    // within their own organization (an authority_admin visiting a
+    // meeting outside their org, e.g. as a super admin acting on their
+    // behalf, is not itself an admin of that org and gets the narrower
+    // mySections() list like anyone else).
+    const orgWideAccess = this._user.is_super_admin || (this._isAdmin && meeting.organization_id === this._orgId);
     let sections = [];
-    try { sections = (await AdminAPI.listSectionsByOrg(meeting.organization_id)).filter(s => s.is_active); }
+    try { sections = await this._fetchMeetingFormSections(meeting.organization_id, { orgWideAccess }); }
     catch (err) { console.warn('CorLink: failed to load sections for the edit-meeting form', err); }
 
     const start = new Date(meeting.start_at), end = new Date(meeting.end_at);
@@ -803,6 +811,19 @@ const MeetingsView = {
         await MeetingsAPI.updateMeeting(meeting.id, payload);
         this._closeModal();
         await this._renderTab();
+        // Reopen the detail view with the FRESH record — every path
+        // into Edit comes from there (its own Edit button), and the
+        // stale `meeting` object closed over here still has the old
+        // title/time/location/section, so re-showing it as-is would
+        // still look unchanged until the user manually refreshed
+        // (UAT: "when i make a change ... the changes are not shown
+        // immediately, i have to refresh to see the changes").
+        try {
+          const fresh = await MeetingsAPI.fetchMeeting(meeting.id);
+          this._openMeetingDetailModal(fresh);
+        } catch (err) {
+          console.error('CorLink: meeting updated but failed to reopen its detail view', err);
+        }
       } catch (err) {
         errEl.textContent = err.message || "This meeting could not be updated — it was not changed.";
         errEl.classList.remove('hidden');
@@ -839,17 +860,41 @@ const MeetingsView = {
     return true;
   },
 
+  // The Schedule Meeting/Edit Meeting forms' Section field: for a
+  // plain staff member, a section supervisor, or a department/command
+  // head, this must offer only the sections their own user_assignments
+  // actually cover — otherwise anyone could book a meeting "under" any
+  // section in the org (UAT: "he can [see] all the sections here ...
+  // it should limit to his section or department or command, whatever
+  // section he is assigned"). RequestsAPI.mySections() already wraps
+  // my_section_ids() (the same RPC can_manage_meeting()'s own
+  // section_id IN (...) check is built on, docs/116), which expands a
+  // command/department/division-level assignment down to every section
+  // beneath it and unions the sections across all of the caller's
+  // assignments — exactly this requirement, already used the same way
+  // by every other module (entry.js, requests.js, tasks.js, etc.).
+  // orgWideAccess is the one exception: an org-wide admin already has
+  // can_manage_meeting()'s own is_admin() branch regardless of section,
+  // so restricting their own picker would only get in the way of the
+  // oversight their role already grants — they keep the full org list.
+  async _fetchMeetingFormSections(orgId, { orgWideAccess }) {
+    if (orgWideAccess) {
+      return (await AdminAPI.listSectionsByOrg(orgId)).filter(s => s.is_active);
+    }
+    return RequestsAPI.mySections();
+  },
+
   async _openScheduleMeetingModal({ prefillRoomId = null, prefillDate = null, prefillTime = null, onSuccess = null } = {}) {
     if (!this._ensureUserContext()) return;
 
     let rooms = [], groups = [], orgUsers = [], sections = [];
     try {
-      const fetches = [MeetingsAPI.fetchMeetingGroups(this._orgId), AdminAPI.listUsersByOrg(this._orgId), AdminAPI.listSectionsByOrg(this._orgId)];
+      const fetches = [MeetingsAPI.fetchMeetingGroups(this._orgId), AdminAPI.listUsersByOrg(this._orgId), this._fetchMeetingFormSections(this._orgId, { orgWideAccess: this._isAdmin })];
       if (this._roomsEnabled) fetches.push(RoomsAPI.fetchRooms(this._orgId));
       const results = await Promise.all(fetches);
       groups = results[0] || [];
       orgUsers = (results[1] || []).filter(u => u.is_active && u.id !== this._user.id);
-      sections = (results[2] || []).filter(s => s.is_active);
+      sections = results[2] || [];
       if (this._roomsEnabled) rooms = (results[3] || []).filter(r => r.is_active);
     } catch (err) {
       console.error('CorLink: failed to load rooms/groups/staff/sections for the schedule-meeting form', err);
@@ -1666,7 +1711,6 @@ const MeetingsView = {
     const canEdit = canManageEffective && meeting.status !== 'cancelled' && eff !== 'completed';
     const canCancel = canManageEffective && meeting.status !== 'cancelled';
     const canManageParticipants = canManageEffective && meeting.status !== 'cancelled';
-    const canManageRoom = canManageEffective && meeting.status !== 'cancelled' && this._roomsEnabled;
     const canUploadAttachments = canManageEffective && meeting.status !== 'cancelled';
     // The caller's own active participant row, if any — drives the
     // "Your RSVP" block below. A caller with no participant row (e.g.
@@ -1707,13 +1751,12 @@ const MeetingsView = {
         </div>
         <div>
           <div class="detail-fact-label">Time</div>
-          <div class="detail-fact-value">${this._timeRange(meeting.start_at, meeting.end_at)} <span class="structure-empty" style="font-weight:400;">Indian/Maldives</span></div>
+          <div class="detail-fact-value">${this._timeRange(meeting.start_at, meeting.end_at)}</div>
         </div>
         <div>
           <div class="detail-fact-label">Location</div>
           <div class="detail-fact-value" style="font-weight:400;">
             ${this._renderLocationDetail(meeting, booking)}
-            ${canManageRoom ? this._renderRoomActions(meeting, booking) : (!this._roomsEnabled && meeting.location_mode === 'room' ? `<p class="field-hint">Room assignment requires the Rooms module to be enabled for your organization.</p>` : '')}
           </div>
         </div>
         <div>
@@ -1757,7 +1800,7 @@ const MeetingsView = {
       ` : ''}
     `, { large: true });
 
-    this._bindMeetingDetailModal(meeting, participants, booking, attachments, { canManageParticipants, canManageRoom });
+    this._bindMeetingDetailModal(meeting, participants, booking, attachments, { canManageParticipants, myNotes });
 
     document.getElementById('detail-edit-btn')?.addEventListener('click', () => {
       this._closeModal();
@@ -1853,9 +1896,7 @@ const MeetingsView = {
   // Only the fields update_entire_series() actually accepts: template
   // fields plus time-of-day (TIME, not a date) and timezone. No date,
   // no recurrence field, no room id/selector — a date change stays a
-  // per-occurrence edit via _openEditMeetingModal(), and room
-  // reassignment stays a per-occurrence action via
-  // _openAssignRoomModal()/_openChangeRoomModal(): this RPC never
+  // per-occurrence edit via _openEditMeetingModal(); this RPC never
   // assigns a room, it only reschedules an occurrence's EXISTING
   // booking to match a new time-of-day.
   _openSeriesEditModal(meeting, scope) {
@@ -2639,7 +2680,7 @@ const MeetingsView = {
     return `
       <div class="detail-section-label">Meeting Minutes <span class="field-hint">shared with participants</span>${meeting.minutes_finalized ? ' <span class="badge badge-outline">Finalized</span>' : ''}</div>
       <div>
-        ${hasMinutes ? `<div style="white-space:pre-wrap;">${this._escapeHtml(meeting.minutes)}</div>` : `<div class="structure-empty">No minutes yet.</div>`}
+        ${hasMinutes ? `<div class="${RichEditor.dvClass(meeting.minutes).trim()}" style="white-space:pre-wrap;">${RichEditor.sanitize(meeting.minutes)}</div>` : `<div class="structure-empty">No minutes yet.</div>`}
         ${canEditNow || canFinalize ? `
           <div class="field-row" style="gap:8px; margin-top:8px;">
             ${canEditNow ? `<button type="button" class="btn btn-secondary btn-xs" id="edit-minutes-btn">${hasMinutes ? 'Edit Minutes' : 'Add Minutes'}</button>` : ''}
@@ -2650,13 +2691,21 @@ const MeetingsView = {
     `;
   },
 
+  // Same full rich-text editor (toolbar + EN/Dhivehi toggle) as the
+  // Requests module's compose/reply forms (js/lib/rich-editor.js,
+  // RichEditor.create()) — not the plain-textarea-with-toggle pattern
+  // used for the meeting's own Description/Agenda field.
   _openEditMinutesModal(meeting) {
+    const lang = RichEditor.isDivehi(meeting.minutes || '') ? 'dv' : 'en';
     this._openModal(`
       <h3>${meeting.minutes ? 'Edit' : 'Add'} Minutes</h3>
       <form id="edit-minutes-form" class="modal-form">
         <div class="field-group">
-          <label class="field-label">Minutes</label>
-          <textarea class="field-input-plain" name="minutes" rows="8">${this._escapeHtml(meeting.minutes || '')}</textarea>
+          <div class="field-group-row">
+            <label class="field-label">Minutes</label>
+            ${RichEditor.langToggleHtml('minutesLanguage', lang)}
+          </div>
+          <div id="edit-minutes-body"></div>
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
@@ -2666,11 +2715,14 @@ const MeetingsView = {
       </form>
     `);
     const form = document.getElementById('edit-minutes-form');
+    const editor = RichEditor.create(document.getElementById('edit-minutes-body'), { language: lang });
+    editor.setHTML(meeting.minutes || '');
+    RichEditor.bindLangToggle(form, 'minutesLanguage', (l) => editor.setLanguage(l));
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const minutes = (new FormData(form).get('minutes') || '').trim();
+      const minutes = editor.getHTML();
       try {
-        await MeetingsAPI.updateMinutes(meeting.id, minutes || null);
+        await MeetingsAPI.updateMinutes(meeting.id, (minutes && minutes !== '<p><br></p>') ? minutes : null);
         this._closeModal();
         await this._openMeetingDetailModal(meeting);
       } catch (err) {
@@ -3049,11 +3101,9 @@ const MeetingsView = {
   // mirroring RSVP's identical carve-out). Only gated on the
   // meeting's own cancelled status, matching update_my_notes()'s own
   // server-side rule — reads always work regardless of status.
-  // Always-visible inline editor (not a separate modal) — private to
-  // the viewing participant, saved via its own dedicated own-row RPC
-  // (update_my_notes, supabase/patch-meetings-personal-notes.sql),
-  // gated only on the meeting's own cancelled status, matching that
-  // RPC's server-side rule exactly.
+  // Always-visible inline editor (not a separate modal), using the
+  // same full rich-text editor (toolbar + EN/Dhivehi toggle) as the
+  // Requests module's compose/reply forms — not a plain textarea.
   _renderMyNotesPanel(meeting, participant, myNotes) {
     const canEditNotes = meeting.status !== 'cancelled';
     const lang = RichEditor.isDivehi(myNotes || '') ? 'dv' : 'en';
@@ -3062,12 +3112,12 @@ const MeetingsView = {
       ${canEditNotes ? `
         <div id="my-notes-panel">
           ${RichEditor.langToggleHtml('myNotesLanguage', lang)}
-          <textarea class="field-input-plain${lang === 'dv' ? ' field-divehi' : ''}" id="my-notes-textarea" rows="4" placeholder="Add a private note — only you can see this.">${this._escapeHtml(myNotes || '')}</textarea>
+          <div id="my-notes-editor-body"></div>
           <div class="modal-error alert alert-error hidden" id="my-notes-error"></div>
           <button type="button" class="btn btn-secondary btn-xs" id="save-my-notes-btn" style="margin-top:8px;">Save</button>
         </div>
       ` : `
-        <div>${myNotes && myNotes.trim() !== '' ? `<div class="${RichEditor.dvClass(myNotes).trim()}" style="white-space:pre-wrap;">${this._escapeHtml(myNotes)}</div>` : `<div class="structure-empty">No personal notes yet.</div>`}</div>
+        <div>${myNotes && myNotes.trim() !== '' ? `<div class="${RichEditor.dvClass(myNotes).trim()}" style="white-space:pre-wrap;">${RichEditor.sanitize(myNotes)}</div>` : `<div class="structure-empty">No personal notes yet.</div>`}</div>
       `}
     `;
   },
@@ -3081,7 +3131,6 @@ const MeetingsView = {
           — ${new Date(booking.start_at).toLocaleString()} to ${new Date(booking.end_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           <span class="badge ${booking.status === 'confirmed' ? 'badge-success' : 'badge-warning'}" style="margin-left:6px;">${this._capitalize(booking.status)}</span>
         </div>
-        <button type="button" class="btn btn-secondary btn-xs" id="view-booking-in-rooms" style="margin-top:6px;">View in Rooms</button>
       `;
     }
     if (meeting.location_mode === 'external') {
@@ -3094,18 +3143,6 @@ const MeetingsView = {
         : `<div class="alert alert-warning"><i class="ti ti-alert-triangle"></i> This meeting's virtual link is missing or unsafe and was not shown.</div>`;
     }
     return `<div class="structure-empty">Not set.</div>`;
-  },
-
-  _renderRoomActions(meeting, booking) {
-    if (booking) {
-      return `
-        <div class="field-row" style="margin-top:6px; gap:8px;">
-          <button type="button" class="btn btn-secondary btn-xs" id="change-room-btn">Change Room</button>
-          <button type="button" class="btn btn-secondary btn-xs" id="detach-room-btn">Detach Room</button>
-        </div>
-      `;
-    }
-    return `<button type="button" class="btn btn-secondary btn-xs" id="assign-room-btn" style="margin-top:6px;">Assign Room</button>`;
   },
 
   _renderParticipants(participants, meeting, canManage) {
@@ -3175,7 +3212,7 @@ const MeetingsView = {
     return parts.join(' · ');
   },
 
-  async _bindMeetingDetailModal(meeting, participants, booking, attachments, { canManageParticipants, canManageRoom }) {
+  async _bindMeetingDetailModal(meeting, participants, booking, attachments, { canManageParticipants, myNotes }) {
     const myParticipant = participants.find(p => p.user_id === this._user.id);
     document.getElementById('rsvp-accept-btn')?.addEventListener('click', () => {
       this._closeModal();
@@ -3184,21 +3221,6 @@ const MeetingsView = {
     document.getElementById('rsvp-decline-btn')?.addEventListener('click', () => {
       this._closeModal();
       this._openRsvpModal(meeting, myParticipant, 'declined');
-    });
-    document.getElementById('view-booking-in-rooms')?.addEventListener('click', () => {
-      Router.navigate('rooms', { bookingId: booking.id });
-    });
-    document.getElementById('assign-room-btn')?.addEventListener('click', () => {
-      this._closeModal();
-      this._openAssignRoomModal(meeting);
-    });
-    document.getElementById('change-room-btn')?.addEventListener('click', () => {
-      this._closeModal();
-      this._openChangeRoomModal(meeting, booking);
-    });
-    document.getElementById('detach-room-btn')?.addEventListener('click', () => {
-      this._closeModal();
-      this._openDetachRoomModal(meeting, booking);
     });
     document.getElementById('add-participant-btn')?.addEventListener('click', () => {
       this._closeModal();
@@ -3230,14 +3252,14 @@ const MeetingsView = {
     });
     const myNotesPanel = document.getElementById('my-notes-panel');
     if (myNotesPanel && myParticipant) {
-      const notesTextarea = document.getElementById('my-notes-textarea');
-      const syncDir = (newLang) => notesTextarea.classList.toggle('field-divehi', newLang === 'dv');
-      RichEditor.bindLangToggle(myNotesPanel, 'myNotesLanguage', syncDir);
-      RichEditor.bindAutoDetect(notesTextarea, myNotesPanel, 'myNotesLanguage', syncDir);
+      const lang = RichEditor.isDivehi(myNotes || '') ? 'dv' : 'en';
+      const notesEditor = RichEditor.create(document.getElementById('my-notes-editor-body'), { language: lang });
+      notesEditor.setHTML(myNotes || '');
+      RichEditor.bindLangToggle(myNotesPanel, 'myNotesLanguage', (l) => notesEditor.setLanguage(l));
       document.getElementById('save-my-notes-btn')?.addEventListener('click', async () => {
-        const notes = notesTextarea.value.trim();
+        const notes = notesEditor.getHTML();
         try {
-          await MeetingsAPI.updateMyNotes(myParticipant.id, notes || null);
+          await MeetingsAPI.updateMyNotes(myParticipant.id, (notes && notes !== '<p><br></p>') ? notes : null);
           this._closeModal();
           await this._openMeetingDetailModal(meeting);
         } catch (err) {
@@ -3544,148 +3566,6 @@ const MeetingsView = {
       e.preventDefault();
       try {
         await MeetingsAPI.removeParticipant(participant.id, new FormData(form).get('reason') || null);
-        this._closeModal();
-        this._openMeetingDetailModal(meeting);
-      } catch (err) {
-        const errEl = form.querySelector('.modal-error');
-        errEl.textContent = err.message;
-        errEl.classList.remove('hidden');
-      }
-    });
-  },
-
-  // ── Room assignment ──────────────────────────────────────────────
-  async _openAssignRoomModal(meeting) {
-    let rooms = [];
-    try { rooms = (await RoomsAPI.fetchRooms(meeting.organization_id)).filter(r => r.is_active); }
-    catch (err) { console.error('CorLink: failed to load rooms', err); }
-
-    this._openModal(`
-      <h3>Assign Room</h3>
-      <p class="field-hint">Uses this meeting's own time window (${new Date(meeting.start_at).toLocaleString()} – ${new Date(meeting.end_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}, ${this._escapeHtml(meeting.timezone)}).</p>
-      <form id="assign-room-form" class="modal-form">
-        <div class="field-group">
-          <label class="field-label">Room</label>
-          <select class="field-select" name="roomId" required>
-            ${rooms.map(r => `<option value="${r.id}">${this._escapeHtml(r.name)}</option>`).join('')}
-          </select>
-        </div>
-        <div id="assign-availability-indicator" class="field-hint"></div>
-        <div class="modal-error alert alert-error hidden"></div>
-        <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
-          <button type="button" class="btn btn-secondary" id="assign-check-availability-btn">Check Availability</button>
-          <button type="submit" class="btn btn-primary" id="assign-room-submit">Assign Room</button>
-        </div>
-      </form>
-    `);
-    const form = document.getElementById('assign-room-form');
-    const errEl = form.querySelector('.modal-error');
-    const availEl = document.getElementById('assign-availability-indicator');
-    const submitBtn = document.getElementById('assign-room-submit');
-
-    document.getElementById('assign-check-availability-btn').addEventListener('click', async () => {
-      const roomId = new FormData(form).get('roomId');
-      if (!roomId) return;
-      availEl.textContent = 'Checking…';
-      try {
-        const free = await RoomsAPI.checkRoomAvailability({ roomId, startAt: meeting.start_at, endAt: meeting.end_at });
-        availEl.innerHTML = free
-          ? `<span style="color:var(--color-success-dark);"><i class="ti ti-circle-check"></i> This slot is available.</span>`
-          : `<span style="color:var(--color-error-dark);"><i class="ti ti-circle-x"></i> This slot conflicts with an existing booking or block.</span>`;
-      } catch (err) {
-        availEl.textContent = err.message || 'Could not check availability.';
-      }
-    });
-
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      submitBtn.disabled = true;
-      try {
-        await MeetingsAPI.assignRoomBooking(meeting.id, new FormData(form).get('roomId'));
-        this._closeModal();
-        this._openMeetingDetailModal(meeting);
-      } catch (err) {
-        errEl.textContent = err.message;
-        errEl.classList.remove('hidden');
-        submitBtn.disabled = false;
-      }
-    });
-  },
-
-  // Uses the existing, already-implemented reschedule_booking RPC
-  // (via RoomsAPI, docs/12 §18's "approved backend flow" instruction)
-  // rather than inventing a direct booking-link update — always the
-  // meeting's own time window, never an override.
-  async _openChangeRoomModal(meeting, booking) {
-    let rooms = [];
-    try { rooms = (await RoomsAPI.fetchRooms(meeting.organization_id)).filter(r => r.is_active && r.id !== booking.room_id); }
-    catch (err) { console.error('CorLink: failed to load rooms', err); }
-    if (rooms.length === 0) {
-      this._openModal(`
-        <h3>Change Room</h3>
-        <p>No other active rooms are available in this organization.</p>
-        <div class="modal-actions"><button type="button" class="btn btn-secondary" data-close-modal>Close</button></div>
-      `);
-      return;
-    }
-
-    this._openModal(`
-      <h3>Change Room</h3>
-      <form id="change-room-form" class="modal-form">
-        <div class="field-group">
-          <label class="field-label">New Room</label>
-          <select class="field-select" name="roomId" required>
-            ${rooms.map(r => `<option value="${r.id}">${this._escapeHtml(r.name)}</option>`).join('')}
-          </select>
-        </div>
-        <div class="modal-error alert alert-error hidden"></div>
-        <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
-          <button type="submit" class="btn btn-primary">Change Room</button>
-        </div>
-      </form>
-    `);
-    const form = document.getElementById('change-room-form');
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      try {
-        await RoomsAPI.rescheduleBooking({
-          bookingId: booking.id,
-          newRoomId: new FormData(form).get('roomId'),
-          newStartAt: meeting.start_at, newEndAt: meeting.end_at, newTimezone: meeting.timezone,
-        });
-        this._closeModal();
-        this._openMeetingDetailModal(meeting);
-      } catch (err) {
-        const errEl = form.querySelector('.modal-error');
-        errEl.textContent = err.message;
-        errEl.classList.remove('hidden');
-      }
-    });
-  },
-
-  _openDetachRoomModal(meeting, booking) {
-    this._openModal(`
-      <h3>Detach Room</h3>
-      <div class="alert alert-warning"><i class="ti ti-alert-triangle"></i> This will cancel the linked room booking. The meeting will remain active, but will no longer show a room location.</div>
-      <form id="detach-room-form" class="modal-form">
-        <div class="field-group">
-          <label class="field-label">Reason (optional)</label>
-          <textarea class="field-input-plain" name="reason" rows="2"></textarea>
-        </div>
-        <div class="modal-error alert alert-error hidden"></div>
-        <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" data-close-modal>Keep Room</button>
-          <button type="submit" class="btn btn-primary">Detach Room</button>
-        </div>
-      </form>
-    `);
-    const form = document.getElementById('detach-room-form');
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      try {
-        await MeetingsAPI.detachRoomBooking(meeting.id, new FormData(form).get('reason') || null);
         this._closeModal();
         this._openMeetingDetailModal(meeting);
       } catch (err) {

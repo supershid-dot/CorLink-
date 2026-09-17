@@ -2099,7 +2099,15 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
 .detail-pill--outline { background: transparent; border-color: var(--color-border); color: var(--color-text-muted); }
 .detail-pill--success { background: var(--color-success-bg); color: var(--color-success-dark); }
 
-.detail-facts { display: flex; flex-direction: column; gap: 14px; margin-bottom: 18px; }
+/* Two columns so the Date/Time/Location/Organised-By facts read as a
+   compact block instead of a long single-column scroll (UAT: "arrange
+   this form in two columns, now its difficult to look and looks
+   messy") — same 760px collapse breakpoint as .modal-two-col so both
+   patterns behave consistently inside the same modal widths. */
+.detail-facts { display: grid; grid-template-columns: 1fr 1fr; column-gap: 24px; row-gap: 14px; margin-bottom: 18px; }
+@media (max-width: 760px) {
+  .detail-facts { grid-template-columns: 1fr; }
+}
 .detail-fact-label {
   font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
   color: var(--color-text-muted); margin-bottom: 3px;
