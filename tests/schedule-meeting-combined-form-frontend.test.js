@@ -250,18 +250,40 @@ async function check(name, fn) {
     await page.close();
   });
 
-  await check('bilingual Agenda/Notes: typing Thaana auto-flips the textarea to RTL (field-divehi)', async () => {
+  await check('Agenda/Notes uses the same full rich-text editor as Requests (toolbar + EN/Dhivehi toggle), not a plain textarea', async () => {
     const { page } = await newPage();
     await page.evaluate(() => window.__view._openScheduleMeetingModal());
-    const beforeClass = await page.evaluate(() => document.getElementById('sm-description-textarea').classList.contains('field-divehi'));
+    const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /rich-editor-toolbar/, 'expected the same full RichEditor toolbar used in the Requests module');
+    assert.match(html, /data-lang-toggle="descriptionLanguage"/);
+    assert.doesNotMatch(html, /id="sm-description-textarea"/, 'the old plain textarea must be gone');
+    await page.close();
+  });
+
+  await check('the Agenda/Notes language toggle flips the rich editor body to RTL (field-divehi)', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openScheduleMeetingModal());
+    const beforeClass = await page.evaluate(() => document.querySelector('#sm-description-body .rich-editor-body').classList.contains('field-divehi'));
     assert.strictEqual(beforeClass, false);
-    await page.evaluate(() => {
-      const ta = document.getElementById('sm-description-textarea');
-      ta.value = 'ބައްދަލުވުމުގެ އެޖެންޑާ';
-      ta.dispatchEvent(new Event('input'));
-    });
-    const afterClass = await page.evaluate(() => document.getElementById('sm-description-textarea').classList.contains('field-divehi'));
+    await page.click('[data-lang-toggle="descriptionLanguage"] [data-value="dv"]');
+    const afterClass = await page.evaluate(() => document.querySelector('#sm-description-body .rich-editor-body').classList.contains('field-divehi'));
     assert.strictEqual(afterClass, true);
+    await page.close();
+  });
+
+  await check('submitting Schedule Meeting sends the Agenda editor\'s sanitized HTML as the description', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openScheduleMeetingModal({ prefillRoomId: 'room-1', prefillDate: '2026-09-20', prefillTime: '09:00' }));
+    await page.evaluate(() => {
+      document.querySelector('#schedule-meeting-form [name="title"]').value = 'Budget Review';
+      document.querySelector('#sm-description-body .rich-editor-body').innerHTML = '<p>Discuss Q3 numbers</p>';
+    });
+    await page.evaluate(() => document.getElementById('sm-submit-btn').click());
+    await page.waitForTimeout(50);
+    const calls = await page.evaluate(() => window.calls);
+    const createCall = calls.find(c => c.name === 'MeetingsAPI.createMeeting');
+    assert.ok(createCall);
+    assert.strictEqual(createCall.args[0].description, '<p>Discuss Q3 numbers</p>');
     await page.close();
   });
 
@@ -475,6 +497,18 @@ async function check(name, fn) {
     // distinct from fixtureMeeting's own title, so this only passes if
     // the FRESH record was passed through, not the stale closed-over one.
     assert.strictEqual(reopenCall.args[0].title, 'Fetched Meeting');
+    await page.close();
+  });
+
+  await check('Edit Meeting\'s Agenda/Notes also uses the full rich-text editor, prefilled with the meeting\'s existing description', async () => {
+    const { page } = await newPage();
+    const meetingWithDescription = { ...fixtureMeeting, description: '<p>Existing agenda</p>' };
+    await page.evaluate((meeting) => window.__view._openEditMeetingModal(meeting), meetingWithDescription);
+    const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /rich-editor-toolbar/);
+    assert.doesNotMatch(html, /id="edit-meeting-description-textarea"/);
+    const bodyHtml = await page.evaluate(() => document.querySelector('#edit-meeting-description-body .rich-editor-body').innerHTML);
+    assert.match(bodyHtml, /Existing agenda/);
     await page.close();
   });
 

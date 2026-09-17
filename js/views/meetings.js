@@ -691,9 +691,11 @@ const MeetingsView = {
               </div>
             </div>
             <div class="field-group">
-              <label class="field-label">Agenda / Notes (optional)</label>
-              ${RichEditor.langToggleHtml('descriptionLanguage', RichEditor.isDivehi(meeting.description || '') ? 'dv' : 'en')}
-              <textarea class="field-input-plain${RichEditor.dvClass(meeting.description || '')}" name="description" rows="3" id="edit-meeting-description-textarea">${this._escapeHtml(meeting.description || '')}</textarea>
+              <div class="field-group-row">
+                <label class="field-label">Agenda / Notes (optional)</label>
+                ${RichEditor.langToggleHtml('descriptionLanguage', RichEditor.isDivehi(meeting.description || '') ? 'dv' : 'en')}
+              </div>
+              <div id="edit-meeting-description-body"></div>
             </div>
           </div>
           <div class="modal-two-col-side">
@@ -718,11 +720,12 @@ const MeetingsView = {
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="button" class="btn btn-secondary" id="meeting-form-cancel-btn">Cancel</button>
           <button type="submit" class="btn btn-primary" id="meeting-form-submit">Save Changes</button>
         </div>
       </form>
     `, { large: true });
+    this._bindBackToDetail('meeting-form-cancel-btn', meeting);
 
     const form = document.getElementById('meeting-form');
     const errEl = form.querySelector('.modal-error');
@@ -735,10 +738,11 @@ const MeetingsView = {
     const hybridToggleGroup = document.getElementById('meeting-hybrid-toggle-group');
     const hybridCheckbox = document.getElementById('meeting-hybrid-checkbox');
 
-    const editDescriptionTextarea = document.getElementById('edit-meeting-description-textarea');
-    const syncEditDescriptionDir = (lang) => editDescriptionTextarea.classList.toggle('field-divehi', lang === 'dv');
-    RichEditor.bindLangToggle(form, 'descriptionLanguage', syncEditDescriptionDir);
-    RichEditor.bindAutoDetect(editDescriptionTextarea, form, 'descriptionLanguage', syncEditDescriptionDir);
+    const editDescriptionEditor = RichEditor.create(document.getElementById('edit-meeting-description-body'), {
+      language: RichEditor.isDivehi(meeting.description || '') ? 'dv' : 'en',
+    });
+    editDescriptionEditor.setHTML(meeting.description || '');
+    RichEditor.bindLangToggle(form, 'descriptionLanguage', (l) => editDescriptionEditor.setLanguage(l));
 
     const syncLocationFields = () => {
       const mode = locSelect.value;
@@ -791,9 +795,10 @@ const MeetingsView = {
       submitBtn.disabled = true;
       submitBtn.textContent = 'Saving…';
       try {
+        const description = editDescriptionEditor.getHTML();
         const payload = {
           title: fd.get('title'),
-          description: fd.get('description') || null,
+          description: (description && description !== '<p><br></p>') ? description : null,
           visibility: fd.get('visibility'),
           startAt: startAt.toISOString(), endAt: endAt.toISOString(),
           locationMode,
@@ -993,9 +998,11 @@ const MeetingsView = {
               <input class="field-input-plain" type="date" name="seriesEndDate" value="${defSeriesEnd}" />
             </div>
             <div class="field-group">
-              <label class="field-label">Agenda / Notes (optional)</label>
-              ${RichEditor.langToggleHtml('descriptionLanguage', 'en')}
-              <textarea class="field-input-plain" name="description" rows="3" id="sm-description-textarea"></textarea>
+              <div class="field-group-row">
+                <label class="field-label">Agenda / Notes (optional)</label>
+                ${RichEditor.langToggleHtml('descriptionLanguage', 'en')}
+              </div>
+              <div id="sm-description-body"></div>
             </div>
           </div>
           <div class="modal-two-col-side">
@@ -1166,15 +1173,14 @@ const MeetingsView = {
       refreshDurationCap();
     }
 
-    // ── Agenda/Notes — EN/Dhivehi toggle, same RichEditor pattern used
-    // everywhere else text is authored in this app (My Notes above,
-    // Entry/Request threads) — a single field, no separate language
-    // column; isDivehi() auto-detects Thaana on read for anything typed
-    // without ever touching the toggle. ─────────────────────────────
-    const descriptionTextarea = document.getElementById('sm-description-textarea');
-    const syncDescriptionDir = (lang) => descriptionTextarea.classList.toggle('field-divehi', lang === 'dv');
-    RichEditor.bindLangToggle(form, 'descriptionLanguage', syncDescriptionDir);
-    RichEditor.bindAutoDetect(descriptionTextarea, form, 'descriptionLanguage', syncDescriptionDir);
+    // ── Agenda/Notes — same full RichEditor toolbar + EN/Dhivehi toggle
+    // used by the Requests module's compose/reply forms (My Notes and
+    // Meeting Minutes above use the identical pattern) — a single
+    // field, no separate language column; isDivehi() auto-detects
+    // Thaana on read for anything typed without ever touching the
+    // toggle. ─────────────────────────────────────────────────────────
+    const descriptionEditor = RichEditor.create(document.getElementById('sm-description-body'), { language: 'en' });
+    RichEditor.bindLangToggle(form, 'descriptionLanguage', (l) => descriptionEditor.setLanguage(l));
 
     // ── Recurrence quick-picks ─────────────────────────────────────
     let recurrence = 'none';
@@ -1295,6 +1301,8 @@ const MeetingsView = {
       const fd = new FormData(form);
       const title = (fd.get('title') || '').trim();
       if (!title) { errEl.textContent = 'Title is required.'; errEl.classList.remove('hidden'); return; }
+      const descriptionHtml = descriptionEditor.getHTML();
+      const description = (descriptionHtml && descriptionHtml !== '<p><br></p>') ? descriptionHtml : null;
       const date = fd.get('date'), startTimeStr = fd.get('startTime');
       if (!date || !startTimeStr) { errEl.textContent = 'Date and start time are required.'; errEl.classList.remove('hidden'); return; }
       const durationMin = parseInt(fd.get('duration'), 10) || 0;
@@ -1336,7 +1344,7 @@ const MeetingsView = {
         let allMeetingIds = [];
         if (recurrence === 'none') {
           const meetingId = await MeetingsAPI.createMeeting({
-            title, description: fd.get('description') || null,
+            title, description,
             visibility: fd.get('visibility'), startAt: startAt.toISOString(), endAt: endAt.toISOString(),
             timezone: 'Indian/Maldives', locationMode,
             externalLocation: locationMode === 'external' ? externalLocation : null,
@@ -1356,7 +1364,7 @@ const MeetingsView = {
           const [pattern, interval] = recurrence.split(':');
           const endTimeStr = `${String(endAt.getHours()).padStart(2, '0')}:${String(endAt.getMinutes()).padStart(2, '0')}`;
           const occurrences = await MeetingsAPI.createRecurringMeeting({
-            title, description: fd.get('description') || null,
+            title, description,
             visibility: fd.get('visibility'), recurrencePattern: pattern, intervalCount: parseInt(interval, 10) || 1,
             seriesStartDate: date, seriesEndDate, startTime: startTimeStr, endTime: endTimeStr,
             timezone: 'Indian/Maldives', locationMode,
@@ -1769,7 +1777,7 @@ const MeetingsView = {
       ${meeting.description ? `
         <div style="margin-top:12px;">
           <label class="field-label">Description</label>
-          <div class="${RichEditor.dvClass(meeting.description).trim()}" style="white-space:pre-wrap; margin-top:6px;">${this._escapeHtml(meeting.description)}</div>
+          <div class="${RichEditor.dvClass(meeting.description).trim()}" style="white-space:pre-wrap; margin-top:6px;">${RichEditor.sanitize(meeting.description)}</div>
         </div>
       ` : ''}
 
@@ -1858,12 +1866,13 @@ const MeetingsView = {
       <h3>Recurring Meeting</h3>
       <p>Choose which meetings you want this action to affect.</p>
       <div class="modal-actions">
-        <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+        <button type="button" class="btn btn-secondary" id="scope-dialog-cancel-btn">Cancel</button>
         <button type="button" class="${btnClass}"${btnStyle} id="scope-this-btn">This meeting</button>
         ${canManageSeries ? `<button type="button" class="${btnClass}"${btnStyle} id="scope-future-btn">This and future</button>` : ''}
         ${canManageSeries ? `<button type="button" class="${btnClass}"${btnStyle} id="scope-series-btn">Entire series</button>` : ''}
       </div>
     `);
+    this._bindBackToDetail('scope-dialog-cancel-btn', meeting);
 
     document.getElementById('scope-this-btn').addEventListener('click', () => {
       this._closeModal();
@@ -2554,10 +2563,11 @@ const MeetingsView = {
       <p>Locking this meeting will prevent anyone other than you (its creator), an organization administrator within your organization, or a super administrator from editing, rescheduling, cancelling, managing participants, marking attendance, or modifying its minutes.</p>
       <div class="modal-error alert alert-error hidden"></div>
       <div class="modal-actions">
-        <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+        <button type="button" class="btn btn-secondary" id="lock-meeting-cancel-btn">Cancel</button>
         <button type="button" class="btn btn-primary" id="confirm-lock-meeting-btn">Lock Meeting</button>
       </div>
     `);
+    this._bindBackToDetail('lock-meeting-cancel-btn', meeting);
     document.getElementById('confirm-lock-meeting-btn').addEventListener('click', async () => {
       try {
         await MeetingsAPI.lockMeeting(meeting.id);
@@ -2578,10 +2588,11 @@ const MeetingsView = {
       <p>Unlocking this meeting will allow its normal meeting managers to make changes again.</p>
       <div class="modal-error alert alert-error hidden"></div>
       <div class="modal-actions">
-        <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+        <button type="button" class="btn btn-secondary" id="unlock-meeting-cancel-btn">Cancel</button>
         <button type="button" class="btn btn-primary" id="confirm-unlock-meeting-btn">Unlock Meeting</button>
       </div>
     `);
+    this._bindBackToDetail('unlock-meeting-cancel-btn', meeting);
     document.getElementById('confirm-unlock-meeting-btn').addEventListener('click', async () => {
       try {
         await MeetingsAPI.unlockMeeting(meeting.id);
@@ -2637,11 +2648,12 @@ const MeetingsView = {
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="button" class="btn btn-secondary" id="rsvp-cancel-btn">Cancel</button>
           <button type="submit" class="btn btn-primary">${verb}</button>
         </div>
       </form>
     `);
+    this._bindBackToDetail('rsvp-cancel-btn', meeting);
     const form = document.getElementById('rsvp-form');
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -2709,11 +2721,12 @@ const MeetingsView = {
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="button" class="btn btn-secondary" id="edit-minutes-cancel-btn">Cancel</button>
           <button type="submit" class="btn btn-primary">Save</button>
         </div>
       </form>
     `);
+    this._bindBackToDetail('edit-minutes-cancel-btn', meeting);
     const form = document.getElementById('edit-minutes-form');
     const editor = RichEditor.create(document.getElementById('edit-minutes-body'), { language: lang });
     editor.setHTML(meeting.minutes || '');
@@ -2739,10 +2752,11 @@ const MeetingsView = {
       <p>Once finalized, only an organization administrator or super administrator will be able to edit these minutes. This cannot be undone.</p>
       <div class="modal-error alert alert-error hidden"></div>
       <div class="modal-actions">
-        <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+        <button type="button" class="btn btn-secondary" id="finalize-minutes-cancel-btn">Cancel</button>
         <button type="button" class="btn btn-primary" id="confirm-finalize-minutes-btn">Finalize</button>
       </div>
     `);
+    this._bindBackToDetail('finalize-minutes-cancel-btn', meeting);
     document.getElementById('confirm-finalize-minutes-btn').addEventListener('click', async () => {
       try {
         await MeetingsAPI.finalizeMinutes(meeting.id);
@@ -2980,11 +2994,12 @@ const MeetingsView = {
         ` : ''}
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="button" class="btn btn-secondary" id="create-meeting-task-cancel-btn">Cancel</button>
           <button type="submit" class="btn btn-primary">Create Task</button>
         </div>
       </form>
     `, { large: true });
+    this._bindBackToDetail('create-meeting-task-cancel-btn', meeting);
 
     const form = document.getElementById('create-meeting-task-form');
     form.addEventListener('submit', async (e) => {
@@ -3056,10 +3071,11 @@ const MeetingsView = {
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="button" class="btn btn-secondary" id="link-meeting-task-cancel-btn">Cancel</button>
         </div>
       </form>
     `, { large: true });
+    this._bindBackToDetail('link-meeting-task-cancel-btn', meeting);
 
     const form = document.getElementById('link-meeting-task-form');
     const searchInput = document.getElementById('link-meeting-task-search');
@@ -3284,11 +3300,12 @@ const MeetingsView = {
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" data-close-modal>Keep Meeting</button>
+          <button type="button" class="btn btn-secondary" id="cancel-meeting-keep-btn">Keep Meeting</button>
           <button type="submit" class="btn btn-primary">Cancel Meeting</button>
         </div>
       </form>
     `);
+    this._bindBackToDetail('cancel-meeting-keep-btn', meeting);
     const form = document.getElementById('cancel-meeting-form');
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -3316,10 +3333,11 @@ const MeetingsView = {
       <p>This will permanently delete "${this._escapeHtml(meeting.title)}". This cannot be undone. Any room reservation held for it will be released.</p>
       <div class="modal-error alert alert-error hidden"></div>
       <div class="modal-actions">
-        <button type="button" class="btn btn-secondary" data-close-modal>Keep Draft</button>
+        <button type="button" class="btn btn-secondary" id="delete-draft-keep-btn">Keep Draft</button>
         <button type="button" class="btn" style="background:var(--color-error-bg); color:var(--color-error-dark);" id="confirm-delete-draft-btn">Delete Draft</button>
       </div>
     `);
+    this._bindBackToDetail('delete-draft-keep-btn', meeting);
     document.getElementById('confirm-delete-draft-btn').addEventListener('click', async () => {
       try {
         await MeetingsAPI.deleteDraftMeeting(meeting.id);
@@ -3411,11 +3429,12 @@ const MeetingsView = {
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="button" class="btn btn-secondary" id="add-participant-cancel-btn">Cancel</button>
           <button type="submit" class="btn btn-primary" id="add-participant-submit">Add Participant</button>
         </div>
       </form>
     `);
+    this._bindBackToDetail('add-participant-cancel-btn', meeting);
 
     let ptype = 'internal';
     const internalFields = document.getElementById('internal-fields');
@@ -3523,11 +3542,12 @@ const MeetingsView = {
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="button" class="btn btn-secondary" id="mark-attendance-cancel-btn">Cancel</button>
           <button type="submit" class="btn btn-primary">Save</button>
         </div>
       </form>
     `);
+    this._bindBackToDetail('mark-attendance-cancel-btn', meeting);
     const form = document.getElementById('mark-attendance-form');
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -3556,11 +3576,12 @@ const MeetingsView = {
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" data-close-modal>Keep Participant</button>
+          <button type="button" class="btn btn-secondary" id="remove-participant-keep-btn">Keep Participant</button>
           <button type="submit" class="btn btn-primary">Remove</button>
         </div>
       </form>
     `);
+    this._bindBackToDetail('remove-participant-keep-btn', meeting);
     const form = document.getElementById('remove-participant-form');
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -3678,5 +3699,23 @@ const MeetingsView = {
 
   _closeModal() {
     document.getElementById('modal-root').innerHTML = '';
+  },
+
+  // Wires a "Cancel"/"Keep X" button on a sub-modal reached FROM the
+  // meeting detail view (Add Participant, Edit Minutes, Lock/Unlock,
+  // RSVP, Mark Attendance, Remove Participant, Supporting Tasks, etc.)
+  // to return to that detail view instead of the generic
+  // data-close-modal's bare close. Every one of these already reopens
+  // the detail view on its SUCCESS path — without this, backing out
+  // via Cancel instead just closed everything, dropping the user back
+  // to whatever page was behind the whole flow (e.g. Rooms' grid, if
+  // the meeting was reached via a linked booking, docs/117) — UAT:
+  // "when i click add minutes or add participants, the previous
+  // window is lost".
+  _bindBackToDetail(buttonId, meeting) {
+    document.getElementById(buttonId)?.addEventListener('click', () => {
+      this._closeModal();
+      this._openMeetingDetailModal(meeting);
+    });
   },
 };

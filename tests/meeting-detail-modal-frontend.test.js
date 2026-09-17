@@ -297,6 +297,65 @@ async function check(name, fn) {
     await page.close();
   });
 
+  await check('cancelling out of Add Minutes returns to the meeting detail view, not a bare close (UAT: "the previous window is lost")', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openMeetingDetailModal(window.__meeting));
+    await page.waitForTimeout(30);
+    await page.click('#edit-minutes-btn');
+    await page.waitForTimeout(30);
+    let html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /Add Minutes/);
+    await page.click('#edit-minutes-cancel-btn');
+    await page.waitForTimeout(30);
+    html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /Q3 Budget Review/, 'expected the detail view to reopen, not an empty/closed modal');
+    assert.doesNotMatch(html, /Add Minutes<\/h3>/);
+    await page.close();
+  });
+
+  await check('cancelling out of Add Participant returns to the meeting detail view', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openMeetingDetailModal(window.__meeting));
+    await page.waitForTimeout(30);
+    await page.click('#add-participant-btn');
+    await page.waitForTimeout(30);
+    let html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /Add Participant/);
+    await page.click('#add-participant-cancel-btn');
+    await page.waitForTimeout(30);
+    html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /Q3 Budget Review/, 'expected the detail view to reopen, not an empty/closed modal');
+    await page.close();
+  });
+
+  await check('cancelling out of Remove Participant, Mark Attendance, and Lock Meeting all return to the meeting detail view', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openMeetingDetailModal(window.__meeting));
+    await page.waitForTimeout(30);
+
+    await page.click('[data-remove-participant="p2"]');
+    await page.waitForTimeout(30);
+    await page.click('#remove-participant-keep-btn');
+    await page.waitForTimeout(30);
+    let html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /Q3 Budget Review/);
+
+    await page.click('[data-mark-attendance="p2"]');
+    await page.waitForTimeout(30);
+    await page.click('#mark-attendance-cancel-btn');
+    await page.waitForTimeout(30);
+    html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /Q3 Budget Review/);
+
+    await page.click('#lock-meeting-btn');
+    await page.waitForTimeout(30);
+    await page.click('#lock-meeting-cancel-btn');
+    await page.waitForTimeout(30);
+    html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /Q3 Budget Review/);
+    await page.close();
+  });
+
   browser.close().then(report);
 
   function report() {
