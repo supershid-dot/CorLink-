@@ -24,6 +24,19 @@
 // entry-detail.js/prisoner-letter-detail.js's own prefixed constants.
 const MEETING_SUPPORTING_TASKS_PAGE_SIZE = 5;
 
+// Duration picker — every 15-minute increment from 15min up to 5h,
+// shared by the Schedule Meeting and Edit Meeting forms' static option
+// lists and the Schedule Meeting form's own room-availability-capped
+// list (UAT: "Duration should be in every 15 minutes timeline"),
+// rather than each maintaining its own drifted copy of the same list.
+const MEETING_DURATION_OPTIONS_MIN = Array.from({ length: 20 }, (_, i) => (i + 1) * 15);
+function formatMeetingDuration(totalMinutes) {
+  const h = Math.floor(totalMinutes / 60), m = totalMinutes % 60;
+  if (h === 0) return `${m} min`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}min`;
+}
+
 const MeetingsView = {
   _state: {
     tab: 'upcoming',
@@ -640,10 +653,10 @@ const MeetingsView = {
             </div>
             ${sections.length > 0 ? `
               <div class="field-group">
-                <label class="field-label">Section (optional)</label>
-                <select class="field-select" name="sectionId">
-                  <option value="">— None —</option>
-                  ${sections.map(s => `<option value="${s.id}" ${meeting.section_id === s.id ? 'selected' : ''}>${this._escapeHtml(s.name)}</option>`).join('')}
+                <label class="field-label">Section</label>
+                <select class="field-select" name="sectionId" required>
+                  ${sections.length > 1 ? `<option value="" disabled ${!meeting.section_id ? 'selected' : ''}>— Select a section —</option>` : ''}
+                  ${sections.map(s => `<option value="${s.id}" ${(meeting.section_id ? meeting.section_id === s.id : sections.length === 1) ? 'selected' : ''}>${this._escapeHtml(s.name)}</option>`).join('')}
                 </select>
                 <p class="field-hint">Staff and command/department heads over this section will be able to see, book, and edit this meeting.</p>
               </div>
@@ -685,8 +698,8 @@ const MeetingsView = {
               <div class="field-group">
                 <label class="field-label">Duration</label>
                 <select class="field-select" name="duration">
-                  ${[15, 30, 45, 60, 90, 120, 180, 240, 300].map(m =>
-                    `<option value="${m}" ${m === defDurationMin ? 'selected' : ''}>${m < 60 ? `${m} min` : `${m / 60}h${m % 60 ? ' 30min' : ''}`}</option>`).join('')}
+                  ${MEETING_DURATION_OPTIONS_MIN.map(m =>
+                    `<option value="${m}" ${m === defDurationMin ? 'selected' : ''}>${formatMeetingDuration(m)}</option>`).join('')}
                 </select>
               </div>
             </div>
@@ -775,6 +788,11 @@ const MeetingsView = {
       // only a fully-virtual meeting requires it.
       const virtualLink = fd.get('virtualLink') || null;
 
+      if (sections.length > 0 && !fd.get('sectionId')) {
+        errEl.textContent = 'Section is required.';
+        errEl.classList.remove('hidden');
+        return;
+      }
       if (locationMode === 'external' && !externalLocation) {
         errEl.textContent = 'External location is required for an external meeting.';
         errEl.classList.remove('hidden');
@@ -925,10 +943,10 @@ const MeetingsView = {
             </div>
             ${sections.length > 0 ? `
               <div class="field-group">
-                <label class="field-label">Section (optional)</label>
-                <select class="field-select" name="sectionId">
-                  <option value="">— None —</option>
-                  ${sections.map(s => `<option value="${s.id}">${this._escapeHtml(s.name)}</option>`).join('')}
+                <label class="field-label">Section</label>
+                <select class="field-select" name="sectionId" required>
+                  ${sections.length > 1 ? `<option value="" disabled selected>— Select a section —</option>` : ''}
+                  ${sections.map(s => `<option value="${s.id}" ${sections.length === 1 ? 'selected' : ''}>${this._escapeHtml(s.name)}</option>`).join('')}
                 </select>
                 <p class="field-hint">Staff and command/department heads over this section will be able to see, book, and edit this meeting.</p>
               </div>
@@ -977,8 +995,8 @@ const MeetingsView = {
               <div class="field-group">
                 <label class="field-label">Duration</label>
                 <select class="field-select" name="duration" id="sm-duration-select">
-                  ${[15, 30, 45, 60, 90, 120, 180, 240, 300].map(m =>
-                    `<option value="${m}" ${m === 60 ? 'selected' : ''}>${m < 60 ? `${m} min` : `${m / 60}h${m % 60 ? ' 30min' : ''}`}</option>`).join('')}
+                  ${MEETING_DURATION_OPTIONS_MIN.map(m =>
+                    `<option value="${m}" ${m === 60 ? 'selected' : ''}>${formatMeetingDuration(m)}</option>`).join('')}
                 </select>
               </div>
             </div>
@@ -1049,14 +1067,14 @@ const MeetingsView = {
       </form>
     `, { large: true });
 
-    this._bindScheduleMeetingModal({ rooms, orgUsers, groups, onSuccess });
+    this._bindScheduleMeetingModal({ rooms, orgUsers, groups, sections, onSuccess });
   },
 
   _dateStr(date) {
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   },
 
-  _bindScheduleMeetingModal({ rooms, orgUsers, groups, onSuccess }) {
+  _bindScheduleMeetingModal({ rooms, orgUsers, groups, sections, onSuccess }) {
     const form = document.getElementById('schedule-meeting-form');
     const errEl = form.querySelector('.modal-error');
     const submitBtn = document.getElementById('sm-submit-btn');
@@ -1097,27 +1115,19 @@ const MeetingsView = {
     // that would conflict with the room's next booking/block) —
     // recomputed on room/date/start-time change; a format other than
     // 'room' (or no room selected yet) leaves the full preset list.
-    const DURATION_OPTIONS = [15, 30, 45, 60, 90, 120, 180, 240, 300];
     const durationSelect = document.getElementById('sm-duration-select');
     const durationHint = document.getElementById('sm-duration-hint');
-    const fmtDurationOption = (m) => (m < 60 ? `${m} min` : `${m / 60}h${m % 60 ? ' 30min' : ''}`);
-    const fmtMinutesLong = (total) => {
-      const h = Math.floor(total / 60), m = total % 60;
-      if (h === 0) return `${m} min`;
-      if (m === 0) return `${h}h`;
-      return `${h}h ${m}min`;
-    };
     const setDurationOptions = (capMinutes) => {
       const prevValue = durationSelect.value;
-      const allowed = capMinutes == null ? DURATION_OPTIONS : DURATION_OPTIONS.filter(m => m <= capMinutes);
+      const allowed = capMinutes == null ? MEETING_DURATION_OPTIONS_MIN : MEETING_DURATION_OPTIONS_MIN.filter(m => m <= capMinutes);
       if (capMinutes != null && allowed.length === 0) {
         durationSelect.innerHTML = `<option value="0">No availability</option>`;
         durationHint.innerHTML = `<span style="color:var(--color-error-dark);">This room has no free time at this start — pick an earlier time or a different room.</span>`;
         return;
       }
-      durationSelect.innerHTML = allowed.map(m => `<option value="${m}">${fmtDurationOption(m)}</option>`).join('');
+      durationSelect.innerHTML = allowed.map(m => `<option value="${m}">${formatMeetingDuration(m)}</option>`).join('');
       durationSelect.value = allowed.includes(parseInt(prevValue, 10)) ? prevValue : String(allowed.includes(60) ? 60 : allowed[allowed.length - 1]);
-      durationHint.textContent = capMinutes != null ? `Room is free for ${fmtMinutesLong(capMinutes)} from this start.` : '';
+      durationHint.textContent = capMinutes != null ? `Room is free for ${formatMeetingDuration(capMinutes)} from this start.` : '';
     };
     const roomSelect = roomGroup ? form.querySelector('[name="roomId"]') : null;
     async function refreshDurationCap() {
@@ -1319,6 +1329,9 @@ const MeetingsView = {
       // only a fully-virtual meeting requires it.
       const virtualLink = fd.get('virtualLink') || null;
 
+      if (sections.length > 0 && !sectionId) {
+        errEl.textContent = 'Section is required.'; errEl.classList.remove('hidden'); return;
+      }
       if (locationMode === 'room' && !roomId) {
         errEl.textContent = 'Select a room, or choose a different format.'; errEl.classList.remove('hidden'); return;
       }

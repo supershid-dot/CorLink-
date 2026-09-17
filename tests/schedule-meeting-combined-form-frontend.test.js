@@ -42,7 +42,7 @@ async function check(name, fn) {
 
   // Records every RPC-shaped call each stub API makes, so assertions can
   // check payloads without a real backend.
-  async function newPage({ roomsEnabled = true, isAdmin = false } = {}) {
+  async function newPage({ roomsEnabled = true, isAdmin = false, mySections = [{ id: 'sec-1', name: 'Programs' }] } = {}) {
     const page = await browser.newPage();
     const pageErrors = [];
     page.on('pageerror', e => pageErrors.push(e.message));
@@ -74,14 +74,14 @@ async function check(name, fn) {
       // (RequestsAPI.mySections(), already my_section_ids()-backed) for
       // a non-admin, rather than every section in the org
       // (AdminAPI.listSectionsByOrg) — this test file's user is always
-      // isAdmin:false, so it exercises that path. Same two sections as
-      // the AdminAPI stub above so every existing Section-field
-      // assertion (sec-1/sec-2) stays valid unchanged.
+      // isAdmin:false, so it exercises that path. Section is now
+      // required, auto-selecting when the caller has exactly one — the
+      // default single-section fixture here lets every test that isn't
+      // specifically about the Section picker submit without having to
+      // explicitly choose one; tests exercising the multi-section
+      // picker pass their own { mySections: [...] } override.
       window.RequestsAPI = {
-        mySections: async () => ([
-          { id: 'sec-1', name: 'Programs' },
-          { id: 'sec-2', name: 'Legal' },
-        ]),
+        mySections: async () => (${JSON.stringify(mySections)}),
       };
       window.RoomsAPI = {
         fetchRooms: async () => ([
@@ -362,12 +362,15 @@ async function check(name, fn) {
     await page.close();
   });
 
-  await check('renders a Section field and includes the chosen sectionId in the create payload', async () => {
-    const { page } = await newPage();
+  const TWO_SECTIONS = [{ id: 'sec-1', name: 'Programs' }, { id: 'sec-2', name: 'Legal' }];
+
+  await check('renders a required Section field (no blank/None option) and includes the chosen sectionId in the create payload', async () => {
+    const { page } = await newPage({ mySections: TWO_SECTIONS });
     await page.evaluate(() => window.__view._openScheduleMeetingModal());
     const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
-    assert.match(html, /name="sectionId"/);
+    assert.match(html, /name="sectionId" required/);
     assert.match(html, /Legal/);
+    assert.doesNotMatch(html, /— None —/);
     await page.evaluate(() => {
       document.querySelector('#schedule-meeting-form [name="title"]').value = 'Section Tagged Meeting';
       document.querySelector('#schedule-meeting-form [name="sectionId"]').value = 'sec-2';
@@ -381,20 +384,38 @@ async function check(name, fn) {
     await page.close();
   });
 
-  await check('leaving Section unset sends sectionId: null', async () => {
-    const { page } = await newPage();
+  await check('when the caller has more than one section, none is preselected and submitting without choosing one is rejected client-side', async () => {
+    const { page } = await newPage({ mySections: TWO_SECTIONS });
     await page.evaluate(() => window.__view._openScheduleMeetingModal());
-    await page.evaluate(() => { document.querySelector('#schedule-meeting-form [name="title"]').value = 'No Section'; });
+    const initialValue = await page.evaluate(() => document.querySelector('#schedule-meeting-form [name="sectionId"]').value);
+    assert.strictEqual(initialValue, '', 'the disabled placeholder should be selected, forcing a deliberate choice');
+    await page.evaluate(() => { document.querySelector('#schedule-meeting-form [name="title"]').value = 'No Section Chosen'; });
     await page.evaluate(() => document.getElementById('sm-submit-btn').click());
     await page.waitForTimeout(50);
     const calls = await page.evaluate(() => window.calls);
-    const createCall = calls.find(c => c.name === 'MeetingsAPI.createMeeting');
-    assert.strictEqual(createCall.args[0].sectionId, null);
+    assert.ok(!calls.find(c => c.name === 'MeetingsAPI.createMeeting'), 'createMeeting must not be called without a chosen section');
+    // The disabled placeholder + native `required` attribute block
+    // submission via the browser's own constraint validation before our
+    // submit handler ever runs (same as the Date/Start Time fields
+    // already do) — so this shows up as the select failing
+    // checkValidity(), not our own .modal-error text.
+    const sectionValid = await page.evaluate(() => document.querySelector('#schedule-meeting-form [name="sectionId"]').checkValidity());
+    assert.strictEqual(sectionValid, false, 'the required Section select should fail native validation while unselected');
+    await page.close();
+  });
+
+  await check('when the caller has exactly one section, it is preselected automatically', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openScheduleMeetingModal());
+    const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.doesNotMatch(html, /— Select a section —/, 'no picker needed when there is only one option');
+    const value = await page.evaluate(() => document.querySelector('#schedule-meeting-form [name="sectionId"]').value);
+    assert.strictEqual(value, 'sec-1');
     await page.close();
   });
 
   await check('a non-admin only sees their own assigned sections (RequestsAPI.mySections()), not every section in the org', async () => {
-    const { page } = await newPage({ isAdmin: false });
+    const { page } = await newPage({ isAdmin: false, mySections: TWO_SECTIONS });
     await page.evaluate(() => window.__view._openScheduleMeetingModal());
     const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
     assert.match(html, /Programs/);
@@ -425,7 +446,7 @@ async function check(name, fn) {
   };
 
   await check('Edit Meeting renders the same field set as Schedule Meeting (Format/Section/Date+Start+Duration/Privacy), no Timezone or Meeting Type', async () => {
-    const { page } = await newPage();
+    const { page } = await newPage({ mySections: TWO_SECTIONS });
     await page.evaluate((meeting) => window.__view._openEditMeetingModal(meeting), fixtureMeeting);
     const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
     assert.match(html, /Edit Meeting/);
@@ -463,7 +484,7 @@ async function check(name, fn) {
   });
 
   await check('submitting Edit Meeting calls updateMeeting with recomputed start/end and the section', async () => {
-    const { page } = await newPage();
+    const { page } = await newPage({ mySections: TWO_SECTIONS });
     await page.evaluate((meeting) => window.__view._openEditMeetingModal(meeting), fixtureMeeting);
     await page.evaluate(() => {
       document.querySelector('#meeting-form [name="startTime"]').value = '14:00';
