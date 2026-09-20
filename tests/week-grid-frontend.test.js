@@ -127,11 +127,18 @@ async function check(name, fn) {
   });
 
   await check('bind() wires slot clicks and event clicks to the given callbacks', async () => {
-    const { page } = await newPage();
+    // Frozen to a fixed instant (newPageAt, defined below — hoisted
+    // function declaration) rather than newPage()'s real wall clock:
+    // this test hardcodes the day under test to 2026-09-16, and
+    // WeekGrid's own past-slot lockout (real `new Date()`) would
+    // otherwise mark every slot on that day as closed once the real
+    // calendar date moves past it, leaving no `[data-week-grid-slot]`
+    // to click.
+    const { page } = await newPageAt('2026-09-16T00:00:00', 'UTC');
     const result = await page.evaluate(() => {
       const weekStart = WeekGrid.weekStartFor('2026-09-16T00:00:00');
       const events = [{ id: 'e1', day: '2026-09-16', startAt: '2026-09-16T09:00:00', endAt: '2026-09-16T10:00:00', cls: 'a', title: 'A' }];
-      document.getElementById('app').innerHTML = WeekGrid.html({ weekStart, events });
+      document.getElementById('app').innerHTML = WeekGrid.html({ weekStart, events, todayStr: '2026-09-16' });
       const calls = { slot: null, event: null };
       WeekGrid.bind(document.getElementById('app'), {
         onSlotClick: (day, time) => { calls.slot = { day, time }; },
@@ -291,14 +298,19 @@ async function check(name, fn) {
   });
 
   await check('desktop: slots past bookableUntilMinutes are non-clickable (no data-week-grid-slot)', async () => {
-    const { page } = await newPage();
+    // Frozen clock — see the "bind() wires slot clicks..." test above;
+    // same reasoning applies (the 15:30 slot this test checks for must
+    // still be in the future relative to whatever `new Date()` resolves
+    // to, or the grid's own past-slot lockout closes it regardless of
+    // the bookableUntilMinutes policy this test is actually about).
+    const { page } = await newPageAt('2026-09-16T00:00:00', 'UTC');
     const html = await page.evaluate(() => {
       const weekStart = WeekGrid.weekStartFor('2026-09-16T00:00:00');
       // Same reasoning as the mobile equivalent above: an event past
       // the 16:00 policy is what forces the range wide enough to have
       // any "closed" slots to check in the first place.
       const events = [{ id: 'e1', day: '2026-09-16', startAt: '2026-09-16T17:00:00', endAt: '2026-09-16T18:00:00', cls: 'a', title: 'Existing booking' }];
-      return WeekGrid.html({ weekStart, events, bookableUntilMinutes: 960 }); // 16:00
+      return WeekGrid.html({ weekStart, events, todayStr: '2026-09-16', bookableUntilMinutes: 960 }); // 16:00
     });
     assert.match(html, /week-grid-slot--closed/);
     // the 16:00 slot itself must be closed, not clickable

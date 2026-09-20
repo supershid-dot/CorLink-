@@ -93,16 +93,26 @@ async function check(name, fn) {
           { id: 'staff-2', full_name: 'Ahmed Sobah', is_active: true },
         ]),
       };
+      // A mutable copy of the meeting row — updateMinutes writes through
+      // it and fetchMeeting reads it back, so a test can prove a save
+      // actually reaches the reopened detail view rather than the
+      // reopen just re-rendering whatever stale object it was handed
+      // (the exact shape of the "minutes don't appear after Save" bug).
+      window.__liveMeeting = ${JSON.stringify(meeting)};
+      window.__participants = ${JSON.stringify(participants)};
       window.MeetingsAPI = {
-        fetchMeetingParticipants: async () => (${JSON.stringify(participants)}),
+        fetchMeetingParticipants: async () => window.__participants,
         fetchLinkedBooking: async () => (${JSON.stringify(meeting.location_mode === 'room' ? { id: 'bk1', status: 'confirmed', start_at: meeting.start_at, end_at: meeting.end_at, room: { id: 'room-1', name: 'HQ Meeting Room A' } } : null)}),
         getMeetingTaskCapabilities: async () => ({ canCreateTask: false, canLinkExisting: false, canUnlink: false, canViewTasks: false }),
         listMeetingTasks: async () => ({ items: [], totalCount: 0 }),
         fetchMyNotes: async () => (${JSON.stringify(myNotes)}),
         updateMyNotes: async (participantId, notes) => { record('MeetingsAPI.updateMyNotes', [participantId, notes]); },
-        updateMinutes: async (meetingId, minutes) => { record('MeetingsAPI.updateMinutes', [meetingId, minutes]); },
+        updateMinutes: async (meetingId, minutes) => {
+          record('MeetingsAPI.updateMinutes', [meetingId, minutes]);
+          window.__liveMeeting = { ...window.__liveMeeting, minutes };
+        },
         respondToInvitation: async (...args) => { record('MeetingsAPI.respondToInvitation', args); },
-        fetchMeeting: async (id) => { record('MeetingsAPI.fetchMeeting', [id]); return ${JSON.stringify(meeting)}; },
+        fetchMeeting: async (id) => { record('MeetingsAPI.fetchMeeting', [id]); return { ...window.__liveMeeting }; },
       };
       window.AttachmentsAPI = {
         list: async () => ([]),
@@ -135,6 +145,18 @@ async function check(name, fn) {
     await page.close();
   });
 
+  await check('the meeting\'s description field is labeled Agenda and rendered in a bordered box (UAT: "instead of description it should be agenda...this field should have some kind of border drawn")', async () => {
+    const { page } = await newPage({ meetingOverrides: { description: '<p>Discuss Q3 budget.</p>' } });
+    await page.evaluate(() => window.__view._openMeetingDetailModal(window.__meeting));
+    await page.waitForTimeout(30);
+    const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /field-label">Agenda</);
+    assert.doesNotMatch(html, /field-label">Description/);
+    assert.match(html, /detail-agenda-box/);
+    assert.match(html, /Discuss Q3 budget\./);
+    await page.close();
+  });
+
   await check('format pill reads "Hybrid" when a room meeting also carries a virtual link', async () => {
     const { page } = await newPage({ meetingOverrides: { virtual_link: 'https://meet.example.com/abc' } });
     await page.evaluate(() => window.__view._openMeetingDetailModal(window.__meeting));
@@ -158,6 +180,25 @@ async function check(name, fn) {
     // renders data-table-op="..." attributes elsewhere in this same
     // modal, which would otherwise false-positive here.
     assert.doesNotMatch(html, /<table class="data-table">/);
+    await page.close();
+  });
+
+  await check('participant invitation/attendance badges sit on their own row, separate from the name (UAT: "easy to read"), and Mark Attendance is a labeled button (UAT: "easy to mark the attendance")', async () => {
+    const { page } = await newPage({
+      participantsOverride: [
+        { id: 'p1', user_id: 'u1', participant_role: 'organizer', is_organizer: true, invitation_status: 'accepted', invitation_note: null, attendance_status: 'unknown', attendance_note: null },
+        { id: 'p2', user_id: 'staff-2', participant_role: 'attendee', is_organizer: false, invitation_status: 'pending', invitation_note: null, attendance_status: 'attended', attendance_note: null },
+      ],
+    });
+    await page.evaluate(() => window.__view._openMeetingDetailModal(window.__meeting));
+    await page.waitForTimeout(30);
+    const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /detail-participant-badges/);
+    assert.match(html, /badge-warning">Pending/);
+    assert.match(html, /badge-success">Attended/);
+    // Mark Attendance used to be a bare circular icon button with no
+    // visible text — now a labeled button, same as other row actions.
+    assert.match(html, /data-mark-attendance="p2"[^>]*>\s*<i class="ti ti-user-check"><\/i>\s*Attendance/);
     await page.close();
   });
 
@@ -219,6 +260,32 @@ async function check(name, fn) {
     assert.ok(saveCall, 'expected updateMyNotes to be called');
     assert.strictEqual(saveCall.args[0], 'p1');
     assert.strictEqual(saveCall.args[1], '<p>A fresh private note</p>');
+    await page.close();
+  });
+
+  await check('saving My Notes does not clear the detail view while the reopen is in flight (UAT: "the form disappear[s] then show[s] again")', async () => {
+    const { page } = await newPage({ myNotes: null });
+    await page.evaluate(() => window.__view._openMeetingDetailModal(window.__meeting));
+    await page.waitForTimeout(30);
+    await page.evaluate(() => {
+      document.querySelector('#my-notes-panel .rich-editor-body').innerHTML = '<p>New note</p>';
+      // Hang the reopen's own participants fetch so the mid-flight DOM
+      // state can be inspected — under the old (buggy) code this is the
+      // window during which #modal-root sat empty because _closeModal()
+      // ran before the await, not after it.
+      window.__unblockReopen = null;
+      window.MeetingsAPI.fetchMeetingParticipants = () => new Promise(resolve => { window.__unblockReopen = () => resolve(window.__participants); });
+    });
+    await page.click('#save-my-notes-btn');
+    await page.waitForTimeout(30);
+    let html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /Q3 Budget Review/, 'the original detail view must stay on screen while the reopen is still loading, not disappear');
+    await page.evaluate(() => window.__unblockReopen());
+    await page.waitForTimeout(30);
+    html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /Q3 Budget Review/, 'expected the reopened detail view once the reopen completes');
+    const calls = await page.evaluate(() => window.calls);
+    assert.ok(calls.find(c => c.name === 'MeetingsAPI.updateMyNotes'));
     await page.close();
   });
 
@@ -299,6 +366,28 @@ async function check(name, fn) {
     assert.ok(saveCall, 'expected updateMinutes to be called');
     assert.strictEqual(saveCall.args[0], 'meeting-1');
     assert.strictEqual(saveCall.args[1], '<p>Decided to proceed.</p>');
+    await page.close();
+  });
+
+  await check('Add Minutes is a wide (.modal-box--lg) writing surface, and saving it re-fetches the meeting so the new minutes actually appear (UAT bug: "does not save and does not appear in minutes")', async () => {
+    const { page } = await newPage({ meetingOverrides: { minutes: null } });
+    await page.evaluate(() => window.__view._openMeetingDetailModal(window.__meeting));
+    await page.waitForTimeout(30);
+    await page.click('#edit-minutes-btn');
+    await page.waitForTimeout(30);
+    const boxClass = await page.evaluate(() => document.querySelector('#modal-root > .modal-overlay:last-of-type .modal-box').className);
+    assert.match(boxClass, /modal-box--lg/, 'Add Minutes should get the same writing-room width as other rich-text modals');
+    await page.evaluate(() => {
+      document.querySelector('#edit-minutes-form .rich-editor-body').innerHTML = '<p>Decided to proceed.</p>';
+    });
+    await page.evaluate(() => document.getElementById('edit-minutes-form').requestSubmit());
+    await page.waitForTimeout(30);
+    const calls = await page.evaluate(() => window.calls);
+    assert.ok(calls.find(c => c.name === 'MeetingsAPI.updateMinutes'), 'expected updateMinutes to be called (it does save)');
+    const fetchCall = calls.find(c => c.name === 'MeetingsAPI.fetchMeeting');
+    assert.ok(fetchCall, 'expected a fresh fetchMeeting before reopening — reopening with the stale pre-save object is exactly why the saved minutes never appeared');
+    const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /Decided to proceed\./, 'the just-saved minutes must actually appear in the reopened detail view');
     await page.close();
   });
 

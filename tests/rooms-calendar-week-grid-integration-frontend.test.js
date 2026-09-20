@@ -274,6 +274,35 @@ async function check(name, fn) {
     await page.close();
   });
 
+  await check('Rooms Schedule tab event chips show who booked, the section, and the duration (UAT: "in rooms it should show the section name, who booked, and duration")', async () => {
+    const { page } = await newRoomsPage();
+    await page.evaluate(async () => {
+      window.RoomsAPI.fetchBookings = async () => ([{
+        id: 'bk1', room_id: 'r1', status: 'confirmed',
+        start_at: '2026-09-16T09:00:00Z', end_at: '2026-09-16T11:00:00Z',
+        created_by_user: { full_name: 'Hussain Zareer' },
+        section: { id: 'sec-1', name: 'Offender Records' },
+        room: { id: 'r1', name: 'HQ Meeting Room A' },
+      }]);
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._isAdmin = false; v._isSupervisor = false; v._orgId = 'org-1';
+      v._rooms = await window.RoomsAPI.fetchRooms();
+      v._myManagedRoomIds = new Set();
+      v._state.tab = 'schedule';
+      v._state.scheduleRoomId = 'r1';
+      v._state.scheduleDate = '2026-09-16';
+      document.body.insertAdjacentHTML('beforeend', `<div id="rooms-tab-content"></div>`);
+      await v._renderTab();
+    });
+    const title = await page.locator('.week-grid-event-title').innerText();
+    const meta = await page.locator('.week-grid-event-meta').innerText();
+    assert.match(title, /Hussain Zareer/, 'who booked');
+    assert.match(meta, /Offender Records/, 'section name');
+    assert.match(meta, /2h\b/, 'duration');
+    await page.close();
+  });
+
   await check('Rooms Schedule tab defaults to the first active room when none selected', async () => {
     const { page } = await newRoomsPage();
     const selected = await page.evaluate(async () => {

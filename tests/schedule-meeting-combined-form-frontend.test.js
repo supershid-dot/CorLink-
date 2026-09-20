@@ -105,6 +105,9 @@ async function check(name, fn) {
         fetchMeeting: async (id) => { record('MeetingsAPI.fetchMeeting', [id]); return { id, title: 'Fetched Meeting' }; },
         updateMeeting: async (meetingId, payload) => { record('MeetingsAPI.updateMeeting', [meetingId, payload]); },
       };
+      window.AttachmentsAPI = {
+        upload: async (recordType, recordId, file) => { record('AttachmentsAPI.upload', [recordType, recordId, file.name]); },
+      };
       ${richEditorSource}
       ${meetingsSource}
       window.__view = MeetingsView;
@@ -284,6 +287,46 @@ async function check(name, fn) {
     const createCall = calls.find(c => c.name === 'MeetingsAPI.createMeeting');
     assert.ok(createCall);
     assert.strictEqual(createCall.args[0].description, '<p>Discuss Q3 numbers</p>');
+    await page.close();
+  });
+
+  await check('the Agenda/Notes editor spans the full form width, not just the details column (UAT: "expand the agenda note to fit to the whole form")', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openScheduleMeetingModal());
+    const insideTwoCol = await page.evaluate(() => !!document.getElementById('sm-description-body').closest('.modal-two-col'));
+    assert.strictEqual(insideTwoCol, false, 'the Agenda field must sit outside the two-column grid so it can span the whole form');
+    await page.close();
+  });
+
+  await check('duration options span every 15 minutes up to 8h and default to 30 minutes (UAT: "Duration should have maximum 8 hours and by default it should show 30 minutes")', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openScheduleMeetingModal());
+    const { values, selected } = await page.evaluate(() => {
+      const select = document.querySelector('#schedule-meeting-form [name="duration"]');
+      return { values: [...select.options].map(o => o.value), selected: select.value };
+    });
+    assert.strictEqual(values[0], '15');
+    assert.strictEqual(values[values.length - 1], '480', 'expected the max option to be 8h (480 minutes)');
+    assert.strictEqual(values.length, 32);
+    assert.strictEqual(selected, '30', 'expected 30 minutes to be the default selection');
+    await page.close();
+  });
+
+  await check('Supporting Files can be queued in the Schedule Meeting form and are uploaded after the meeting is created (UAT: "should be able to add supporting multiple files to this window")', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openScheduleMeetingModal({ prefillRoomId: 'room-1', prefillDate: '2026-09-20', prefillTime: '09:00' }));
+    await page.evaluate(() => { document.querySelector('#schedule-meeting-form [name="title"]').value = 'Budget Review'; });
+    const filePath = path.join(__dirname, '..', 'index.html');
+    await page.setInputFiles('#sm-file-input', [filePath, filePath]);
+    const chipCount = await page.evaluate(() => document.querySelectorAll('#sm-file-list .participant-chip').length);
+    assert.strictEqual(chipCount, 2, 'expected both queued files to render as removable chips');
+    await page.evaluate(() => document.getElementById('sm-submit-btn').click());
+    await page.waitForTimeout(50);
+    const calls = await page.evaluate(() => window.calls);
+    const uploadCalls = calls.filter(c => c.name === 'AttachmentsAPI.upload');
+    assert.strictEqual(uploadCalls.length, 2, 'expected both queued files to be uploaded once the meeting exists');
+    assert.strictEqual(uploadCalls[0].args[0], 'meeting');
+    assert.strictEqual(uploadCalls[0].args[1], 'meeting-1');
     await page.close();
   });
 

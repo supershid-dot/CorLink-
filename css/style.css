@@ -2126,6 +2126,19 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
   color: var(--color-primary-dark); background: none; border: none; cursor: pointer; padding: 0;
 }
 
+/* Meeting detail's Agenda (UAT: "instead of description it should be
+   agenda, and this field should have some kind of border drawn") —
+   a visible box distinguishes rich-text content the organizer wrote
+   from the plain facts/labels around it. */
+.detail-agenda-box {
+  white-space: pre-wrap;
+  margin-top: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+}
+
 .detail-participant-list { display: flex; flex-direction: column; }
 .detail-participant-row {
   display: flex; align-items: center; gap: 10px;
@@ -2141,7 +2154,19 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
 .detail-participant-info { flex: 1; min-width: 0; }
 .detail-participant-name { font-weight: 600; font-size: 0.9rem; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .detail-participant-meta { font-size: 0.78rem; color: var(--color-text-muted); margin-top: 2px; }
+/* Invitation/attendance status on their own row, separate from the
+   name — a busy name line was the "hard to read" part of the UAT
+   feedback on this list. */
+.detail-participant-badges { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
 .detail-participant-actions { display: flex; gap: 6px; flex-shrink: 0; }
+/* A labeled "Attendance" button plus the remove icon no longer fits
+   next to a wrapped badge row on a phone-width screen — drop actions
+   to their own full-width row rather than letting them get squeezed
+   or clipped (UAT: "...easy to mark the attendance as well"). */
+@media (max-width: 480px) {
+  .detail-participant-row { flex-wrap: wrap; }
+  .detail-participant-actions { width: 100%; justify-content: flex-end; margin-top: 6px; }
+}
 .detail-icon-btn {
   width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--color-border);
   background: var(--color-surface); display: flex; align-items: center; justify-content: center;
@@ -2414,6 +2439,11 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
   gap: 14px;
   min-width: 0;
 }
+/* The staff/group <select> in the side column (UAT: "Expand the name
+   box to fit to the column") otherwise sizes to its longest option's
+   intrinsic content width, leaving it narrower than the search input
+   sitting directly above it in the same column. */
+.modal-two-col-side .field-select { width: 100%; }
 @media (max-width: 760px) {
   .modal-two-col { grid-template-columns: 1fr; }
 }

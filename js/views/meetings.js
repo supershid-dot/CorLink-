@@ -24,12 +24,13 @@
 // entry-detail.js/prisoner-letter-detail.js's own prefixed constants.
 const MEETING_SUPPORTING_TASKS_PAGE_SIZE = 5;
 
-// Duration picker — every 15-minute increment from 15min up to 5h,
-// shared by the Schedule Meeting and Edit Meeting forms' static option
-// lists and the Schedule Meeting form's own room-availability-capped
-// list (UAT: "Duration should be in every 15 minutes timeline"),
-// rather than each maintaining its own drifted copy of the same list.
-const MEETING_DURATION_OPTIONS_MIN = Array.from({ length: 20 }, (_, i) => (i + 1) * 15);
+// Duration picker — every 15-minute increment from 15min up to 8h (UAT:
+// "Duration should be in every 15 minutes timeline" / "Duration should
+// have maximum 8 hours"), shared by the Schedule Meeting and Edit
+// Meeting forms' static option lists and the Schedule Meeting form's
+// own room-availability-capped list, rather than each maintaining its
+// own drifted copy of the same list.
+const MEETING_DURATION_OPTIONS_MIN = Array.from({ length: 32 }, (_, i) => (i + 1) * 15);
 function formatMeetingDuration(totalMinutes) {
   const h = Math.floor(totalMinutes / 60), m = totalMinutes % 60;
   if (h === 0) return `${m} min`;
@@ -996,7 +997,7 @@ const MeetingsView = {
                 <label class="field-label">Duration</label>
                 <select class="field-select" name="duration" id="sm-duration-select">
                   ${MEETING_DURATION_OPTIONS_MIN.map(m =>
-                    `<option value="${m}" ${m === 60 ? 'selected' : ''}>${formatMeetingDuration(m)}</option>`).join('')}
+                    `<option value="${m}" ${m === 30 ? 'selected' : ''}>${formatMeetingDuration(m)}</option>`).join('')}
                 </select>
               </div>
             </div>
@@ -1013,13 +1014,6 @@ const MeetingsView = {
             <div class="field-group hidden" id="sm-series-end-group">
               <label class="field-label">Series End Date</label>
               <input class="field-input-plain" type="date" name="seriesEndDate" value="${defSeriesEnd}" />
-            </div>
-            <div class="field-group">
-              <div class="field-group-row">
-                <label class="field-label">Agenda / Notes (optional)</label>
-                ${RichEditor.langToggleHtml('descriptionLanguage', 'en')}
-              </div>
-              <div id="sm-description-body"></div>
             </div>
           </div>
           <div class="modal-two-col-side">
@@ -1058,6 +1052,22 @@ const MeetingsView = {
               <button type="button" class="btn btn-secondary btn-xs" id="sm-add-guest-btn">+ Add Guest</button>
             </div>
           </div>
+        </div>
+        <div class="field-group">
+          <div class="field-group-row">
+            <label class="field-label">Agenda / Notes (optional)</label>
+            ${RichEditor.langToggleHtml('descriptionLanguage', 'en')}
+          </div>
+          <div id="sm-description-body"></div>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Supporting Files (optional)</label>
+          <label class="attachment-dropzone" id="sm-file-dropzone">
+            <i class="ti ti-cloud-upload"></i>
+            <span>Drag files here, or <span class="attachment-browse-link">browse</span></span>
+            <input type="file" multiple class="hidden" id="sm-file-input" />
+          </label>
+          <div class="participant-chip-list" id="sm-file-list"></div>
         </div>
         <div class="modal-error alert alert-error hidden"></div>
         <div class="modal-actions">
@@ -1126,7 +1136,7 @@ const MeetingsView = {
         return;
       }
       durationSelect.innerHTML = allowed.map(m => `<option value="${m}">${formatMeetingDuration(m)}</option>`).join('');
-      durationSelect.value = allowed.includes(parseInt(prevValue, 10)) ? prevValue : String(allowed.includes(60) ? 60 : allowed[allowed.length - 1]);
+      durationSelect.value = allowed.includes(parseInt(prevValue, 10)) ? prevValue : String(allowed.includes(30) ? 30 : allowed[allowed.length - 1]);
       durationHint.textContent = capMinutes != null ? `Room is free for ${formatMeetingDuration(capMinutes)} from this start.` : '';
     };
     const roomSelect = roomGroup ? form.querySelector('[name="roomId"]') : null;
@@ -1190,6 +1200,36 @@ const MeetingsView = {
     // toggle. ─────────────────────────────────────────────────────────
     const descriptionEditor = RichEditor.create(document.getElementById('sm-description-body'), { language: 'en' });
     RichEditor.bindLangToggle(form, 'descriptionLanguage', (l) => descriptionEditor.setLanguage(l));
+
+    // ── Supporting Files — queued client-side (same reasoning as the
+    // participants queue below: no meeting id exists yet to upload
+    // against) and pushed through AttachmentsAPI.upload('meeting', …)
+    // once the meeting is created, in the same partial-failure-tolerant
+    // loop as participants/groups. Reuses the detail view's own
+    // .attachment-dropzone/.participant-chip styling rather than
+    // introducing a new pattern for what is functionally the same
+    // "pick or drag files, see them as removable chips" interaction. ──
+    const pendingFiles = [];
+    const fileInput = document.getElementById('sm-file-input');
+    const fileDropzone = document.getElementById('sm-file-dropzone');
+    const fileListEl = document.getElementById('sm-file-list');
+    const renderFileList = () => {
+      fileListEl.innerHTML = pendingFiles.map((f, i) =>
+        `<div class="participant-chip"><i class="ti ti-paperclip"></i> ${this._escapeHtml(f.name)} <button type="button" class="participant-chip-remove" data-remove-file-idx="${i}" aria-label="Remove">&times;</button></div>`
+      ).join('');
+      fileListEl.querySelectorAll('[data-remove-file-idx]').forEach(btn => {
+        btn.addEventListener('click', () => { pendingFiles.splice(parseInt(btn.dataset.removeFileIdx, 10), 1); renderFileList(); });
+      });
+    };
+    const queueFiles = (files) => { for (const f of files) pendingFiles.push(f); renderFileList(); };
+    fileInput.addEventListener('change', () => { queueFiles(Array.from(fileInput.files || [])); fileInput.value = ''; });
+    fileDropzone.addEventListener('dragover', (e) => { e.preventDefault(); fileDropzone.classList.add('attachment-dropzone--active'); });
+    fileDropzone.addEventListener('dragleave', (e) => { if (e.relatedTarget && fileDropzone.contains(e.relatedTarget)) return; fileDropzone.classList.remove('attachment-dropzone--active'); });
+    fileDropzone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      fileDropzone.classList.remove('attachment-dropzone--active');
+      queueFiles(Array.from(e.dataTransfer?.files || []));
+    });
 
     // ── Recurrence quick-picks ─────────────────────────────────────
     let recurrence = 'none';
@@ -1396,6 +1436,10 @@ const MeetingsView = {
             } catch (err) {
               warnings.push(`${item.label}: ${err.message}`);
             }
+          }
+          for (const file of pendingFiles) {
+            try { await AttachmentsAPI.upload('meeting', mid, file); }
+            catch (err) { warnings.push(`${file.name}: ${err.message}`); }
           }
         }
 
@@ -1788,8 +1832,8 @@ const MeetingsView = {
 
       ${meeting.description ? `
         <div style="margin-top:12px;">
-          <label class="field-label">Description</label>
-          <div class="${RichEditor.dvClass(meeting.description).trim()}" style="white-space:pre-wrap; margin-top:6px;">${RichEditor.sanitize(meeting.description)}</div>
+          <label class="field-label">Agenda</label>
+          <div class="detail-agenda-box ${RichEditor.dvClass(meeting.description).trim()}">${RichEditor.sanitize(meeting.description)}</div>
         </div>
       ` : ''}
 
@@ -2728,7 +2772,7 @@ const MeetingsView = {
           <button type="submit" class="btn btn-primary">Save</button>
         </div>
       </form>
-    `, { stack: true });
+    `, { stack: true, large: true });
     const form = document.getElementById('edit-minutes-form');
     const editor = RichEditor.create(document.getElementById('edit-minutes-body'), { language: lang });
     editor.setHTML(meeting.minutes || '');
@@ -2739,7 +2783,15 @@ const MeetingsView = {
       try {
         await MeetingsAPI.updateMinutes(meeting.id, (minutes && minutes !== '<p><br></p>') ? minutes : null);
         this._closeModal();
-        await this._openMeetingDetailModal(meeting);
+        // UAT bug: reopening with the stale `meeting` object passed
+        // into this modal meant the just-saved minutes never showed up
+        // ("it does not save and does not appear in minutes") — the
+        // RPC succeeded, but _openMeetingDetailModal only ever renders
+        // whatever meeting object it's given, it doesn't re-fetch the
+        // meeting row itself. Every other post-save reopen in this file
+        // re-fetches first (see _openEditMeetingModal, cancel/lock/etc.).
+        const fresh = await MeetingsAPI.fetchMeeting(meeting.id);
+        await this._openMeetingDetailModal(fresh);
       } catch (err) {
         const errEl = form.querySelector('.modal-error');
         errEl.textContent = err.message;
@@ -3166,6 +3218,14 @@ const MeetingsView = {
       return `<div class="structure-empty">No participants yet.</div>${canManage ? `<button type="button" class="btn btn-secondary btn-xs" id="add-participant-btn" style="margin-top:6px;"><i class="ti ti-plus"></i> Add Participant</button>` : ''}`;
     }
     const invBadgeClass = { accepted: 'badge-success', declined: 'badge-error', pending: 'badge-warning', not_required: 'badge-outline' };
+    const attBadgeClass = { attended: 'badge-success', absent: 'badge-error', excused: 'badge-warning' };
+    // UAT: "Organize the participants arrangement to make it easy to
+    // read and easy to mark the attendance as well" — the name line now
+    // carries only the name and Organizer badge (nothing to scan past
+    // to find who this is); invitation/attendance status move to their
+    // own badge row below the role/contact meta so neither line is
+    // crowded. Mark Attendance was an unlabeled icon — now a labeled
+    // button, same as every other primary row action in this app.
     return `
       <div class="detail-participant-list">${participants.map(p => {
         const name = p.user_id ? (this._participantUserName(p) || 'CorLink user') : (p.external_name || 'Guest');
@@ -3178,14 +3238,16 @@ const MeetingsView = {
               <div class="detail-participant-name">
                 ${this._escapeHtml(name)}
                 ${p.is_organizer ? '<span class="badge badge-outline">Organizer</span>' : ''}
-                <span class="badge ${invBadgeClass[p.invitation_status] || 'badge-outline'}">${this._capitalize(p.invitation_status)}</span>
-                ${p.attendance_status && p.attendance_status !== 'unknown' ? `<span class="badge badge-outline">${this._capitalize(p.attendance_status)}</span>` : ''}
               </div>
               <div class="detail-participant-meta">${metaBits.join(' · ')}${p.invitation_note ? ` · ${this._escapeHtml(p.invitation_note)}` : ''}${p.attendance_note ? ` · ${this._escapeHtml(p.attendance_note)}` : ''}</div>
+              <div class="detail-participant-badges">
+                <span class="badge ${invBadgeClass[p.invitation_status] || 'badge-outline'}">${this._capitalize(p.invitation_status)}</span>
+                ${p.attendance_status && p.attendance_status !== 'unknown' ? `<span class="badge ${attBadgeClass[p.attendance_status] || 'badge-outline'}">${this._capitalize(p.attendance_status)}</span>` : ''}
+              </div>
             </div>
             ${canManage ? `
               <div class="detail-participant-actions">
-                ${canMarkAttendance ? `<button type="button" class="detail-icon-btn detail-icon-btn--success" data-mark-attendance="${p.id}" title="Mark attendance"><i class="ti ti-user-check"></i></button>` : ''}
+                ${canMarkAttendance ? `<button type="button" class="btn btn-secondary btn-xs" data-mark-attendance="${p.id}"><i class="ti ti-user-check"></i> Attendance</button>` : ''}
                 ${p.is_organizer ? '' : `<button type="button" class="detail-icon-btn detail-icon-btn--danger" data-remove-participant="${p.id}" title="Remove participant"><i class="ti ti-x"></i></button>`}
               </div>
             ` : ''}
@@ -3265,7 +3327,16 @@ const MeetingsView = {
         const notes = notesEditor.getHTML();
         try {
           await MeetingsAPI.updateMyNotes(myParticipant.id, (notes && notes !== '<p><br></p>') ? notes : null);
-          this._closeModal();
+          // UAT bug: "the form disappear[s] then show[s] again" — My
+          // Notes is an inline panel in the detail view itself, not a
+          // stacked sub-modal, so there is nothing to pop. Calling
+          // _closeModal() here removed the ONLY layer in #modal-root
+          // and left it empty for the entire (awaited) reopen — every
+          // network fetch _openMeetingDetailModal makes ran with the
+          // modal visibly gone. Reopening directly (same pattern the
+          // attachment-upload reopen just below already uses) replaces
+          // the content in one step once the fresh data is ready,
+          // with the old view staying on screen the whole time.
           await this._openMeetingDetailModal(meeting);
         } catch (err) {
           const errEl = document.getElementById('my-notes-error');

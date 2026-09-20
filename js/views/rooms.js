@@ -209,7 +209,10 @@ const RoomsView = {
         cls: `week-grid-event--${effective}`,
         icon: 'ti-door',
         title: b.created_by_user?.full_name || 'Booking',
-        meta: `${this._timeRange(b.start_at, b.end_at)}`,
+        // UAT: "in rooms it should show the section name, who booked,
+        // and duration" — title carries the organizer (who booked),
+        // meta carries the section plus time range and duration.
+        meta: `${b.section?.name ? b.section.name + ' · ' : ''}${this._timeRange(b.start_at, b.end_at)} · ${this._durationLabel(b.start_at, b.end_at)}`,
       };
     });
     const blockEvents = blocks.map(bl => ({
@@ -1186,6 +1189,18 @@ const RoomsView = {
   _timeRange(start, end) {
     const fmt = (d) => new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     return `${fmt(start)} – ${fmt(end)}`;
+  },
+
+  // Compact duration label for the week-grid's narrow event chips (UAT:
+  // "in rooms it should show ... duration") — no space before the unit
+  // (unlike meetings.js's own formatMeetingDuration) since these chips
+  // are a fraction of the modal's width.
+  _durationLabel(start, end) {
+    const mins = Math.round((new Date(end) - new Date(start)) / 60000);
+    const h = Math.floor(mins / 60), m = mins % 60;
+    if (h === 0) return `${m}min`;
+    if (m === 0) return `${h}h`;
+    return `${h}h${m}min`;
   },
 
   _emptyBlock({ icon, title, subtitle }) {
