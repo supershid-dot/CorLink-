@@ -51,6 +51,19 @@
 // (index.html restricts connect-src to 'self' plus the Supabase
 // project's own domain, so a direct browser->Telegram call would be
 // blocked anyway even if the token were exposed client-side).
+//
+// docs/130 — Telegram message content. The original design here was
+// deliberately minimal (title + start time only, never location or
+// participants) to limit what leaves CorLink over a third-party
+// channel. The user explicitly asked for full MeetFlow parity instead
+// (date, time range, location, full participant list, organizer) after
+// being shown MeetFlow's own message format — an explicit, informed
+// scope change, not a default. Enriched entirely here in the Edge
+// Function (a live lookup against meetings/meeting_participants/users/
+// meeting_room_bookings via the service-role client), not by changing
+// create_meeting()/update_meeting()/cancel_meeting()'s own enqueue
+// payloads — those functions stay untouched, avoiding any risk to
+// their already-complex, carefully-reproduced bodies.
 // ============================================================
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.0';
@@ -66,25 +79,133 @@ function corsHeaders(origin: string | null) {
   };
 }
 
-// Deno-side port of exactly the 5 meetings.* entries in
-// js/data/notifications-api.js's own NOTIFICATION_TEMPLATES — same
-// "confidentiality-first" restraint (title/start time only, never
-// description/agenda/minutes/notes). Kept in sync by hand; if a new
-// meetings.* event type is ever added, add it in both places.
-const TEMPLATES: Record<string, (p: Record<string, unknown>) => string> = {
-  'meetings.scheduled':   (p) => `📋 New meeting: "${p.meeting_title ?? 'Untitled meeting'}"`,
-  'meetings.rescheduled': (p) => `✏️ Meeting rescheduled: "${p.meeting_title ?? 'Untitled meeting'}"`,
-  'meetings.updated':     (p) => `✏️ Meeting updated: "${p.meeting_title ?? 'Untitled meeting'}"`,
-  'meetings.cancelled':   (p) => `❌ Meeting cancelled: "${p.meeting_title ?? 'Untitled meeting'}"`,
-  'meetings.reminder':    (p) => `⏰ Starting soon: "${p.meeting_title ?? 'Untitled meeting'}"`,
+// Header line per event type — icon + label, MeetFlow-style. The
+// 'scheduled' header is bare icon + title (no "New meeting:" prefix,
+// no quotes) to match MeetFlow's own format exactly, as shown to the
+// user. The other event types keep a short distinguishing verb since
+// only the "new meeting" format was explicitly demonstrated.
+const EVENT_HEADERS: Record<string, (title: string) => string> = {
+  'meetings.scheduled':   (title) => `📋 ${title}`,
+  'meetings.rescheduled': (title) => `✏️ Meeting rescheduled: ${title}`,
+  'meetings.updated':     (title) => `✏️ Meeting updated: ${title}`,
+  'meetings.cancelled':   (title) => `❌ Meeting cancelled: ${title}`,
+  'meetings.reminder':    (title) => `⏰ Starting soon: ${title}`,
 };
 
-function renderMessage(titleTemplateKey: string, templateParams: Record<string, unknown>): string {
-  const fn = TEMPLATES[titleTemplateKey];
-  const body = fn ? fn(templateParams || {}) : 'You have a new meeting notification';
-  const startAt = templateParams?.start_at || templateParams?.new_start_at;
-  const whenLine = startAt ? `\n🗓 ${new Date(String(startAt)).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}` : '';
-  return `${body}${whenLine}`;
+type MeetingInfo = {
+  title: string;
+  start_at: string;
+  end_at: string;
+  timezone: string;
+  location: string | null;
+  organizer_name: string;
+  participants: string[];
+};
+
+function formatDesignatedName(fullName: string | null | undefined, designationName: string | null | undefined): string {
+  return [designationName, fullName].filter(Boolean).join(' ').trim();
+}
+
+// Batch-fetches everything renderMessage() needs for a set of meeting
+// ids in a handful of queries (not one per notification) — a normal
+// poll touches only a few distinct meetings even with 50 pending rows.
+async function fetchMeetingInfoMap(adminClient: ReturnType<typeof createClient>, meetingIds: string[]): Promise<Map<string, MeetingInfo>> {
+  const map = new Map<string, MeetingInfo>();
+  if (meetingIds.length === 0) return map;
+
+  const { data: meetings } = await adminClient
+    .from('meetings')
+    .select('id, title, start_at, end_at, timezone, location_mode, external_location, created_by')
+    .in('id', meetingIds);
+  if (!meetings || meetings.length === 0) return map;
+
+  const creatorIds = [...new Set(meetings.map((m) => m.created_by))];
+  const { data: creators } = await adminClient
+    .from('users')
+    .select('id, full_name, designations(name)')
+    .in('id', creatorIds);
+  const creatorById = new Map((creators || []).map((u: any) => [u.id, u]));
+
+  const roomMeetingIds = meetings.filter((m) => m.location_mode === 'room').map((m) => m.id);
+  const roomNameByMeeting = new Map<string, string>();
+  if (roomMeetingIds.length > 0) {
+    const { data: bookings } = await adminClient
+      .from('meeting_room_bookings')
+      .select('meeting_id, status, created_at, room:meeting_rooms(name)')
+      .in('meeting_id', roomMeetingIds)
+      .in('status', ['hold', 'pending', 'confirmed'])
+      .order('created_at', { ascending: false });
+    for (const b of (bookings || []) as any[]) {
+      if (!roomNameByMeeting.has(b.meeting_id)) roomNameByMeeting.set(b.meeting_id, b.room?.name || 'Room');
+    }
+  }
+
+  const { data: participants } = await adminClient
+    .from('meeting_participants')
+    .select('meeting_id, external_name, created_at, user:users(full_name, designations(name))')
+    .in('meeting_id', meetingIds)
+    .is('removed_at', null)
+    .order('created_at', { ascending: true });
+
+  const participantsByMeeting = new Map<string, string[]>();
+  for (const p of (participants || []) as any[]) {
+    const label = p.user ? formatDesignatedName(p.user.full_name, p.user.designations?.name) : (p.external_name || '');
+    if (!label) continue;
+    const arr = participantsByMeeting.get(p.meeting_id) || [];
+    arr.push(label);
+    participantsByMeeting.set(p.meeting_id, arr);
+  }
+
+  for (const m of meetings as any[]) {
+    const creator = creatorById.get(m.created_by);
+    let location: string | null = null;
+    if (m.location_mode === 'room') location = roomNameByMeeting.get(m.id) || 'Room (unassigned)';
+    else if (m.location_mode === 'external') location = m.external_location || null;
+    else if (m.location_mode === 'virtual') location = 'Virtual';
+
+    map.set(m.id, {
+      title: m.title,
+      start_at: m.start_at,
+      end_at: m.end_at,
+      timezone: m.timezone || 'Indian/Maldives',
+      location,
+      organizer_name: creator ? formatDesignatedName(creator.full_name, creator.designations?.name) : '',
+      participants: participantsByMeeting.get(m.id) || [],
+    });
+  }
+  return map;
+}
+
+function formatDate(iso: string, tz: string): string {
+  return new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: tz });
+}
+
+function formatTimeRange(startIso: string, endIso: string, tz: string): string {
+  const fmt = (iso: string) => new Date(iso).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: tz });
+  return `${fmt(startIso)} – ${fmt(endIso)}`;
+}
+
+function renderMessage(titleTemplateKey: string, templateParams: Record<string, unknown>, meeting: MeetingInfo | undefined): string {
+  const title = meeting?.title || (templateParams?.meeting_title as string) || 'Untitled meeting';
+  const headerFn = EVENT_HEADERS[titleTemplateKey];
+  const header = headerFn ? headerFn(title) : `🔔 ${title}`;
+
+  if (!meeting) {
+    // Meeting row unavailable (rare — e.g. hard-deleted between enqueue
+    // and send) — fall back to whatever the outbox payload itself
+    // carried, same as this function's original, pre-docs/130 shape.
+    const startAt = templateParams?.start_at || templateParams?.new_start_at;
+    const whenLine = startAt ? `\n🗓 ${new Date(String(startAt)).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}` : '';
+    return `${header}${whenLine}`;
+  }
+
+  const lines = [header, ''];
+  lines.push(`📅 ${formatDate(meeting.start_at, meeting.timezone)}`);
+  lines.push(`⏱ ${formatTimeRange(meeting.start_at, meeting.end_at, meeting.timezone)}`);
+  if (meeting.location) lines.push(`📍 ${meeting.location}`);
+  if (meeting.participants.length > 0) lines.push(`👥 ${meeting.participants.join(', ')}`);
+  if (meeting.organizer_name) lines.push('', `Organised by ${meeting.organizer_name}`);
+  return lines.join('\n');
 }
 
 // Returns { ok: true } on success, or { ok: false, error } with a safe,
@@ -178,7 +299,7 @@ Deno.serve(async (req) => {
 
     const { data: pending, error: pendingError } = await adminClient
       .from('user_notifications')
-      .select('id, recipient_user_id, organization_id, title_template_key, template_params')
+      .select('id, recipient_user_id, organization_id, source_record_id, title_template_key, template_params')
       .eq('source_module', 'meetings')
       .is('telegram_sent_at', null)
       .order('created_at', { ascending: true })
@@ -205,12 +326,18 @@ Deno.serve(async (req) => {
         .in('organization_id', orgIds);
       const botTokenByOrg = new Map((orgConfigs || []).map((c) => [c.organization_id, c.bot_token as string]));
 
+      // docs/130: full MeetFlow-parity message content (date, time,
+      // location, participants, organizer) — batched once per distinct
+      // meeting in this poll, not once per notification.
+      const meetingIds = [...new Set(pending.map((n) => n.source_record_id))];
+      const meetingInfoById = await fetchMeetingInfoMap(adminClient, meetingIds);
+
       for (const n of pending) {
         const chatId = chatIdByUser.get(n.recipient_user_id);
         if (!chatId) continue; // no Telegram linked — in-app notification already covers this recipient
         const botToken = botTokenByOrg.get(n.organization_id);
         if (!botToken) continue; // this organization hasn't configured a bot yet
-        const text = renderMessage(n.title_template_key, n.template_params || {});
+        const text = renderMessage(n.title_template_key, n.template_params || {}, meetingInfoById.get(n.source_record_id));
         const result = await sendTelegramMessage(botToken, chatId, text);
         if (result.ok) {
           telegramSent++;
