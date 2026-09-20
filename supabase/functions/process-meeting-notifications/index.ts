@@ -87,7 +87,12 @@ function renderMessage(titleTemplateKey: string, templateParams: Record<string, 
   return `${body}${whenLine}`;
 }
 
-async function sendTelegramMessage(botToken: string, chatId: string, text: string): Promise<boolean> {
+// Returns { ok: true } on success, or { ok: false, error } with a safe,
+// bounded description of *why* — Telegram's own error_code/description
+// (e.g. "403: Forbidden: bot was blocked by the user", "400: Bad
+// Request: chat not found"), or a local exception message. Never
+// includes the bot token or message text itself.
+async function sendTelegramMessage(botToken: string, chatId: string, text: string): Promise<{ ok: boolean; error?: string }> {
   try {
     const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: 'POST',
@@ -95,9 +100,10 @@ async function sendTelegramMessage(botToken: string, chatId: string, text: strin
       body: JSON.stringify({ chat_id: chatId, text }),
     });
     const data = await res.json();
-    return !!data.ok;
-  } catch {
-    return false;
+    if (data.ok) return { ok: true };
+    return { ok: false, error: `${res.status}: ${data.description || 'unknown Telegram API error'}` };
+  } catch (err) {
+    return { ok: false, error: `fetch failed: ${String(err)}` };
   }
 }
 
@@ -205,12 +211,13 @@ Deno.serve(async (req) => {
         const botToken = botTokenByOrg.get(n.organization_id);
         if (!botToken) continue; // this organization hasn't configured a bot yet
         const text = renderMessage(n.title_template_key, n.template_params || {});
-        const ok = await sendTelegramMessage(botToken, chatId, text);
-        if (ok) {
+        const result = await sendTelegramMessage(botToken, chatId, text);
+        if (result.ok) {
           telegramSent++;
-          await adminClient.from('user_notifications').update({ telegram_sent_at: new Date().toISOString() }).eq('id', n.id);
+          await adminClient.from('user_notifications').update({ telegram_sent_at: new Date().toISOString(), telegram_last_error: null }).eq('id', n.id);
         } else {
           telegramFailed++;
+          await adminClient.from('user_notifications').update({ telegram_last_error: (result.error || 'unknown error').slice(0, 500) }).eq('id', n.id);
         }
       }
     }
