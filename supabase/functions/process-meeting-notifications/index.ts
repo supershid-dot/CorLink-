@@ -2,7 +2,7 @@
 // CorLink — process-meeting-notifications Edge Function
 //
 // The "any open tab can poll this" endpoint behind Meetings'
-// MeetFlow-parity notification feature (docs/126). Two jobs, every
+// MeetFlow-parity notification feature (docs/126). Three jobs, every
 // invocation, in this order:
 //   1. dispatch_due_meeting_reminders() — enqueues meetings.reminder.v1
 //      CAP-003 events for any meeting whose reminder_at has come due
@@ -10,16 +10,29 @@
 //      and docs/83's own "no scheduler deployment" note — so a client-
 //      side poll, same mechanism MeetFlow itself uses, is the only
 //      trigger for time-based events here).
-//   2. Flush any not-yet-Telegram-sent meetings.* CAP-003 notification
+//   2. process_platform_outbox_batch() — docs/128: the generic CAP-003
+//      worker that turns ANY pending platform_outbox_events row (from
+//      Meetings or any other module) into notification_intents +
+//      user_notifications rows. docs/83 shipped this worker with an
+//      explicit "no scheduler/cron deployment" limitation — nothing in
+//      this codebase had ever called it, so every meetings.* event
+//      (and every other module's CAP-003 event) sat in the outbox
+//      forever, invisible to both the bell and Telegram. Draining it
+//      here, in the same already-polled endpoint that already does
+//      job 1 with no cron, is the fix — a system-wide side effect of
+//      any open CorLink tab polling, not scoped to Meetings alone.
+//   3. Flush any not-yet-Telegram-sent meetings.* CAP-003 notification
 //      to its recipient's linked Telegram chat, for every recipient
 //      who has one.
 //
-// Step 2 (and the Telegram send itself) runs under the service-role
+// Steps 2-3 (and the Telegram send itself) run under the service-role
 // client (auth.admin-equivalent access) — this is system-wide work
-// (every undelivered Telegram message across every organization), not
-// scoped to the caller's own rows, so RLS wouldn't (and shouldn't)
-// permit it under the caller's own privileges — same reasoning
-// create-user/reset-password already use. Step 1 goes through the
+// (every pending outbox event / undelivered Telegram message across
+// every organization and module), not scoped to the caller's own
+// rows, so RLS wouldn't (and shouldn't) permit it under the caller's
+// own privileges — same reasoning create-user/reset-password already
+// use, and the exact posture process_platform_outbox_batch's own
+// grants require (service_role only). Step 1 goes through the
 // caller's own forwarded session instead (see the comment at its call
 // site below for why). Requires a valid CorLink session to invoke at
 // all (mirrors reset-password's own auth check) purely as a
@@ -133,7 +146,27 @@ Deno.serve(async (req) => {
       remindersDispatched = Array.isArray(dueIds) ? dueIds.length : 0;
     }
 
-    // ── 2. Flush undelivered meetings.* notifications to Telegram ──
+    // ── 2. Drain the CAP-003 outbox (system-wide, not meetings-only) ─
+    // process_platform_outbox_batch() is the sole worker entry point
+    // (service_role-only by design — see docs/83) that turns a pending
+    // platform_outbox_events row into notification_intents +
+    // user_notifications rows. p_limit 100 comfortably covers a normal
+    // batch between polls; it's clamped to [1,200] server-side
+    // regardless. A failure here is logged, not thrown — the reminder
+    // dispatch above already succeeded and must not be undone by a
+    // problem in an unrelated later step.
+    let outboxProcessed = 0;
+    const { data: outboxResults, error: outboxError } = await adminClient.rpc('process_platform_outbox_batch', {
+      p_limit: 100,
+      p_worker_id: 'process-meeting-notifications',
+    });
+    if (outboxError) {
+      console.error('process_platform_outbox_batch failed:', outboxError.message);
+    } else {
+      outboxProcessed = Array.isArray(outboxResults) ? outboxResults.length : 0;
+    }
+
+    // ── 3. Flush undelivered meetings.* notifications to Telegram ──
     let telegramSent = 0;
     let telegramFailed = 0;
 
@@ -184,6 +217,7 @@ Deno.serve(async (req) => {
 
     return new Response(JSON.stringify({
       reminders_dispatched: remindersDispatched,
+      outbox_processed: outboxProcessed,
       telegram_sent: telegramSent,
       telegram_failed: telegramFailed,
     }), { status: 200, headers: { ...corsHeaders(origin), 'Content-Type': 'application/json' } });
