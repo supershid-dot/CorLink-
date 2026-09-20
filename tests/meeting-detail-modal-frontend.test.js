@@ -117,6 +117,9 @@ async function check(name, fn) {
       window.AttachmentsAPI = {
         list: async () => ([]),
       };
+      window.NotificationsAPI = {
+        processMeetingNotifications: async () => { record('NotificationsAPI.processMeetingNotifications', []); },
+      };
       ${richEditorSource}
       ${meetingsSource}
       window.__view = MeetingsView;

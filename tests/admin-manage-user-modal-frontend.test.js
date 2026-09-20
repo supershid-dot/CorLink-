@@ -170,6 +170,36 @@ async function check(name, fn) {
     await page.close();
   });
 
+  await check('Telegram Chat ID field renders prefilled and saves via the Profile form (docs/126)', async () => {
+    const { page } = await newPage();
+    await openManageModal(page);
+    let value = await page.evaluate(() => document.querySelector('#edit-profile-form [name="telegramChatId"]').value);
+    assert.strictEqual(value, '', 'no chat id set on the fixture user yet');
+    await page.fill('#edit-profile-form [name="telegramChatId"]', '123456789');
+    await page.evaluate(() => document.getElementById('edit-profile-form').requestSubmit());
+    await page.waitForTimeout(50);
+    const calls = await page.evaluate(() => window.calls);
+    const saveCall = calls.find(c => c.name === 'AdminAPI.updateUser');
+    assert.ok(saveCall, 'expected updateUser to be called');
+    assert.strictEqual(saveCall.args[1].telegram_chat_id, '123456789');
+    value = await page.evaluate(() => document.querySelector('#edit-profile-form [name="telegramChatId"]').value);
+    assert.strictEqual(value, '123456789', 'expected the refreshed modal to show the saved chat id');
+    await page.close();
+  });
+
+  await check('a blank Telegram Chat ID saves as null, not an empty string', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => { window.__users[0].telegram_chat_id = '999'; });
+    await openManageModal(page);
+    await page.fill('#edit-profile-form [name="telegramChatId"]', '   ');
+    await page.evaluate(() => document.getElementById('edit-profile-form').requestSubmit());
+    await page.waitForTimeout(50);
+    const calls = await page.evaluate(() => window.calls);
+    const saveCall = calls.find(c => c.name === 'AdminAPI.updateUser');
+    assert.strictEqual(saveCall.args[1].telegram_chat_id, null);
+    await page.close();
+  });
+
   await check('the explicit Close button still closes the modal', async () => {
     const { page } = await newPage();
     await openManageModal(page);

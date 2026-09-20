@@ -159,6 +159,12 @@ const NOTIFICATION_TEMPLATES = {
   'task.completed':       p => `Task "${p.task_title || 'Untitled task'}" was completed`,
   'meetings.rescheduled': p => `Meeting "${p.meeting_title || 'Untitled meeting'}" was rescheduled`,
   'meetings.cancelled':   p => `Meeting "${p.meeting_title || 'Untitled meeting'}" was cancelled`,
+  // docs/126 — Meetings notification completion (MeetFlow parity).
+  // Same restraint as the two entries above: title only, never
+  // description/agenda/minutes.
+  'meetings.scheduled':   p => `You were invited to a meeting: "${p.meeting_title || 'Untitled meeting'}"`,
+  'meetings.updated':     p => `Meeting "${p.meeting_title || 'Untitled meeting'}" was updated`,
+  'meetings.reminder':    p => `Meeting "${p.meeting_title || 'Untitled meeting'}" is starting soon`,
   'requests.sent':          p => `A request was sent to your organization${p.reference_number ? ' (' + p.reference_number + ')' : ''}`,
   'requests.returned':      () => 'Your request draft was returned for changes',
   'requests.routed':        () => 'A request was routed to your section',
@@ -512,6 +518,23 @@ const NotificationsAPI = (() => {
           filter: `recipient_user_id=eq.${userId}`,
         }, onChange)
         .subscribe();
+    },
+
+    // docs/126 — the client-poll entry point behind Meetings'
+    // MeetFlow-parity notification feature: dispatches any due
+    // meeting reminders and flushes undelivered meetings.* CAP-003
+    // notifications to Telegram, via the process-meeting-notifications
+    // Edge Function (this codebase has no cron/timer infrastructure —
+    // a client-side poll, the same mechanism MeetFlow itself uses, is
+    // the only trigger available). Fire-and-forget, same reasoning as
+    // notify() above — a missed poll tick (offline, a transient
+    // network error, no Telegram bot configured yet) must never break
+    // the page that called it; shell.js's periodic poll and meetings.js's
+    // post-mutation calls both rely on this never throwing.
+    async processMeetingNotifications() {
+      const db = getSupabase();
+      const { error } = await db.functions.invoke('process-meeting-notifications');
+      if (error) console.warn('CorLink: process-meeting-notifications failed:', error.message);
     },
 
     // Pure merge/dedup/template helpers, exposed here so shell.js and

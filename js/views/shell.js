@@ -352,6 +352,7 @@ const AppShell = {
     this.loadNotifications();
     this.loadActionCount();
     this._subscribeRealtime();
+    this._startMeetingNotificationsPoll();
   },
 
   // Paints the "needs my action" total on the Requests nav item (sidebar,
@@ -676,6 +677,28 @@ const AppShell = {
       NotificationsAPI.subscribeToNotificationChanges(session.user.id, () => {
         this.loadNotifications();
       });
+    })();
+  },
+
+  // docs/126 — Meetings notification completion (MeetFlow parity).
+  // This codebase has no cron/timer infrastructure of any kind, so a
+  // meeting reminder ("starting soon") and Telegram delivery both rely
+  // on some open client tab periodically calling the
+  // process-meeting-notifications Edge Function — the same mechanism
+  // MeetFlow itself uses (its own checkPendingNotifs(), polled every
+  // 60s). One immediate call plus a 60s interval, guarded by
+  // _meetingNotificationsPollBound the same way _subscribeRealtime()
+  // above guards its own one-per-session subscription against
+  // bindTopbar() re-running on every navigation.
+  _startMeetingNotificationsPoll() {
+    if (this._meetingNotificationsPollBound) return;
+    this._meetingNotificationsPollBound = true;
+
+    (async () => {
+      const session = await Auth.getSession();
+      if (!session) return;
+      NotificationsAPI.processMeetingNotifications();
+      setInterval(() => NotificationsAPI.processMeetingNotifications(), 60000);
     })();
   },
 };

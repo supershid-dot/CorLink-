@@ -1156,6 +1156,11 @@ const AdminView = {
               ${designationOptions.map(d => `<option value="${d.id}" ${user.designation_id === d.id ? 'selected' : ''}>${d.name}</option>`).join('')}
             </select>
           </div>
+          <div class="field-group">
+            <label class="field-label">Telegram Chat ID <span class="field-hint" style="text-transform:none; letter-spacing:normal; font-weight:400;">(optional)</span></label>
+            <input class="field-input-plain" name="telegramChatId" placeholder="e.g. 123456789" value="${user.telegram_chat_id ? this._escapeHtml(user.telegram_chat_id) : ''}" />
+            <p class="field-hint">Meeting notifications (scheduled/updated/cancelled/reminders) are sent here via Telegram, in addition to the in-app bell. Ask the user for their Chat ID from @userinfobot on Telegram.</p>
+          </div>
           <button type="submit" class="btn btn-primary btn-sm">Save Profile</button>
         </form>
       </div>
@@ -1241,6 +1246,7 @@ const AdminView = {
         await AdminAPI.updateUser(user.id, {
           full_name: fd.get('fullName'), email: fd.get('email'),
           designation_id: fd.get('designationId') || null,
+          telegram_chat_id: (fd.get('telegramChatId') || '').trim() || null,
         });
         await refreshManageUserModal();
       } catch (err) {

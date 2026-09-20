@@ -108,6 +108,9 @@ async function check(name, fn) {
       window.AttachmentsAPI = {
         upload: async (recordType, recordId, file) => { record('AttachmentsAPI.upload', [recordType, recordId, file.name]); },
       };
+      window.NotificationsAPI = {
+        processMeetingNotifications: async () => { record('NotificationsAPI.processMeetingNotifications', []); },
+      };
       ${richEditorSource}
       ${meetingsSource}
       window.__view = MeetingsView;

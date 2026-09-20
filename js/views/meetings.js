@@ -832,6 +832,7 @@ const MeetingsView = {
         }
         if (showStatusField) payload.status = fd.get('status');
         await MeetingsAPI.updateMeeting(meeting.id, payload);
+        NotificationsAPI.processMeetingNotifications();
         this._closeModal();
         await this._renderTab();
         // Reopen the detail view with the FRESH record — every path
@@ -1443,6 +1444,7 @@ const MeetingsView = {
           }
         }
 
+        NotificationsAPI.processMeetingNotifications();
         this._closeModal();
         if (warnings.length > 0) alert(`Meeting scheduled, but some steps failed:\n${warnings.join('\n')}`);
         const firstMeetingId = allMeetingIds[0] || null;
@@ -1671,6 +1673,7 @@ const MeetingsView = {
           roomId: locationMode === 'room' ? roomId : null,
           groupId: fd.get('groupId') || null,
         });
+        NotificationsAPI.processMeetingNotifications();
         this._closeModal();
         await this._renderTab();
         if (occurrences.length > 0) {
@@ -3371,6 +3374,7 @@ const MeetingsView = {
       const reason = new FormData(form).get('reason') || null;
       try {
         await MeetingsAPI.cancelMeeting(meeting.id, reason);
+        NotificationsAPI.processMeetingNotifications();
         this._closeModal();
         await this._renderTab();
       } catch (err) {

@@ -140,6 +140,7 @@ const FAKE_SUPABASE_JS = `
         },
         channel() { return { on() { return this; }, subscribe() { return this; } }; },
         removeChannel() {},
+        functions: { invoke: async () => ({ data: null, error: null }) },
       };
     },
   };
