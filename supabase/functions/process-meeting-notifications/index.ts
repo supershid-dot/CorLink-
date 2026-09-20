@@ -27,22 +27,23 @@
 // endpoint must not be callable by an anonymous outsider who finds the
 // URL.
 //
-// The Telegram bot token is an Edge Function secret
-// (TELEGRAM_BOT_TOKEN, set via `supabase secrets set`) — it is never
-// stored in the database and never reaches the browser. This is the
-// one deliberate departure from MeetFlow's own design, which stores
-// the token in a DB config table (or localStorage as a fallback) and
-// calls api.telegram.org directly from client JS; CorLink's CSP
-// (index.html) restricts connect-src to 'self' plus the Supabase
+// docs/127 — the Telegram bot token is per-organization, admin-entered
+// on the Admin > Structure screen (js/views/admin.js, "Telegram
+// Notifications" panel — MeetFlow parity) and stored in
+// organization_telegram_config, never on the client. This function
+// reads it with the service-role client (RLS on that table restricts
+// ordinary reads to admins of the matching org; the service role
+// bypasses RLS entirely, same as every other privileged read/write
+// here) — it never reaches the browser, matching CorLink's CSP
+// (index.html restricts connect-src to 'self' plus the Supabase
 // project's own domain, so a direct browser->Telegram call would be
-// blocked anyway, on top of exposing the token client-side.
+// blocked anyway even if the token were exposed client-side).
 // ============================================================
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.0';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-const TELEGRAM_BOT_TOKEN = Deno.env.get('TELEGRAM_BOT_TOKEN');
 
 function corsHeaders(origin: string | null) {
   return {
@@ -73,10 +74,9 @@ function renderMessage(titleTemplateKey: string, templateParams: Record<string, 
   return `${body}${whenLine}`;
 }
 
-async function sendTelegramMessage(chatId: string, text: string): Promise<boolean> {
-  if (!TELEGRAM_BOT_TOKEN) return false;
+async function sendTelegramMessage(botToken: string, chatId: string, text: string): Promise<boolean> {
   try {
-    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: chatId, text }),
@@ -137,37 +137,47 @@ Deno.serve(async (req) => {
     let telegramSent = 0;
     let telegramFailed = 0;
 
-    if (TELEGRAM_BOT_TOKEN) {
-      const { data: pending, error: pendingError } = await adminClient
-        .from('user_notifications')
-        .select('id, recipient_user_id, title_template_key, template_params')
-        .eq('source_module', 'meetings')
-        .is('telegram_sent_at', null)
-        .order('created_at', { ascending: true })
-        .limit(50);
+    const { data: pending, error: pendingError } = await adminClient
+      .from('user_notifications')
+      .select('id, recipient_user_id, organization_id, title_template_key, template_params')
+      .eq('source_module', 'meetings')
+      .is('telegram_sent_at', null)
+      .order('created_at', { ascending: true })
+      .limit(50);
 
-      if (pendingError) {
-        console.error('failed to load pending meetings notifications:', pendingError.message);
-      } else if (pending && pending.length > 0) {
-        const recipientIds = [...new Set(pending.map((n) => n.recipient_user_id))];
-        const { data: recipients } = await adminClient
-          .from('users')
-          .select('id, telegram_chat_id')
-          .in('id', recipientIds)
-          .not('telegram_chat_id', 'is', null);
-        const chatIdByUser = new Map((recipients || []).map((u) => [u.id, u.telegram_chat_id as string]));
+    if (pendingError) {
+      console.error('failed to load pending meetings notifications:', pendingError.message);
+    } else if (pending && pending.length > 0) {
+      const recipientIds = [...new Set(pending.map((n) => n.recipient_user_id))];
+      const { data: recipients } = await adminClient
+        .from('users')
+        .select('id, telegram_chat_id')
+        .in('id', recipientIds)
+        .not('telegram_chat_id', 'is', null);
+      const chatIdByUser = new Map((recipients || []).map((u) => [u.id, u.telegram_chat_id as string]));
 
-        for (const n of pending) {
-          const chatId = chatIdByUser.get(n.recipient_user_id);
-          if (!chatId) continue; // no Telegram linked — in-app notification already covers this recipient
-          const text = renderMessage(n.title_template_key, n.template_params || {});
-          const ok = await sendTelegramMessage(chatId, text);
-          if (ok) {
-            telegramSent++;
-            await adminClient.from('user_notifications').update({ telegram_sent_at: new Date().toISOString() }).eq('id', n.id);
-          } else {
-            telegramFailed++;
-          }
+      // Per-organization bot token, looked up once per org involved in
+      // this batch rather than once per notification — most batches
+      // span only a handful of orgs even with 50 pending rows.
+      const orgIds = [...new Set(pending.map((n) => n.organization_id))];
+      const { data: orgConfigs } = await adminClient
+        .from('organization_telegram_config')
+        .select('organization_id, bot_token')
+        .in('organization_id', orgIds);
+      const botTokenByOrg = new Map((orgConfigs || []).map((c) => [c.organization_id, c.bot_token as string]));
+
+      for (const n of pending) {
+        const chatId = chatIdByUser.get(n.recipient_user_id);
+        if (!chatId) continue; // no Telegram linked — in-app notification already covers this recipient
+        const botToken = botTokenByOrg.get(n.organization_id);
+        if (!botToken) continue; // this organization hasn't configured a bot yet
+        const text = renderMessage(n.title_template_key, n.template_params || {});
+        const ok = await sendTelegramMessage(botToken, chatId, text);
+        if (ok) {
+          telegramSent++;
+          await adminClient.from('user_notifications').update({ telegram_sent_at: new Date().toISOString() }).eq('id', n.id);
+        } else {
+          telegramFailed++;
         }
       }
     }

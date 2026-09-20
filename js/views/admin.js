@@ -448,6 +448,8 @@ const AdminView = {
     const designationsPanelHtml = this._designationsPanelHtml(designations);
     const entrySectionIds = await AdminAPI.listEntrySections(org.id);
     const orgSettingsPanelHtml = this._orgSettingsPanelHtml(org, sections, entrySectionIds);
+    const telegramBotToken = await AdminAPI.getOrgTelegramBotToken(org.id);
+    const telegramConfigPanelHtml = this._telegramConfigPanelHtml(telegramBotToken);
 
     if (org.type === 'mcs') {
       const commands = await AdminAPI.listCommands(org.id);
@@ -505,6 +507,7 @@ const AdminView = {
         </div>
         ${designationsPanelHtml}
         ${orgSettingsPanelHtml}
+        ${telegramConfigPanelHtml}
       `;
 
       document.getElementById('new-command-btn').addEventListener('click', () => {
@@ -604,6 +607,7 @@ const AdminView = {
         </div>
         ${designationsPanelHtml}
         ${orgSettingsPanelHtml}
+        ${telegramConfigPanelHtml}
       `;
 
       document.getElementById('new-division-btn').addEventListener('click', () => {
@@ -646,6 +650,7 @@ const AdminView = {
 
     this._bindDesignationsPanel(content, org);
     this._bindOrgSettingsPanel(content, org);
+    this._bindTelegramConfigPanel(content, org);
   },
 
   // Designations are a simple org-wide picklist (no hierarchy, unlike
@@ -762,6 +767,52 @@ const AdminView = {
           prisonerRegistrySectionId: fd.get('prisonerRegistrySectionId') || null,
           entrySectionIds: fd.getAll('entrySectionIds'),
         });
+        await this._renderTab();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+  },
+
+  // docs/127 — MeetFlow parity: an admin pastes a Telegram bot token
+  // (created via @BotFather) directly into this screen, so meeting
+  // notifications (scheduled/updated/rescheduled/cancelled/reminders)
+  // can also be delivered to staff who've linked their own Telegram
+  // Chat ID (see the field on the Manage User Profile form). The token
+  // itself never round-trips through this app's own JS beyond this one
+  // panel — it's read back (RLS: admins of this org only) purely so
+  // the input starts prefilled with whatever's already saved, the same
+  // way MeetFlow's own settings screen shows dots rather than a blank
+  // box once a token exists.
+  _telegramConfigPanelHtml(existingBotToken) {
+    return `
+      <div class="panel">
+        <div class="panel-header"><h3><i class="ti ti-brand-telegram"></i> Telegram Notifications</h3></div>
+        <div class="alert alert-info" style="margin-bottom:14px;">
+          Create a bot via <strong>@BotFather</strong>, paste the token below. Add each staff member's Chat ID in their profile (they can get it from <strong>@userinfobot</strong>).
+        </div>
+        <form id="telegram-config-form" class="modal-form">
+          <div class="field-group">
+            <label class="field-label">Bot Token</label>
+            <input class="field-input-plain" type="password" name="botToken" autocomplete="off" placeholder="e.g. 123456789:AAExampleTokenFromBotFather" value="${existingBotToken ? this._escapeHtml(existingBotToken) : ''}" />
+            <p class="field-hint">Leave blank and save to remove Telegram delivery for this organization.</p>
+          </div>
+          <div class="telegram-config-error alert alert-error hidden"></div>
+          <button type="submit" class="btn btn-primary btn-sm"><i class="ti ti-check"></i> Save Token</button>
+        </form>
+      </div>
+    `;
+  },
+
+  _bindTelegramConfigPanel(content, org) {
+    const form = document.getElementById('telegram-config-form');
+    form?.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const errEl = form.querySelector('.telegram-config-error');
+      try {
+        await AdminAPI.updateOrgTelegramBotToken(org.id, fd.get('botToken'));
         await this._renderTab();
       } catch (err) {
         errEl.textContent = err.message;

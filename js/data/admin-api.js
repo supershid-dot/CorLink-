@@ -74,6 +74,33 @@ const AdminAPI = (() => {
       await logAudit('edited', 'organization', id, `Updated request routing & reference number settings`);
     },
 
+    // docs/127 — the Telegram bot token lives in its own table
+    // (organization_telegram_config), never on the broadly-readable
+    // organizations row, and is only ever readable via RLS by an admin
+    // of that org (or a super admin) — a plain SELECT here returns
+    // nothing at all for anyone else, no error. Returns null when
+    // unset (RPC handles blank input as "clear" on the write side).
+    async getOrgTelegramBotToken(orgId) {
+      const db = getSupabase();
+      const { data, error } = await db.from('organization_telegram_config')
+        .select('bot_token').eq('organization_id', orgId).maybeSingle();
+      if (error) throw error;
+      return data?.bot_token || null;
+    },
+
+    // Goes through update_org_telegram_bot_token() rather than a plain
+    // table write — there is no direct write RLS policy on
+    // organization_telegram_config at all (see the patch's own
+    // comment), so this RPC is the only way to set or clear it.
+    async updateOrgTelegramBotToken(orgId, botToken) {
+      const db = getSupabase();
+      const { error } = await db.rpc('update_org_telegram_bot_token', {
+        p_org_id: orgId, p_bot_token: botToken || null,
+      });
+      if (error) throw error;
+      await logAudit('edited', 'organization', orgId, botToken ? 'Updated Telegram bot token' : 'Cleared Telegram bot token');
+    },
+
     // entry_sections is a join table (an org may designate more than
     // one section to log Entry correspondence), so it's fetched
     // separately from the organizations row itself.
