@@ -219,7 +219,11 @@ function renderMessage(titleTemplateKey: string, templateParams: Record<string, 
   const lines = [header, ''];
   lines.push(`📅 ${formatDate(meeting.start_at, meeting.timezone)}`);
   lines.push(`⏱ ${formatTimeRange(meeting.start_at, meeting.end_at, meeting.timezone)}`);
-  if (meeting.location) lines.push(`📍 ${meeting.location}`);
+  // No location line on a cancellation: by the time a meeting is
+  // cancelled its room booking is typically already released, so
+  // meeting.location would misleadingly read "Room (unassigned)" —
+  // and the room is moot for a meeting that's no longer happening.
+  if (meeting.location && titleTemplateKey !== 'meetings.cancelled') lines.push(`📍 ${meeting.location}`);
   if (meeting.participants.length > 0) lines.push(`👥 ${meeting.participants.join(', ')}`);
   if (meeting.organizer_name) lines.push('', `Organised by ${meeting.organizer_name}`);
   return lines.join('\n');
