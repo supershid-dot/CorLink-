@@ -971,7 +971,7 @@ const AdminView = {
     content.querySelectorAll('[data-manage-user]').forEach(btn => {
       btn.addEventListener('click', () => {
         const u = users.find(x => x.id === btn.dataset.manageUser);
-        this._openManageUserModal(u, scopes, org, activeDesignations);
+        this._openManageUserModal(u, scopes, org, activeDesignations, users);
       });
     });
   },
@@ -1148,8 +1148,20 @@ const AdminView = {
     `);
   },
 
-  _openManageUserModal(user, scopes, org, designations = []) {
+  async _openManageUserModal(user, scopes, org, designations = [], orgUsers = []) {
     const activeAssignments = (user.user_assignments || []).filter(a => a.is_active);
+    // Calendar Access (docs/137) — "the staff who is approved by the
+    // admin in admin portal", beyond this user's own section/
+    // department/command colleagues (who can already see each other's
+    // schedules with no admin action needed). Fetched up front so the
+    // checklist opens pre-checked, same as every other section here.
+    let scheduleGrantIds = new Set();
+    try {
+      scheduleGrantIds = new Set(await AdminAPI.fetchScheduleGrants(user.id));
+    } catch (err) {
+      console.error('CorLink: failed to load calendar access grants', err);
+    }
+    const scheduleGrantCandidates = orgUsers.filter(u => u.id !== user.id && u.is_active);
     const scopeMap = this._scopeMap(scopes, org);
     const adminRole = org.type === 'mcs' ? 'mcs_admin' : 'authority_admin';
     const adminLabel = org.type === 'mcs' ? 'MCS Admin' : 'Authority Admin';
@@ -1179,7 +1191,7 @@ const AdminView = {
       try {
         const freshUsers = await AdminAPI.listUsersByOrg(org.id);
         const freshUser = freshUsers.find(u => u.id === user.id) || user;
-        this._openManageUserModal(freshUser, scopes, org, designations);
+        await this._openManageUserModal(freshUser, scopes, org, designations, freshUsers);
       } catch (err) {
         console.error('CorLink: failed to refresh Manage User panel', err);
         this._closeModal();
@@ -1283,6 +1295,21 @@ const AdminView = {
         </form>
       </div>
 
+      <div class="modal-section">
+        <div class="modal-section-title">Calendar Access</div>
+        <p class="field-hint">This user can already see the Calendar schedules of colleagues in their own section, department, or command with no action here. Check any other staff below to explicitly allow this user to see their schedule too (docs/137).</p>
+        <input class="field-input-plain" id="schedule-grant-search" placeholder="Search staff…" style="margin-bottom:6px;" />
+        <div class="checkbox-list" id="schedule-grant-list" style="max-height:220px; overflow-y:auto;">
+          ${scheduleGrantCandidates.map(u => `
+            <label class="checkbox-row" data-grant-row data-grant-name="${this._escapeHtml(u.full_name.toLowerCase())}">
+              <input type="checkbox" value="${u.id}" ${scheduleGrantIds.has(u.id) ? 'checked' : ''} />
+              ${this._escapeHtml(u.full_name)}${u.service_number ? ` · ${this._escapeHtml(u.service_number)}` : ''}
+            </label>
+          `).join('') || '<p class="structure-empty">No other active staff in this organization yet.</p>'}
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" id="save-schedule-grants-btn" style="margin-top:8px;">Save Calendar Access</button>
+      </div>
+
       <div class="modal-error alert alert-error hidden"></div>
       <div class="modal-actions">
         <button class="btn btn-secondary" data-close-modal>Close</button>
@@ -1336,6 +1363,25 @@ const AdminView = {
           title: 'Password Reset',
           message: `Password reset for service number <strong>${result.service_number}</strong>.`,
         });
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.classList.remove('hidden');
+      }
+    });
+
+    document.getElementById('schedule-grant-search')?.addEventListener('input', (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      document.querySelectorAll('[data-grant-row]').forEach(row => {
+        row.classList.toggle('hidden', !!q && !row.dataset.grantName.includes(q));
+      });
+    });
+
+    document.getElementById('save-schedule-grants-btn')?.addEventListener('click', async () => {
+      const errEl = document.querySelector('.modal-error');
+      const selectedIds = [...document.querySelectorAll('#schedule-grant-list input[type="checkbox"]:checked')].map(cb => cb.value);
+      try {
+        await AdminAPI.setScheduleGrants(user.id, selectedIds);
+        await refreshManageUserModal();
       } catch (err) {
         errEl.textContent = err.message;
         errEl.classList.remove('hidden');

@@ -4,16 +4,22 @@
 // (MeetingsAPI.fetchMeetingsInRange), standalone room bookings
 // (RoomsAPI.fetchBookings), and room blocks (RoomsAPI.fetchRoomBlocks).
 //
-// Deliberately NOT a new SECURITY DEFINER RPC — docs/23 §3's own
-// explicit safeguard is that Calendar's read path must reuse each
-// underlying table's existing, already-correct SELECT policy rather
-// than reimplementing visibility logic behind a new bypass. Client-
-// side merging over three already-permissioned reads is the literal
-// mechanism that guarantees this: every row this file ever returns is
-// a row the caller could already see by querying Meetings or Rooms
-// directly, because that is exactly what this file does. No table is
-// queried here that isn't already queried elsewhere in this codebase;
-// no new column, table, RLS policy, or RPC exists for this feature.
+// fetchEvents() itself is deliberately NOT a new SECURITY DEFINER RPC —
+// docs/23 §3's own explicit safeguard is that Calendar's default read
+// path must reuse each underlying table's existing, already-correct
+// SELECT policy rather than reimplementing visibility logic behind a
+// new bypass. Client-side merging over three already-permissioned
+// reads is the literal mechanism that guarantees this: every row
+// fetchEvents() returns is a row the caller could already see by
+// querying Meetings or Rooms directly, because that is exactly what it
+// does.
+//
+// fetchViewableStaff()/fetchUserSchedule() below are the one
+// deliberate exception (docs/137, "view a specific staff member's
+// schedule") — see supabase/patch-calendar-staff-schedule-access.sql
+// for why composing already-RLS-scoped reads genuinely cannot answer
+// "show me user X's schedule" once X's meetings may live outside the
+// caller's own default visibility.
 //
 // Leave (docs/23 Phase H) and Draft/Pre-booked Meetings (docs/23 §4's
 // is_draft_series/custom_days path) are not implemented anywhere in
@@ -110,16 +116,62 @@ const CalendarAPI = (() => {
 
     // Meeting ids the caller is an active participant of (organizer or
     // otherwise) — reused as-is from MeetingsAPI, RLS-scoped to the
-    // caller's own row. This is what powers the "only meetings I'm
-    // participating in" filter: deliberately self-scoped rather than an
-    // arbitrary-other-user picker, since meeting_participants_select's
-    // own RLS (own row, or a meeting one manages) would silently return
-    // an incomplete result for "show me user X's meetings" when X isn't
-    // the caller and the caller doesn't manage every one of X's visible
-    // meetings — a correctness gap, not a security one, but one this
-    // file avoids entirely by never attempting that query shape.
+    // caller's own row. This is what powers the "My schedule" option in
+    // the staff selector below: self-scoped, no new RPC needed.
     async fetchMyParticipantMeetingIds() {
       return new Set(await MeetingsAPI.fetchMyMeetingIds());
+    },
+
+    // ── Staff schedule selector (docs/137) ───────────────────────────
+    // The one deliberate exception to this file's own "no new SECURITY
+    // DEFINER read" rule stated at the top — see supabase/patch-
+    // calendar-staff-schedule-access.sql for why: showing an arbitrary
+    // OTHER user's schedule genuinely cannot be done by composing
+    // already-RLS-scoped reads (their meetings may live outside the
+    // caller's own visibility even when the caller is allowed to see
+    // that person's schedule specifically).
+
+    // Staff the caller is permitted to pick in the selector — own
+    // section/department/command colleagues, plus anyone an org admin
+    // has explicitly granted (Admin → Manage User → Calendar Access).
+    async fetchViewableStaff() {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('viewable_calendar_staff');
+      if (error) throw error;
+      return data || [];
+    },
+
+    // One user's own meeting schedule (as creator or active
+    // participant) in range, normalized to the same event shape
+    // fetchEvents() produces above so calendar.js's rendering code
+    // needs no special-casing. Deliberately meetings-only — no
+    // standalone room bookings/blocks, which aren't "someone's
+    // schedule" in the personal sense.
+    async fetchUserSchedule({ userId, from, to }) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('fetch_user_calendar_events', {
+        p_user_id: userId, p_from: from, p_to: to,
+      });
+      if (error) throw error;
+      return (data || []).map(m => ({
+        type: 'meeting',
+        id: m.id,
+        title: m.title,
+        start: m.start_at,
+        end: m.end_at,
+        status: m.status,
+        meetingType: m.meeting_type,
+        orgId: m.organization_id,
+        roomId: m.room_id || null,
+        roomName: m.room_name || null,
+        creatorId: m.created_by,
+        creatorName: m.created_by_name || '',
+        isRecurring: !!m.series_id,
+        isLocked: !!m.is_locked,
+        isDraft: m.status === 'draft',
+        locationMode: m.location_mode,
+        raw: m,
+      }));
     },
   };
 })();

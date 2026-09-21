@@ -26,7 +26,11 @@ const CalendarView = {
   _state: {
     mode: 'month', // 'day' | 'week' | 'month' | 'agenda'
     anchor: WeekGrid._dayStr(new Date()),
-    filters: { orgId: '', roomId: '', creatorId: '', status: '', meetingType: '', onlyMine: false, showBlocks: true },
+    // staffId: '' (All meetings — default, unfiltered), '__me__' (My
+    // schedule — client-side only, no new fetch), or another user's id
+    // (fetches that person's own schedule via CalendarAPI.fetchUserSchedule,
+    // docs/137 — replaces the old standalone "Only mine" checkbox).
+    filters: { orgId: '', roomId: '', creatorId: '', status: '', meetingType: '', staffId: '', showBlocks: true },
     // Which day's agenda list is expanded in Week mode on mobile
     // (docs/22 §3.1) — null means "default to today if in this week,
     // else the first day", handled by WeekGrid itself. Distinct from
@@ -170,6 +174,29 @@ const CalendarView = {
       this._myMeetingIds = myMeetingIds;
       this._range = { from, to };
 
+      // Fetched once per view mount, not on every navigation — the
+      // list of staff a caller may pick doesn't change with the date
+      // range (docs/137).
+      if (this._viewableStaff === undefined) {
+        try { this._viewableStaff = await CalendarAPI.fetchViewableStaff(); }
+        catch (err) { console.error('CorLink: failed to load viewable staff', err); this._viewableStaff = []; }
+      }
+
+      const staffId = this._state.filters.staffId;
+      if (staffId && staffId !== '__me__') {
+        try {
+          this._staffEvents = await CalendarAPI.fetchUserSchedule({
+            userId: staffId, from: from.toISOString(), to: to.toISOString(),
+          });
+        } catch (err) {
+          console.error('CorLink: failed to load staff schedule', err);
+          this._staffEvents = [];
+          // Don't get stuck re-erroring on every subsequent date
+          // navigation — fall back to the unfiltered view.
+          this._state.filters.staffId = '';
+        }
+      }
+
       if (this._isSuperAdmin) {
         try { this._orgNames = new Map((await AdminAPI.listOrganizations()).map(o => [o.id, o.name])); }
         catch (err) { console.error('CorLink: failed to load organization names', err); this._orgNames = new Map(); }
@@ -192,6 +219,22 @@ const CalendarView = {
     return `${from.toLocaleDateString(undefined, opts)} – ${last.toLocaleDateString(undefined, opts)}`;
   },
 
+  // The event set every other control (room/status/etc. dropdowns,
+  // _applyFilters, event clicks) operates over — switches to a single
+  // staff member's own fetched schedule when one is selected (docs/137),
+  // otherwise the normal already-RLS-scoped set. "My schedule" needs no
+  // separate fetch — it's the same set, narrowed client-side exactly
+  // like the old "Only mine" checkbox did.
+  _activeSourceEvents() {
+    const staffId = this._state.filters.staffId;
+    if (staffId === '__me__') {
+      return (this._events || []).filter(e =>
+        e.type === 'meeting' && (e.creatorId === this._user.id || this._myMeetingIds.has(e.id)));
+    }
+    if (staffId) return this._staffEvents || [];
+    return this._events || [];
+  },
+
   // ── Filters (derived entirely from the already-fetched, already-
   // RLS-scoped event set — a filter can never surface more than the
   // caller could already see, and never issues a new query) ───────
@@ -202,7 +245,7 @@ const CalendarView = {
     const creators = new Map();
     const statuses = new Set();
     const types = new Set();
-    (this._events || []).forEach(e => {
+    this._activeSourceEvents().forEach(e => {
       if (e.orgId) orgs.set(e.orgId, this._orgNames.get(e.orgId) || e.orgId);
       if (e.roomId && e.roomName) rooms.set(e.roomId, e.roomName);
       if (e.creatorId && e.creatorName) creators.set(e.creatorId, e.creatorName);
@@ -235,10 +278,12 @@ const CalendarView = {
           <option value="">All meeting types</option>
           ${[...types].sort().map(t => `<option value="${t}" ${f.meetingType === t ? 'selected' : ''}>${this._capitalize(t)}</option>`).join('')}
         </select>
-        <label class="checkbox-row" style="margin:0;">
-          <input type="checkbox" id="cal-filter-mine" ${f.onlyMine ? 'checked' : ''} />
-          <span>Only mine</span>
-        </label>
+        <select class="field-select" id="cal-filter-staff">
+          <option value="">— All meetings —</option>
+          <option value="__me__" ${f.staffId === '__me__' ? 'selected' : ''}>— My schedule —</option>
+          ${(this._viewableStaff || []).map(s =>
+            `<option value="${s.id}" ${f.staffId === s.id ? 'selected' : ''}>${this._escapeHtml(s.full_name)}${s.service_number ? ' · ' + this._escapeHtml(s.service_number) : ''}</option>`).join('')}
+        </select>
         <label class="checkbox-row" style="margin:0;">
           <input type="checkbox" id="cal-filter-blocks" ${f.showBlocks ? 'checked' : ''} />
           <span>Show room blocks</span>
@@ -251,7 +296,11 @@ const CalendarView = {
     document.getElementById('cal-filter-creator').addEventListener('change', (e) => { f.creatorId = e.target.value; this._renderView(); });
     document.getElementById('cal-filter-status').addEventListener('change', (e) => { f.status = e.target.value; this._renderView(); });
     document.getElementById('cal-filter-type').addEventListener('change', (e) => { f.meetingType = e.target.value; this._renderView(); });
-    document.getElementById('cal-filter-mine').addEventListener('change', (e) => { f.onlyMine = e.target.checked; this._renderView(); });
+    // Unlike every other control here, this one can require a new
+    // fetch (docs/137) — go through _loadAndRender() rather than just
+    // _renderView() so a real staff id's own schedule gets loaded, and
+    // so date navigation afterward keeps refetching it automatically.
+    document.getElementById('cal-filter-staff').addEventListener('change', (e) => { f.staffId = e.target.value; this._loadAndRender(); });
     document.getElementById('cal-filter-blocks').addEventListener('change', (e) => { f.showBlocks = e.target.checked; this._renderView(); });
   },
 
@@ -265,10 +314,6 @@ const CalendarView = {
       if (f.meetingType) {
         if (e.type !== 'meeting' || e.meetingType !== f.meetingType) return false;
       }
-      if (f.onlyMine) {
-        const mine = e.type === 'meeting' && (e.creatorId === this._user.id || this._myMeetingIds.has(e.id));
-        if (!mine) return false;
-      }
       if (!f.showBlocks && e.type === 'block') return false;
       return true;
     });
@@ -277,7 +322,7 @@ const CalendarView = {
   // ── View dispatch ────────────────────────────────────────────────
   _renderView() {
     const content = document.getElementById('calendar-content');
-    const events = this._applyFilters(this._events || []);
+    const events = this._applyFilters(this._activeSourceEvents());
     if (this._state.mode === 'month') content.innerHTML = this._renderMonth(events);
     else if (this._state.mode === 'week') content.innerHTML = this._renderWeek(events);
     else if (this._state.mode === 'day') content.innerHTML = this._renderDay(events, new Date(this._state.anchor + 'T00:00:00'));
@@ -319,10 +364,46 @@ const CalendarView = {
     });
   },
 
+  // A meeting event sourced from another staff member's schedule
+  // (docs/137) may not actually be openable in the Meetings module —
+  // "can view this on the calendar" and "can view its full detail"
+  // are deliberately separate permissions (fetch_user_calendar_events'
+  // own migration comment explains why). Rather than navigate and risk
+  // an RLS-denied error, show what's already known client-side in a
+  // small read-only preview instead, with an explicit "Open in
+  // Meetings" action for when the caller does also have full access.
   _routeEventClick(type, id) {
-    if (type === 'meeting') Router.navigate('meetings', { meetingId: id });
+    if (type === 'meeting') {
+      const staffId = this._state.filters.staffId;
+      if (staffId && staffId !== '__me__') {
+        const e = (this._staffEvents || []).find(ev => ev.id === id);
+        if (e) { this._openStaffEventPreviewModal(e); return; }
+      }
+      Router.navigate('meetings', { meetingId: id });
+    }
     else if (type === 'booking') Router.navigate('rooms', { bookingId: id });
     else if (type === 'block') this._openBlockDetailModal(id);
+  },
+
+  _openStaffEventPreviewModal(e) {
+    const v = this._eventVisual(e);
+    this._openModal(`
+      <h3><i class="ti ${v.icon}"></i> ${this._escapeHtml(e.title)}</h3>
+      <div class="detail-grid">
+        <div><strong>When</strong><div>${new Date(e.start).toLocaleString()} – ${this._fmtTime(e.end)}</div></div>
+        ${e.roomName ? `<div><strong>Room</strong><div>${this._escapeHtml(e.roomName)}</div></div>` : ''}
+        <div><strong>Status</strong><div>${this._capitalize(e.status)}</div></div>
+        <div><strong>Organizer</strong><div>${this._escapeHtml(e.creatorName || '')}</div></div>
+      </div>
+      <p class="field-hint">Shown because this staff member's schedule is visible to you — full meeting details still follow that meeting's own visibility settings.</p>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-secondary" data-close-modal>Close</button>
+        <button type="button" class="btn btn-primary" id="cal-staff-event-open-btn">Open in Meetings</button>
+      </div>
+    `, { medium: true });
+    document.getElementById('cal-staff-event-open-btn').addEventListener('click', () => {
+      Router.navigate('meetings', { meetingId: e.id });
+    });
   },
 
   // ── Month view ───────────────────────────────────────────────────

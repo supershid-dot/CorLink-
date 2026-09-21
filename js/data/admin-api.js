@@ -348,6 +348,34 @@ const AdminAPI = (() => {
       return data;
     },
 
+    // ── Calendar Access grants (docs/137) ───────────────────────────
+    // Which OTHER staff this one user (viewerId) may view the schedule
+    // of, beyond their own section/department/command colleagues —
+    // "the staff who is approved by the admin in admin portal". Read
+    // is a direct table select (user_schedule_grants' own RLS already
+    // permits an org admin to read any of their org's users' grants);
+    // the write is RPC-only (admin_set_schedule_grants), same
+    // RPC-only-mutation convention as meetings/meeting_participants.
+    async fetchScheduleGrants(viewerId) {
+      const db = getSupabase();
+      const { data, error } = await db.from('user_schedule_grants')
+        .select('target_user_id').eq('viewer_id', viewerId);
+      if (error) throw error;
+      return (data || []).map(r => r.target_user_id);
+    },
+
+    // Full replace — pass the complete set of target user ids this
+    // viewer should be able to see, matching the Manage User panel's
+    // checklist Save action.
+    async setScheduleGrants(viewerId, targetUserIds) {
+      const db = getSupabase();
+      const { error } = await db.rpc('admin_set_schedule_grants', {
+        p_viewer_user_id: viewerId, p_target_user_ids: targetUserIds,
+      });
+      if (error) throw error;
+      await logAudit('schedule_access_updated', 'user', viewerId, 'Updated calendar access grants');
+    },
+
     // Creates a new auth user + profile + assignments via Edge Function
     // (requires service role key, cannot be done with the anon key).
     async createUser({ serviceNumber, fullName, email, orgId, designationId, preferredLanguage, assignments }) {

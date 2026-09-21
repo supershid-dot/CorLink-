@@ -453,6 +453,7 @@ async function check(name, fn) {
       window.AdminAPI = { listOrganizations: async () => [] };
       window.MeetingsAPI = { fetchMeetingsInRange: async () => ([]), fetchMyMeetingIds: async () => [] };
       window.RoomsAPI = { fetchBookings: async () => ([]), fetchRoomBlocks: async () => ([]) };
+      window.__fetchUserScheduleCalls = [];
       window.CalendarAPI = {
         fetchEvents: async () => ([{
           type: 'meeting', id: 'm1', title: 'Budget Review', start: '2026-09-16T09:00:00Z', end: '2026-09-16T10:00:00Z',
@@ -460,6 +461,15 @@ async function check(name, fn) {
           isRecurring: false, isLocked: false, isDraft: false,
         }]),
         fetchMyParticipantMeetingIds: async () => new Set(),
+        fetchViewableStaff: async () => ([{ id: 'staff-2', full_name: 'Ahmed Sobah', service_number: '10112' }]),
+        fetchUserSchedule: async (args) => {
+          window.__fetchUserScheduleCalls.push(args);
+          return [{
+            type: 'meeting', id: 'm2', title: "Ahmed's 1:1", start: '2026-09-16T11:00:00Z', end: '2026-09-16T11:30:00Z',
+            status: 'scheduled', orgId: 'org-1', roomId: null, roomName: 'HQ Meeting Room A', creatorId: 'staff-2', creatorName: 'Ahmed Sobah',
+            isRecurring: false, isLocked: false, isDraft: false,
+          }];
+        },
       };
       ${gridSource}
       ${calendarSource}
@@ -552,6 +562,127 @@ async function check(name, fn) {
     await page.evaluate(() => document.querySelector('[data-week-grid-day-pick][data-day="2026-09-18"]').click());
     const persistedDay = await page.evaluate(() => window.__view._state.weekMobileDay);
     assert.strictEqual(persistedDay, '2026-09-18');
+    await page.close();
+  });
+
+  // ── Calendar staff schedule selector (docs/137) ──────────────────
+  await check('the Staff dropdown offers "All meetings" (default), "My schedule", and each viewable staff member', async () => {
+    const { page } = await newCalendarPage();
+    await page.evaluate(async () => {
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._state.mode = 'agenda';
+      v._state.anchor = '2026-09-16';
+      document.body.insertAdjacentHTML('beforeend', `
+        <span id="cal-range-label"></span>
+        <div id="cal-filters"></div>
+        <div id="calendar-content"></div>
+      `);
+      await v._loadAndRender();
+    });
+    const options = await page.evaluate(() => [...document.getElementById('cal-filter-staff').options].map(o => ({ value: o.value, text: o.textContent })));
+    assert.strictEqual(options[0].value, '');
+    assert.match(options[0].text, /All meetings/);
+    assert.strictEqual(options[1].value, '__me__');
+    assert.match(options[1].text, /My schedule/);
+    assert.ok(options.some(o => o.value === 'staff-2' && /Ahmed Sobah/.test(o.text) && /10112/.test(o.text)));
+    // Default selection shows the normal (unfiltered) event set — the
+    // one fetched meeting from fetchEvents(), not fetchUserSchedule's.
+    assert.strictEqual(await page.locator('.calendar-event-row').count(), 1);
+    assert.match(await page.evaluate(() => document.getElementById('calendar-content').textContent), /Budget Review/);
+    await page.close();
+  });
+
+  await check('selecting a staff member fetches and shows that person\'s own schedule instead of the default event set', async () => {
+    const { page } = await newCalendarPage();
+    await page.evaluate(async () => {
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._state.mode = 'agenda';
+      v._state.anchor = '2026-09-16';
+      document.body.insertAdjacentHTML('beforeend', `
+        <span id="cal-range-label"></span>
+        <div id="cal-filters"></div>
+        <div id="calendar-content"></div>
+      `);
+      await v._loadAndRender();
+    });
+    await page.evaluate(() => {
+      const sel = document.getElementById('cal-filter-staff');
+      sel.value = 'staff-2';
+      sel.dispatchEvent(new Event('change'));
+    });
+    await page.waitForTimeout(50);
+    const calls = await page.evaluate(() => window.__fetchUserScheduleCalls);
+    assert.strictEqual(calls.length, 1);
+    assert.strictEqual(calls[0].userId, 'staff-2');
+    const contentText = await page.evaluate(() => document.getElementById('calendar-content').textContent);
+    assert.match(contentText, /Ahmed's 1:1/);
+    assert.doesNotMatch(contentText, /Budget Review/);
+    await page.close();
+  });
+
+  await check('"My schedule" filters client-side to the caller\'s own meetings, with no fetchUserSchedule call', async () => {
+    const { page } = await newCalendarPage();
+    await page.evaluate(async () => {
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._state.mode = 'agenda';
+      v._state.anchor = '2026-09-16';
+      document.body.insertAdjacentHTML('beforeend', `
+        <span id="cal-range-label"></span>
+        <div id="cal-filters"></div>
+        <div id="calendar-content"></div>
+      `);
+      await v._loadAndRender();
+    });
+    await page.evaluate(() => {
+      const sel = document.getElementById('cal-filter-staff');
+      sel.value = '__me__';
+      sel.dispatchEvent(new Event('change'));
+    });
+    await page.waitForTimeout(50);
+    const calls = await page.evaluate(() => window.__fetchUserScheduleCalls);
+    assert.strictEqual(calls.length, 0, 'My schedule must not trigger a new fetch — it filters the already-fetched event set client-side');
+    const contentText = await page.evaluate(() => document.getElementById('calendar-content').textContent);
+    assert.match(contentText, /Budget Review/, 'the fetched meeting is created by u1, so it counts as "mine"');
+    await page.close();
+  });
+
+  await check('clicking a staff-schedule event opens a read-only preview instead of navigating straight to Meetings', async () => {
+    const { page } = await newCalendarPage();
+    await page.evaluate(async () => {
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._state.mode = 'agenda';
+      v._state.anchor = '2026-09-16';
+      document.body.insertAdjacentHTML('beforeend', `
+        <span id="cal-range-label"></span>
+        <div id="cal-filters"></div>
+        <div id="calendar-content"></div>
+      `);
+      await v._loadAndRender();
+    });
+    await page.evaluate(() => {
+      const sel = document.getElementById('cal-filter-staff');
+      sel.value = 'staff-2';
+      sel.dispatchEvent(new Event('change'));
+    });
+    await page.waitForTimeout(50);
+    await page.evaluate(() => document.querySelector('[data-event-type="meeting"][data-event-id="m2"]').click());
+    const navCalls = await page.evaluate(() => window.__navCalls || []);
+    assert.strictEqual(navCalls.length, 0, 'must not navigate away immediately');
+    const modalHtml = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(modalHtml, /Ahmed's 1:1/);
+    assert.match(modalHtml, /Open in Meetings/);
+    // The explicit "Open in Meetings" button still navigates when clicked.
+    await page.evaluate(() => document.getElementById('cal-staff-event-open-btn').click());
+    const navCallsAfter = await page.evaluate(() => window.__navCalls);
+    assert.deepStrictEqual(navCallsAfter[0], ['meetings', { meetingId: 'm2' }]);
     await page.close();
   });
 

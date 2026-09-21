@@ -58,8 +58,14 @@ async function check(name, fn) {
         service_number: 'CPO-100', designation_id: null, is_active: true,
         is_prisoner_letters_staff: false, is_super_admin: false,
         user_assignments: [{ id: 'a1', role: 'staff', scope_type: 'section', scope_id: 'sec-1', is_active: true, is_primary: true }],
+      }, {
+        id: 'u2', full_name: 'Ahmed Sobah', email: 'ahmed@example.com',
+        service_number: 'DCP-112', designation_id: null, is_active: true,
+        is_prisoner_letters_staff: false, is_super_admin: false,
+        user_assignments: [{ id: 'a2', role: 'staff', scope_type: 'section', scope_id: 'sec-2', is_active: true, is_primary: true }],
       }];
-      let nextAssignmentId = 2;
+      let nextAssignmentId = 3;
+      window.__scheduleGrants = {}; // viewerId -> [targetUserId, ...]
 
       window.Auth = { getCachedProfile: () => ({ id: 'admin1', org_id: 'org-1', is_super_admin: false, assignments: [{ is_active: true, role: 'mcs_admin' }] }) };
       window.AppShell = { topbarHtml: () => '', bottomNavHtml: () => '', bindTopbar: () => {} };
@@ -91,6 +97,11 @@ async function check(name, fn) {
           u.user_assignments.forEach(a => { a.is_primary = (a.id === assignmentId); });
         },
         resetUserPassword: async (id) => { record('AdminAPI.resetUserPassword', [id]); return { temp_password: 'Temp123!', service_number: 'CPO-100' }; },
+        fetchScheduleGrants: async (viewerId) => { record('AdminAPI.fetchScheduleGrants', [viewerId]); return window.__scheduleGrants[viewerId] || []; },
+        setScheduleGrants: async (viewerId, targetIds) => {
+          record('AdminAPI.setScheduleGrants', [viewerId, targetIds]);
+          window.__scheduleGrants[viewerId] = targetIds;
+        },
       };
       ${adminSource}
       window.__view = AdminView;
@@ -106,7 +117,7 @@ async function check(name, fn) {
     await page.evaluate(async () => {
       const users = await window.AdminAPI.listUsersByOrg('org-1');
       const scopes = await window.AdminAPI.listAssignableScopes(window.__org);
-      window.__view._openManageUserModal(users[0], scopes, window.__org, []);
+      await window.__view._openManageUserModal(users[0], scopes, window.__org, [], users);
     });
     await page.waitForTimeout(30);
   }
@@ -197,6 +208,49 @@ async function check(name, fn) {
     const calls = await page.evaluate(() => window.calls);
     const saveCall = calls.find(c => c.name === 'AdminAPI.updateUser');
     assert.strictEqual(saveCall.args[1].telegram_chat_id, null);
+    await page.close();
+  });
+
+  await check('Calendar Access checklist renders every other active staff member, unchecked by default (docs/137)', async () => {
+    const { page } = await newPage();
+    await openManageModal(page);
+    const rows = await page.evaluate(() => [...document.querySelectorAll('#schedule-grant-list input[type="checkbox"]')].map(cb => ({
+      value: cb.value, checked: cb.checked,
+    })));
+    assert.deepStrictEqual(rows, [{ value: 'u2', checked: false }], 'only the OTHER staff member (u2) should be listed, unchecked');
+    const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.match(html, /Ahmed Sobah/);
+    assert.match(html, /DCP-112/);
+    await page.close();
+  });
+
+  await check('checking a candidate and clicking Save calls setScheduleGrants, and the modal reopens pre-checked', async () => {
+    const { page } = await newPage();
+    await openManageModal(page);
+    await page.check('#schedule-grant-list input[value="u2"]');
+    await page.click('#save-schedule-grants-btn');
+    await page.waitForTimeout(50);
+    const calls = await page.evaluate(() => window.calls);
+    const saveCall = calls.find(c => c.name === 'AdminAPI.setScheduleGrants');
+    assert.ok(saveCall, 'expected setScheduleGrants to be called');
+    assert.strictEqual(saveCall.args[0], 'u1');
+    assert.deepStrictEqual(saveCall.args[1], ['u2']);
+    const checkedAfter = await page.evaluate(() => document.querySelector('#schedule-grant-list input[value="u2"]').checked);
+    assert.strictEqual(checkedAfter, true, 'expected the refreshed modal to show the saved grant pre-checked');
+    await page.close();
+  });
+
+  await check('the staff search filter narrows the checklist without losing a hidden row\'s checked state', async () => {
+    const { page } = await newPage();
+    await openManageModal(page);
+    await page.fill('#schedule-grant-search', 'zzz-no-match');
+    const visibleCount = await page.evaluate(() =>
+      [...document.querySelectorAll('[data-grant-row]')].filter(r => !r.classList.contains('hidden')).length);
+    assert.strictEqual(visibleCount, 0);
+    await page.fill('#schedule-grant-search', 'ahmed');
+    const visibleAfter = await page.evaluate(() =>
+      [...document.querySelectorAll('[data-grant-row]')].filter(r => !r.classList.contains('hidden')).length);
+    assert.strictEqual(visibleAfter, 1);
     await page.close();
   });
 
