@@ -274,14 +274,15 @@ async function check(name, fn) {
     await page.close();
   });
 
-  await check('Rooms Schedule tab event chips show who booked, the section, and the duration (UAT: "in rooms it should show the section name, who booked, and duration")', async () => {
+  await check('Rooms Schedule tab event chips show who booked, the section, and the duration (UAT: "in rooms it should show the section name, who booked, and duration") -- section comes from the linked meeting, since a meeting-linked booking\'s own section_id column stays NULL (docs/135)', async () => {
     const { page } = await newRoomsPage();
     await page.evaluate(async () => {
       window.RoomsAPI.fetchBookings = async () => ([{
-        id: 'bk1', room_id: 'r1', status: 'confirmed',
+        id: 'bk1', room_id: 'r1', status: 'confirmed', meeting_id: 'm1',
         start_at: '2026-09-16T09:00:00Z', end_at: '2026-09-16T11:00:00Z',
         created_by_user: { full_name: 'Hussain Zareer' },
-        section: { id: 'sec-1', name: 'Offender Records' },
+        section: null, // meeting_room_bookings.section_id -- always NULL for a meeting-linked booking
+        linked_meeting: { section: { id: 'sec-1', name: 'Offender Records' } },
         room: { id: 'r1', name: 'HQ Meeting Room A' },
       }]);
       const v = window.__view;
@@ -298,8 +299,35 @@ async function check(name, fn) {
     const title = await page.locator('.week-grid-event-title').innerText();
     const meta = await page.locator('.week-grid-event-meta').innerText();
     assert.match(title, /Hussain Zareer/, 'who booked');
-    assert.match(meta, /Offender Records/, 'section name');
+    assert.match(meta, /Offender Records/, 'section name, sourced from the linked meeting');
     assert.match(meta, /2h\b/, 'duration');
+    await page.close();
+  });
+
+  await check('a standalone (non-meeting) room booking falls back to its own section_id when there is no linked meeting', async () => {
+    const { page } = await newRoomsPage();
+    await page.evaluate(async () => {
+      window.RoomsAPI.fetchBookings = async () => ([{
+        id: 'bk2', room_id: 'r1', status: 'confirmed', meeting_id: null,
+        start_at: '2026-09-16T09:00:00Z', end_at: '2026-09-16T11:00:00Z',
+        created_by_user: { full_name: 'Aiminath Nisreen' },
+        section: { id: 'sec-2', name: 'Records Unit' },
+        linked_meeting: null,
+        room: { id: 'r1', name: 'HQ Meeting Room A' },
+      }]);
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._isAdmin = false; v._isSupervisor = false; v._orgId = 'org-1';
+      v._rooms = await window.RoomsAPI.fetchRooms();
+      v._myManagedRoomIds = new Set();
+      v._state.tab = 'schedule';
+      v._state.scheduleRoomId = 'r1';
+      v._state.scheduleDate = '2026-09-16';
+      document.body.insertAdjacentHTML('beforeend', `<div id="rooms-tab-content"></div>`);
+      await v._renderTab();
+    });
+    const meta = await page.locator('.week-grid-event-meta').innerText();
+    assert.match(meta, /Records Unit/, 'section name, sourced from the booking\'s own section_id');
     await page.close();
   });
 

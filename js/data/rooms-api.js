@@ -14,10 +14,17 @@
 // this file never sends a client-supplied user id as "who did this".
 
 const RoomsAPI = (() => {
+  // section is meeting_room_bookings' own section_id — in practice
+  // always NULL for a booking made through the combined Schedule
+  // Meeting form (the section lives on the linked meeting instead, via
+  // meeting_id), so linked_meeting.section is also fetched here; the
+  // UI prefers that one and falls back to this direct column only for
+  // a genuinely standalone (non-meeting) room booking.
   const BOOKING_SELECT = `
     *,
     room:meeting_rooms!meeting_room_bookings_room_id_fkey(id, name, capacity, bookable_until, is_active),
     section:sections!meeting_room_bookings_section_id_fkey(id, name),
+    linked_meeting:meetings!meeting_room_bookings_meeting_id_fkey(section:sections!meetings_section_id_fkey(id, name)),
     created_by_user:users!meeting_room_bookings_created_by_fkey(id, full_name, service_number),
     approved_by_user:users!meeting_room_bookings_approved_by_fkey(full_name),
     rejected_by_user:users!meeting_room_bookings_rejected_by_fkey(full_name),

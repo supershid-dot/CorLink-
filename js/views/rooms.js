@@ -212,7 +212,12 @@ const RoomsView = {
         // UAT: "in rooms it should show the section name, who booked,
         // and duration" — title carries the organizer (who booked),
         // meta carries the section plus time range and duration.
-        meta: `${b.section?.name ? b.section.name + ' · ' : ''}${this._timeRange(b.start_at, b.end_at)} · ${this._durationLabel(b.start_at, b.end_at)}`,
+        // linked_meeting.section is preferred over the booking's own
+        // section — a booking made through the combined Schedule
+        // Meeting form always carries its section on the meeting, not
+        // on the booking row itself (that column stays NULL); a
+        // genuinely standalone room-only booking falls back to its own.
+        meta: `${(b.linked_meeting?.section?.name || b.section?.name) ? (b.linked_meeting?.section?.name || b.section.name) + ' · ' : ''}${this._timeRange(b.start_at, b.end_at)} · ${this._durationLabel(b.start_at, b.end_at)}`,
       };
     });
     const blockEvents = blocks.map(bl => ({
