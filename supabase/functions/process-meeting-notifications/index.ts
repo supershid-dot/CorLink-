@@ -64,6 +64,14 @@
 // create_meeting()/update_meeting()/cancel_meeting()'s own enqueue
 // payloads — those functions stay untouched, avoiding any risk to
 // their already-complex, carefully-reproduced bodies.
+//
+// docs/131 — Accept/Decline inline buttons, attached only to
+// meetings.scheduled (invitation) messages, matching MeetFlow's own
+// behavior. A tap fires a Telegram callback_query webhook, handled by
+// the separate telegram-webhook Edge Function (registered per-org via
+// register-telegram-webhook, called right after the bot token is
+// saved) — this function only builds and attaches the button payload;
+// it does not handle the tap itself.
 // ============================================================
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.0';
@@ -109,15 +117,22 @@ function formatDesignatedName(fullName: string | null | undefined, designationNa
 // Batch-fetches everything renderMessage() needs for a set of meeting
 // ids in a handful of queries (not one per notification) — a normal
 // poll touches only a few distinct meetings even with 50 pending rows.
-async function fetchMeetingInfoMap(adminClient: ReturnType<typeof createClient>, meetingIds: string[]): Promise<Map<string, MeetingInfo>> {
+// Also returns participantIdByMeetingAndUser (docs/131) — the
+// meeting_participants.id for a given (meeting, recipient) pair,
+// needed to build that recipient's own RSVP callback_data.
+async function fetchMeetingInfoMap(adminClient: ReturnType<typeof createClient>, meetingIds: string[]): Promise<{
+  meetingInfoById: Map<string, MeetingInfo>;
+  participantIdByMeetingAndUser: Map<string, string>;
+}> {
   const map = new Map<string, MeetingInfo>();
-  if (meetingIds.length === 0) return map;
+  const participantIdByMeetingAndUser = new Map<string, string>();
+  if (meetingIds.length === 0) return { meetingInfoById: map, participantIdByMeetingAndUser };
 
   const { data: meetings } = await adminClient
     .from('meetings')
     .select('id, title, start_at, end_at, timezone, location_mode, external_location, created_by')
     .in('id', meetingIds);
-  if (!meetings || meetings.length === 0) return map;
+  if (!meetings || meetings.length === 0) return { meetingInfoById: map, participantIdByMeetingAndUser };
 
   const creatorIds = [...new Set(meetings.map((m) => m.created_by))];
   const { data: creators } = await adminClient
@@ -142,7 +157,7 @@ async function fetchMeetingInfoMap(adminClient: ReturnType<typeof createClient>,
 
   const { data: participants } = await adminClient
     .from('meeting_participants')
-    .select('meeting_id, external_name, created_at, user:users(full_name, designations(name))')
+    .select('id, meeting_id, user_id, external_name, created_at, user:users(full_name, designations(name))')
     .in('meeting_id', meetingIds)
     .is('removed_at', null)
     .order('created_at', { ascending: true });
@@ -150,10 +165,12 @@ async function fetchMeetingInfoMap(adminClient: ReturnType<typeof createClient>,
   const participantsByMeeting = new Map<string, string[]>();
   for (const p of (participants || []) as any[]) {
     const label = p.user ? formatDesignatedName(p.user.full_name, p.user.designations?.name) : (p.external_name || '');
-    if (!label) continue;
-    const arr = participantsByMeeting.get(p.meeting_id) || [];
-    arr.push(label);
-    participantsByMeeting.set(p.meeting_id, arr);
+    if (label) {
+      const arr = participantsByMeeting.get(p.meeting_id) || [];
+      arr.push(label);
+      participantsByMeeting.set(p.meeting_id, arr);
+    }
+    if (p.user_id) participantIdByMeetingAndUser.set(`${p.meeting_id}:${p.user_id}`, p.id);
   }
 
   for (const m of meetings as any[]) {
@@ -173,7 +190,7 @@ async function fetchMeetingInfoMap(adminClient: ReturnType<typeof createClient>,
       participants: participantsByMeeting.get(m.id) || [],
     });
   }
-  return map;
+  return { meetingInfoById: map, participantIdByMeetingAndUser };
 }
 
 function formatDate(iso: string, tz: string): string {
@@ -213,12 +230,12 @@ function renderMessage(titleTemplateKey: string, templateParams: Record<string, 
 // (e.g. "403: Forbidden: bot was blocked by the user", "400: Bad
 // Request: chat not found"), or a local exception message. Never
 // includes the bot token or message text itself.
-async function sendTelegramMessage(botToken: string, chatId: string, text: string): Promise<{ ok: boolean; error?: string }> {
+async function sendTelegramMessage(botToken: string, chatId: string, text: string, replyMarkup?: unknown): Promise<{ ok: boolean; error?: string }> {
   try {
     const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text }),
+      body: JSON.stringify({ chat_id: chatId, text, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) }),
     });
     const data = await res.json();
     if (data.ok) return { ok: true };
@@ -330,7 +347,7 @@ Deno.serve(async (req) => {
       // location, participants, organizer) — batched once per distinct
       // meeting in this poll, not once per notification.
       const meetingIds = [...new Set(pending.map((n) => n.source_record_id))];
-      const meetingInfoById = await fetchMeetingInfoMap(adminClient, meetingIds);
+      const { meetingInfoById, participantIdByMeetingAndUser } = await fetchMeetingInfoMap(adminClient, meetingIds);
 
       for (const n of pending) {
         const chatId = chatIdByUser.get(n.recipient_user_id);
@@ -338,7 +355,22 @@ Deno.serve(async (req) => {
         const botToken = botTokenByOrg.get(n.organization_id);
         if (!botToken) continue; // this organization hasn't configured a bot yet
         const text = renderMessage(n.title_template_key, n.template_params || {}, meetingInfoById.get(n.source_record_id));
-        const result = await sendTelegramMessage(botToken, chatId, text);
+
+        // docs/131: Accept/Decline inline buttons, invitations only —
+        // matches MeetFlow's own behavior of only offering RSVP on the
+        // "new meeting" message, not on updates/cancellations/reminders.
+        let replyMarkup: unknown;
+        if (n.title_template_key === 'meetings.scheduled') {
+          const participantId = participantIdByMeetingAndUser.get(`${n.source_record_id}:${n.recipient_user_id}`);
+          if (participantId) {
+            replyMarkup = { inline_keyboard: [[
+              { text: '✅ Accept', callback_data: `rsvp:accepted:${participantId}` },
+              { text: '❌ Decline', callback_data: `rsvp:declined:${participantId}` },
+            ]] };
+          }
+        }
+
+        const result = await sendTelegramMessage(botToken, chatId, text, replyMarkup);
         if (result.ok) {
           telegramSent++;
           await adminClient.from('user_notifications').update({ telegram_sent_at: new Date().toISOString(), telegram_last_error: null }).eq('id', n.id);

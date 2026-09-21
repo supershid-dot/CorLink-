@@ -99,6 +99,19 @@ const AdminAPI = (() => {
       });
       if (error) throw error;
       await logAudit('edited', 'organization', orgId, botToken ? 'Updated Telegram bot token' : 'Cleared Telegram bot token');
+
+      // docs/131: register the Telegram webhook (Accept/Decline RSVP
+      // buttons) right after a real token is saved — best-effort, never
+      // thrown. The token save itself already succeeded above; a
+      // transient failure here only means RSVP buttons won't work until
+      // the token is re-saved, not that the whole action should fail.
+      if (botToken) {
+        try {
+          await db.functions.invoke('register-telegram-webhook', { body: { orgId } });
+        } catch (webhookError) {
+          console.warn('CorLink: register-telegram-webhook failed:', webhookError.message);
+        }
+      }
     },
 
     // entry_sections is a join table (an org may designate more than
