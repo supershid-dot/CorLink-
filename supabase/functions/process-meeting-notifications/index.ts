@@ -155,12 +155,21 @@ async function fetchMeetingInfoMap(adminClient: ReturnType<typeof createClient>,
     }
   }
 
-  const { data: participants } = await adminClient
+  // meeting_participants has THREE foreign keys into users (user_id,
+  // invited_by, removed_by) — the embed must be disambiguated with
+  // !user_id, or PostgREST rejects the query as ambiguous and this
+  // silently returns nothing (participants list AND RSVP button data
+  // both go empty, with no visible error unless the response is
+  // checked — which it now is, below).
+  const { data: participants, error: participantsError } = await adminClient
     .from('meeting_participants')
-    .select('id, meeting_id, user_id, external_name, created_at, user:users(full_name, designations(name))')
+    .select('id, meeting_id, user_id, external_name, created_at, user:users!user_id(full_name, designations(name))')
     .in('meeting_id', meetingIds)
     .is('removed_at', null)
     .order('created_at', { ascending: true });
+  if (participantsError) {
+    console.error('fetchMeetingInfoMap: meeting_participants query failed:', participantsError.message);
+  }
 
   const participantsByMeeting = new Map<string, string[]>();
   for (const p of (participants || []) as any[]) {
