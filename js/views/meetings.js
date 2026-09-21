@@ -917,7 +917,11 @@ const MeetingsView = {
       if (this._roomsEnabled) fetches.push(RoomsAPI.fetchRooms(this._orgId));
       const results = await Promise.all(fetches);
       groups = results[0] || [];
-      orgUsers = (results[1] || []).filter(u => u.is_active && u.id !== this._user.id);
+      // Includes the caller themselves — a meeting's creator is not
+      // automatically one of its participants any more (docs/136),
+      // so they must be explicitly added here like anyone else if
+      // they intend to actually attend or be its organizer.
+      orgUsers = (results[1] || []).filter(u => u.is_active);
       sections = results[2] || [];
       if (this._roomsEnabled) rooms = (results[3] || []).filter(r => r.is_active);
     } catch (err) {
@@ -1027,6 +1031,7 @@ const MeetingsView = {
             </div>
             <div class="field-group">
               <label class="field-label">Participants</label>
+              <p class="field-hint">You are not automatically added — include yourself below if you're attending. Use "Set organizer" on one participant to mark them as the meeting's organizer.</p>
               <div class="participant-chip-list" id="sm-participant-list"></div>
             </div>
             <div class="tabs" id="sm-participant-type-tabs">
@@ -1246,25 +1251,49 @@ const MeetingsView = {
     // ── Participants (queued client-side, applied after the meeting/
     // series is created — every one of these RPCs already existed and
     // is already covered by its own tests; this only sequences them) ──
+    // A meeting's creator is no longer auto-added as a participant/
+    // organizer (docs/136) — they must be explicitly queued like
+    // anyone else, and organizerIdx tracks which ONE queued participant
+    // (if any) the admin has explicitly designated as organizer.
+    // Group-added participants can't be individually designated here
+    // (the group's membership isn't known client-side), so organizer
+    // designation only applies to individually-added internal/external
+    // participants.
     const pending = []; // { type: 'internal'|'external', userId?/name?/email?, label }
     let pendingGroup = null; // { groupId, label } — at most one, matching create_recurring_meeting's own single p_group_id
+    let organizerIdx = null; // index into `pending`, or null (no organizer designated yet)
     const queuedInternalIds = new Set();
     const listEl = document.getElementById('sm-participant-list');
 
     const renderPendingList = () => {
-      const organizerChip = `<div class="participant-chip participant-chip--organizer"><i class="ti ti-user-check"></i> You (organizer)</div>`;
       const groupChip = pendingGroup
         ? `<div class="participant-chip"><i class="ti ti-users-group"></i> ${this._escapeHtml(pendingGroup.label)} (group) <button type="button" class="participant-chip-remove" data-remove-group aria-label="Remove group">&times;</button></div>`
         : '';
-      const chips = pending.map((item, i) =>
-        `<div class="participant-chip"><i class="ti ${item.type === 'internal' ? 'ti-user' : 'ti-user-plus'}"></i> ${this._escapeHtml(item.label)}${item.type === 'external' ? ' (guest)' : ''} <button type="button" class="participant-chip-remove" data-remove-idx="${i}" aria-label="Remove">&times;</button></div>`
-      ).join('');
-      listEl.innerHTML = organizerChip + groupChip + chips;
+      const chips = pending.map((item, i) => {
+        const isOrganizer = i === organizerIdx;
+        return `<div class="participant-chip${isOrganizer ? ' participant-chip--organizer' : ''}">
+          <i class="ti ${item.type === 'internal' ? 'ti-user' : 'ti-user-plus'}"></i> ${this._escapeHtml(item.label)}${item.type === 'external' ? ' (guest)' : ''}
+          ${isOrganizer
+            ? `<span class="badge badge-outline">Organizer</span>`
+            : `<button type="button" class="participant-chip-organizer-btn" data-set-organizer-idx="${i}">Set organizer</button>`}
+          <button type="button" class="participant-chip-remove" data-remove-idx="${i}" aria-label="Remove">&times;</button>
+        </div>`;
+      }).join('');
+      listEl.innerHTML = groupChip + chips
+        || `<p class="field-hint">No participants added yet.</p>`;
+      listEl.querySelectorAll('[data-set-organizer-idx]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          organizerIdx = parseInt(btn.dataset.setOrganizerIdx, 10);
+          renderPendingList();
+        });
+      });
       listEl.querySelectorAll('[data-remove-idx]').forEach(btn => {
         btn.addEventListener('click', () => {
           const idx = parseInt(btn.dataset.removeIdx, 10);
           const removed = pending.splice(idx, 1)[0];
           if (removed && removed.type === 'internal') queuedInternalIds.delete(removed.userId);
+          if (organizerIdx === idx) organizerIdx = null;
+          else if (organizerIdx !== null && idx < organizerIdx) organizerIdx -= 1;
           renderPendingList();
           renderStaffOptions(staffSearch.value);
         });
@@ -1403,6 +1432,7 @@ const MeetingsView = {
             externalLocation: locationMode === 'external' ? externalLocation : null,
             virtualLink, sectionId,
             status: 'scheduled',
+            includeCreatorAsParticipant: false,
           });
           allMeetingIds = [meetingId];
           if (locationMode === 'room' && roomId) {
@@ -1425,15 +1455,18 @@ const MeetingsView = {
             virtualLink, sectionId,
             roomId: locationMode === 'room' ? roomId : null,
             groupId: pendingGroup ? pendingGroup.groupId : null,
+            includeCreatorAsParticipant: false,
           });
           allMeetingIds = occurrences.map(o => o.meeting_id);
         }
 
         for (const mid of allMeetingIds) {
-          for (const item of pending) {
+          for (let i = 0; i < pending.length; i++) {
+            const item = pending[i];
+            const participantRole = i === organizerIdx ? 'organizer' : 'attendee';
             try {
-              if (item.type === 'internal') await MeetingsAPI.addParticipant(mid, { userId: item.userId });
-              else await MeetingsAPI.addParticipant(mid, { externalName: item.name, externalEmail: item.email });
+              if (item.type === 'internal') await MeetingsAPI.addParticipant(mid, { userId: item.userId, participantRole });
+              else await MeetingsAPI.addParticipant(mid, { externalName: item.name, externalEmail: item.email, participantRole });
             } catch (err) {
               warnings.push(`${item.label}: ${err.message}`);
             }

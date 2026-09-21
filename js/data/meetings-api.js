@@ -142,10 +142,18 @@ const MeetingsAPI = (() => {
 
     // ── Mutating RPCs — exact parameter names, no direct table
     // writes, no client-supplied actor identity ──────────────────────
+    // includeCreatorAsParticipant defaults to true (the long-standing
+    // behavior — the creator is auto-added as the meeting's organizer)
+    // so every existing caller keeps working unchanged; the combined
+    // Schedule Meeting form passes false and applies every participant,
+    // including the creator when explicitly selected, itself via
+    // addParticipant() (docs/136 — a meeting's creator is not
+    // necessarily one of its participants).
     async createMeeting({
       title, startAt, endAt, status = 'scheduled', description = null,
       meetingType = 'general', visibility = 'participants', timezone = 'Indian/Maldives',
       locationMode = null, externalLocation = null, virtualLink = null, sectionId = null,
+      includeCreatorAsParticipant = true,
     }) {
       const db = getSupabase();
       const { data, error } = await db.rpc('create_meeting', {
@@ -154,6 +162,7 @@ const MeetingsAPI = (() => {
         p_timezone: timezone, p_location_mode: locationMode || null,
         p_external_location: externalLocation || null, p_virtual_link: virtualLink || null,
         p_section_id: sectionId || null,
+        p_include_creator_as_participant: includeCreatorAsParticipant,
       });
       if (error) throw error;
       return data;
@@ -429,11 +438,14 @@ const MeetingsAPI = (() => {
     // conflict on ANY occurrence rolls back the entire series, nothing
     // partial is ever left behind. Returns one {series_id, meeting_id,
     // occurrence_date} row per occurrence created.
+    // includeCreatorAsParticipant — see createMeeting() above; passed
+    // straight through to every occurrence's own create_meeting() call.
     async createRecurringMeeting({
       title, seriesStartDate, seriesEndDate, startTime, endTime, recurrencePattern,
       description = null, meetingType = 'general', visibility = 'participants',
       timezone = 'Indian/Maldives', locationMode = null, externalLocation = null,
       virtualLink = null, roomId = null, groupId = null, intervalCount = 1, sectionId = null,
+      includeCreatorAsParticipant = true,
     }) {
       const db = getSupabase();
       const { data, error } = await db.rpc('create_recurring_meeting', {
@@ -454,6 +466,7 @@ const MeetingsAPI = (() => {
         p_group_id: groupId || null,
         p_interval_count: intervalCount,
         p_section_id: sectionId || null,
+        p_include_creator_as_participant: includeCreatorAsParticipant,
       });
       if (error) throw error;
       return data || [];

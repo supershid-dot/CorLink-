@@ -120,7 +120,7 @@ async function check(name, fn) {
     return { page, pageErrors };
   }
 
-  await check('renders title, format/room, date/time/duration, recurrence tabs, and the organizer chip', async () => {
+  await check('renders title, format/room, date/time/duration, and recurrence tabs; no participant is auto-added (docs/136)', async () => {
     const { page } = await newPage();
     await page.evaluate(() => window.__view._openScheduleMeetingModal());
     const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
@@ -133,7 +133,10 @@ async function check(name, fn) {
     assert.match(html, /name="duration"/);
     assert.match(html, /data-recur="none"/);
     assert.match(html, /data-recur="weekly:1"/);
-    assert.match(html, /You \(organizer\)/);
+    // The creator is no longer auto-added as a participant/organizer —
+    // no hardcoded "You (organizer)" chip, an empty-state hint instead.
+    assert.doesNotMatch(html, /You \(organizer\)/);
+    assert.match(html, /No participants added yet\./);
     // Timezone and Meeting Type are no longer user-facing fields —
     // every meeting is always Indian/Maldives time and 'general' type.
     assert.doesNotMatch(html, /name="timezone"/);
@@ -141,6 +144,26 @@ async function check(name, fn) {
     // Agenda/Notes carries the same EN/Dhivehi toggle used everywhere
     // else text is authored in this app.
     assert.match(html, /data-lang-toggle="descriptionLanguage"/);
+    await page.close();
+  });
+
+  await check('the caller themselves appears as a selectable staff option (docs/136: not auto-added, must be explicitly chosen)', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openScheduleMeetingModal());
+    const optionLabels = await page.evaluate(() => [...document.getElementById('sm-staff-select').options].map(o => o.textContent));
+    assert.ok(optionLabels.includes('Jane Staff'), 'expected the caller (Jane Staff / u1) to be a selectable staff option');
+    await page.close();
+  });
+
+  await check('createMeeting and createRecurringMeeting are both called with includeCreatorAsParticipant: false (docs/136)', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openScheduleMeetingModal());
+    await page.evaluate(() => { document.querySelector('#schedule-meeting-form [name="title"]').value = 'Plain Meeting'; });
+    await page.evaluate(() => document.getElementById('sm-submit-btn').click());
+    await page.waitForTimeout(50);
+    const calls = await page.evaluate(() => window.calls);
+    const createCall = calls.find(c => c.name === 'MeetingsAPI.createMeeting');
+    assert.strictEqual(createCall.args[0].includeCreatorAsParticipant, false);
     await page.close();
   });
 
@@ -333,7 +356,7 @@ async function check(name, fn) {
     await page.close();
   });
 
-  await check('queued staff, a group, and an external guest are each added via the correct API after creation', async () => {
+  await check('queued staff, a group, and an external guest are each added via the correct API after creation, all as attendees when no organizer is designated', async () => {
     const { page } = await newPage();
     await page.evaluate(() => window.__view._openScheduleMeetingModal());
     await page.evaluate(() => {
@@ -354,16 +377,79 @@ async function check(name, fn) {
     assert.match(chipListHtml, /Ahmed Sobah/);
     assert.match(chipListHtml, /Executive Team/);
     assert.match(chipListHtml, /External Partner/);
+    // No chip is pre-marked as organizer — "Set organizer" is offered
+    // on every individually-queued participant instead.
+    assert.doesNotMatch(chipListHtml, />Organizer</);
+    assert.match(chipListHtml, /Set organizer/);
 
     await page.evaluate(() => document.getElementById('sm-submit-btn').click());
     await page.waitForTimeout(50);
     const calls = await page.evaluate(() => window.calls);
     const addCalls = calls.filter(c => c.name === 'MeetingsAPI.addParticipant');
     const groupCall = calls.find(c => c.name === 'MeetingsAPI.applyGroupToMeeting');
-    assert.ok(addCalls.some(c => c.args[1].userId === 'staff-1'), 'expected the internal staff member to be added');
-    assert.ok(addCalls.some(c => c.args[1].externalName === 'External Partner' && c.args[1].externalEmail === 'partner@example.com'), 'expected the external guest to be added');
+    const staffCall = addCalls.find(c => c.args[1].userId === 'staff-1');
+    const guestCall = addCalls.find(c => c.args[1].externalName === 'External Partner' && c.args[1].externalEmail === 'partner@example.com');
+    assert.ok(staffCall, 'expected the internal staff member to be added');
+    assert.ok(guestCall, 'expected the external guest to be added');
+    assert.strictEqual(staffCall.args[1].participantRole, 'attendee', 'no organizer was designated, so everyone is an attendee');
+    assert.strictEqual(guestCall.args[1].participantRole, 'attendee');
     assert.ok(groupCall, 'expected the group to be applied');
     assert.deepStrictEqual(groupCall.args, ['meeting-1', 'grp-1']);
+    await page.close();
+  });
+
+  await check('"Set organizer" on a queued participant designates them as organizer; only they get participantRole: organizer (docs/136)', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openScheduleMeetingModal());
+    await page.evaluate(() => {
+      document.querySelector('#schedule-meeting-form [name="title"]').value = 'Team Sync';
+      const staffSelect = document.getElementById('sm-staff-select');
+      staffSelect.value = 'staff-1';
+      document.getElementById('sm-add-staff-btn').click();
+      document.getElementById('sm-guest-name').value = 'External Partner';
+      document.getElementById('sm-add-guest-btn').click();
+    });
+    // Mark the first queued participant (staff-1) as organizer.
+    await page.evaluate(() => document.querySelector('#sm-participant-list [data-set-organizer-idx="0"]').click());
+    const chipListHtml = await page.evaluate(() => document.getElementById('sm-participant-list').innerHTML);
+    assert.match(chipListHtml, />Organizer</);
+
+    await page.evaluate(() => document.getElementById('sm-submit-btn').click());
+    await page.waitForTimeout(50);
+    const calls = await page.evaluate(() => window.calls);
+    const addCalls = calls.filter(c => c.name === 'MeetingsAPI.addParticipant');
+    const staffCall = addCalls.find(c => c.args[1].userId === 'staff-1');
+    const guestCall = addCalls.find(c => c.args[1].externalName === 'External Partner');
+    assert.strictEqual(staffCall.args[1].participantRole, 'organizer');
+    assert.strictEqual(guestCall.args[1].participantRole, 'attendee');
+    await page.close();
+  });
+
+  await check('removing the designated organizer clears the designation; a later "Set organizer" click still works', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openScheduleMeetingModal());
+    await page.evaluate(() => {
+      document.querySelector('#schedule-meeting-form [name="title"]').value = 'Team Sync';
+      const staffSelect = document.getElementById('sm-staff-select');
+      staffSelect.value = 'staff-1';
+      document.getElementById('sm-add-staff-btn').click();
+      staffSelect.value = 'staff-2';
+      document.getElementById('sm-add-staff-btn').click();
+    });
+    await page.evaluate(() => document.querySelector('#sm-participant-list [data-set-organizer-idx="0"]').click());
+    // Remove the now-organizer chip (staff-1, index 0).
+    await page.evaluate(() => document.querySelector('#sm-participant-list [data-remove-idx="0"]').click());
+    const chipListHtml = await page.evaluate(() => document.getElementById('sm-participant-list').innerHTML);
+    assert.doesNotMatch(chipListHtml, />Organizer</, 'organizer designation must clear when that participant is removed');
+    assert.match(chipListHtml, /Aminath Nisreen/);
+
+    await page.evaluate(() => document.getElementById('sm-submit-btn').click());
+    await page.waitForTimeout(50);
+    const calls = await page.evaluate(() => window.calls);
+    const addCalls = calls.filter(c => c.name === 'MeetingsAPI.addParticipant');
+    assert.strictEqual(addCalls.length, 1);
+    assert.strictEqual(addCalls[0].args[1].userId, 'staff-2');
+    assert.strictEqual(addCalls[0].args[1].participantRole, 'attendee');
     await page.close();
   });
 
@@ -386,6 +472,7 @@ async function check(name, fn) {
     assert.strictEqual(seriesCall.args[0].intervalCount, 1);
     assert.strictEqual(seriesCall.args[0].roomId, 'room-1');
     assert.strictEqual(seriesCall.args[0].groupId, 'grp-1');
+    assert.strictEqual(seriesCall.args[0].includeCreatorAsParticipant, false);
     assert.ok(!calls.some(c => c.name === 'MeetingsAPI.createMeeting'), 'the single-meeting RPC must not also be called');
     assert.ok(!calls.some(c => c.name === 'MeetingsAPI.applyGroupToMeeting'), 'the group is applied via createRecurringMeeting\'s own groupId param, not a separate call');
     await page.close();
