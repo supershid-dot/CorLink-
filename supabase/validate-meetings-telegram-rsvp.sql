@@ -44,6 +44,8 @@ INSERT INTO users (id, org_id, service_number, full_name, email, is_active, tele
   ('7e000000-0004-0000-0000-000000000002', '7e000000-0000-0000-0000-000000000001', 'RE-2', 'Invitee', 're-invitee@t.local', TRUE, '99999999');
 INSERT INTO user_assignments (user_id, scope_type, scope_id, role, is_primary, is_active) VALUES
   ('7e000000-0004-0000-0000-000000000001', 'organization', '7e000000-0000-0000-0000-000000000001', 'mcs_admin', TRUE, TRUE);
+INSERT INTO organization_modules (organization_id, module_id, is_enabled)
+  SELECT '7e000000-0000-0000-0000-000000000001', id, TRUE FROM platform_modules WHERE module_key = 'meetings';
 
 -- No SET ROLE authenticated here: respond_to_invitation_via_telegram()
 -- is SECURITY DEFINER and does its own explicit authorization (the
