@@ -2217,7 +2217,7 @@ const MeetingsView = {
           ? await MeetingsAPI.cancelSeriesThisAndFuture(meeting.id, reason)
           : await MeetingsAPI.cancelEntireSeries(meeting.series_id, reason);
         this._closeModal();
-        await this._renderTab();
+        await this._refreshCurrentViews();
         this._openSeriesResultSummaryModal({ action: 'cancel', scope, rows, summary: this._summarizeSeriesCancelOutcome(rows) });
       } catch (err) {
         errEl.textContent = err.message || 'This series could not be cancelled — it was not changed.';
@@ -3375,8 +3375,8 @@ const MeetingsView = {
       try {
         await MeetingsAPI.cancelMeeting(meeting.id, reason);
         NotificationsAPI.processMeetingNotifications();
-        this._closeModal();
-        await this._renderTab();
+        this._closeAllModals();
+        await this._refreshCurrentViews();
       } catch (err) {
         const errEl = form.querySelector('.modal-error');
         errEl.textContent = err.message;
@@ -3403,8 +3403,8 @@ const MeetingsView = {
     document.getElementById('confirm-delete-draft-btn').addEventListener('click', async () => {
       try {
         await MeetingsAPI.deleteDraftMeeting(meeting.id);
-        this._closeModal();
-        await this._renderTab();
+        this._closeAllModals();
+        await this._refreshCurrentViews();
       } catch (err) {
         const errEl = document.querySelector('#modal-root .modal-error');
         errEl.textContent = err.message;
@@ -3776,5 +3776,34 @@ const MeetingsView = {
   _closeModal() {
     const root = document.getElementById('modal-root');
     if (root.lastElementChild) root.lastElementChild.remove();
+  },
+
+  // For a genuinely terminal action (Cancel Meeting, Delete Draft) —
+  // unlike _closeModal()'s single-layer pop, this clears every stacked
+  // layer at once, including the detail view underneath. Popping back
+  // to a stale detail view after the meeting it describes no longer
+  // exists in that form (cancelled/deleted) is wrong, unlike the
+  // non-terminal actions _closeModal() is used for (add participant,
+  // mark attendance, etc.), where staying on the detail view is
+  // exactly the point.
+  _closeAllModals() {
+    document.getElementById('modal-root').innerHTML = '';
+  },
+
+  // Refreshes whichever tab-content root(s) actually exist in the DOM
+  // right now, rather than assuming the caller is on the Meetings tab.
+  // The meeting detail modal (and everything stacked on it, like
+  // Cancel Meeting) can be opened from Rooms' own week-grid too
+  // (rooms.js _openBookingOrMeetingDetailModal), and _renderTab() only
+  // knows how to target #meetings-tab-content — calling it unguarded
+  // from that context throws (element doesn't exist) and, since this
+  // runs after the confirming sub-modal has already closed, the error
+  // silently lands on a detached, invisible node: the detail view
+  // never closes, and the underlying grid never reflects the change
+  // until a manual page refresh. Guarding each call and also nudging
+  // RoomsView's own grid (when mounted) fixes both symptoms at once.
+  async _refreshCurrentViews() {
+    if (document.getElementById('meetings-tab-content')) await this._renderTab();
+    if (typeof RoomsView !== 'undefined' && document.getElementById('rooms-tab-content')) await RoomsView._renderTab();
   },
 };

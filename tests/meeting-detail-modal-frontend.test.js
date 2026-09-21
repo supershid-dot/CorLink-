@@ -113,6 +113,8 @@ async function check(name, fn) {
         },
         respondToInvitation: async (...args) => { record('MeetingsAPI.respondToInvitation', args); },
         fetchMeeting: async (id) => { record('MeetingsAPI.fetchMeeting', [id]); return { ...window.__liveMeeting }; },
+        cancelMeeting: async (...args) => { record('MeetingsAPI.cancelMeeting', args); },
+        deleteDraftMeeting: async (...args) => { record('MeetingsAPI.deleteDraftMeeting', args); },
       };
       window.AttachmentsAPI = {
         list: async () => ([]),
@@ -472,6 +474,61 @@ async function check(name, fn) {
     await page.waitForTimeout(30);
     html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
     assert.match(html, /Q3 Budget Review/);
+    await page.close();
+  });
+
+  // docs/133: cancelling a meeting (a terminal action — nothing more
+  // to do with it) must close the ENTIRE modal stack, including the
+  // detail view underneath, not just pop the confirmation layer and
+  // reveal a now-stale detail view. Also, the refresh that follows
+  // must not assume the caller is on the Meetings tab — the same
+  // detail view can be opened from Rooms' own week-grid.
+  await check('_closeAllModals() clears every stacked layer, not just the top one', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openMeetingDetailModal(window.__meeting));
+    await page.waitForTimeout(30);
+    await page.click('#detail-cancel-btn');
+    await page.waitForTimeout(30);
+    let layerCount = await page.evaluate(() => document.getElementById('modal-root').children.length);
+    assert.strictEqual(layerCount, 2, 'expected the detail view plus the stacked cancel-confirmation modal');
+    await page.evaluate(() => window.__view._closeAllModals());
+    layerCount = await page.evaluate(() => document.getElementById('modal-root').children.length);
+    assert.strictEqual(layerCount, 0);
+    await page.close();
+  });
+
+  await check('cancelling a meeting from the stacked confirmation modal closes the whole stack, not just the confirmation layer', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => window.__view._openMeetingDetailModal(window.__meeting));
+    await page.waitForTimeout(30);
+    await page.click('#detail-cancel-btn');
+    await page.waitForTimeout(30);
+    await page.fill('#cancel-meeting-form [name="reason"]', 'No longer needed');
+    await page.evaluate(() => document.getElementById('cancel-meeting-form').requestSubmit());
+    await page.waitForTimeout(30);
+    const html = await page.evaluate(() => document.getElementById('modal-root').innerHTML);
+    assert.strictEqual(html, '', 'the detail view must not still be showing (stale, already-cancelled) after Cancel Meeting succeeds');
+    const calls = await page.evaluate(() => window.calls);
+    assert.ok(calls.some(c => c.name === 'MeetingsAPI.cancelMeeting'), 'expected cancelMeeting to have been called');
+    await page.close();
+  });
+
+  await check('_refreshCurrentViews() also refreshes RoomsView\'s own grid when it is mounted (the detail view can be opened from Rooms\' week-grid, not only the Meetings tab)', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => {
+      document.body.insertAdjacentHTML('beforeend', '<div id="rooms-tab-content"></div>');
+      window.RoomsView = { _renderTab: async () => window.calls.push({ name: 'RoomsView._renderTab', args: [] }) };
+    });
+    await page.evaluate(() => window.__view._refreshCurrentViews());
+    const calls = await page.evaluate(() => window.calls);
+    assert.ok(calls.some(c => c.name === 'RoomsView._renderTab'), 'expected RoomsView._renderTab to have been called');
+    await page.close();
+  });
+
+  await check('_refreshCurrentViews() does not throw when neither the Meetings tab nor RoomsView is mounted (e.g. viewed standalone)', async () => {
+    const { page, pageErrors } = await newPage();
+    await page.evaluate(() => window.__view._refreshCurrentViews());
+    assert.strictEqual(pageErrors.length, 0, `expected no page errors, got: ${pageErrors.join('; ')}`);
     await page.close();
   });
 
