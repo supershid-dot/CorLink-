@@ -484,7 +484,6 @@ async function check(name, fn) {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
       v._orgId = 'org-1'; v._isSuperAdmin = false;
-      v._state.mode = 'week';
       v._state.anchor = '2026-09-16';
       document.body.insertAdjacentHTML('beforeend', `
         <span id="cal-range-label"></span>
@@ -506,7 +505,6 @@ async function check(name, fn) {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
       v._orgId = 'org-1'; v._isSuperAdmin = false;
-      v._state.mode = 'week';
       v._state.anchor = '2026-09-16';
       document.body.insertAdjacentHTML('beforeend', `
         <span id="cal-range-label"></span>
@@ -521,13 +519,12 @@ async function check(name, fn) {
     await page.close();
   });
 
-  await check('clicking empty space in Calendar week mode switches to Day view for that date', async () => {
+  await check('Calendar is week-view only — no day/month/agenda mode switcher, and empty-slot clicks are inert (docs/138: "only weekly view is needed like in rooms")', async () => {
     const { page } = await newCalendarPage();
     await page.evaluate(async () => {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
       v._orgId = 'org-1'; v._isSuperAdmin = false;
-      v._state.mode = 'week';
       v._state.anchor = '2026-09-16';
       document.body.insertAdjacentHTML('beforeend', `
         <span id="cal-range-label"></span>
@@ -536,9 +533,14 @@ async function check(name, fn) {
       `);
       await v._loadAndRender();
     });
+    assert.strictEqual(await page.locator('#cal-view-switch').count(), 0);
+    assert.strictEqual(await page.locator('.calendar-month-grid').count(), 0);
     await page.locator('[data-week-grid-slot]').first().click();
-    const mode = await page.evaluate(() => window.__view._state.mode);
-    assert.strictEqual(mode, 'day');
+    // No onSlotClick handler — Calendar has no create action and no
+    // drill-down view left to switch into, so an empty-slot click is
+    // simply a no-op (no navigation, no error).
+    const navCalls = await page.evaluate(() => window.__navCalls || []);
+    assert.strictEqual(navCalls.length, 0);
     await page.close();
   });
 
@@ -548,7 +550,6 @@ async function check(name, fn) {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
       v._orgId = 'org-1'; v._isSuperAdmin = false;
-      v._state.mode = 'week';
       v._state.anchor = '2026-09-16';
       document.body.insertAdjacentHTML('beforeend', `
         <span id="cal-range-label"></span>
@@ -572,7 +573,6 @@ async function check(name, fn) {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
       v._orgId = 'org-1'; v._isSuperAdmin = false;
-      v._state.mode = 'agenda';
       v._state.anchor = '2026-09-16';
       document.body.insertAdjacentHTML('beforeend', `
         <span id="cal-range-label"></span>
@@ -589,7 +589,7 @@ async function check(name, fn) {
     assert.ok(options.some(o => o.value === 'staff-2' && /Ahmed Sobah/.test(o.text) && /10112/.test(o.text)));
     // Default selection shows the normal (unfiltered) event set — the
     // one fetched meeting from fetchEvents(), not fetchUserSchedule's.
-    assert.strictEqual(await page.locator('.calendar-event-row').count(), 1);
+    assert.strictEqual(await page.locator('[data-week-grid-event]').count(), 1);
     assert.match(await page.evaluate(() => document.getElementById('calendar-content').textContent), /Budget Review/);
     await page.close();
   });
@@ -600,7 +600,6 @@ async function check(name, fn) {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
       v._orgId = 'org-1'; v._isSuperAdmin = false;
-      v._state.mode = 'agenda';
       v._state.anchor = '2026-09-16';
       document.body.insertAdjacentHTML('beforeend', `
         <span id="cal-range-label"></span>
@@ -630,7 +629,6 @@ async function check(name, fn) {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
       v._orgId = 'org-1'; v._isSuperAdmin = false;
-      v._state.mode = 'agenda';
       v._state.anchor = '2026-09-16';
       document.body.insertAdjacentHTML('beforeend', `
         <span id="cal-range-label"></span>
@@ -658,7 +656,6 @@ async function check(name, fn) {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
       v._orgId = 'org-1'; v._isSuperAdmin = false;
-      v._state.mode = 'agenda';
       v._state.anchor = '2026-09-16';
       document.body.insertAdjacentHTML('beforeend', `
         <span id="cal-range-label"></span>
@@ -673,7 +670,7 @@ async function check(name, fn) {
       sel.dispatchEvent(new Event('change'));
     });
     await page.waitForTimeout(50);
-    await page.evaluate(() => document.querySelector('[data-event-type="meeting"][data-event-id="m2"]').click());
+    await page.evaluate(() => document.querySelector('[data-week-grid-event][data-event-id="meeting:m2"]').click());
     const navCalls = await page.evaluate(() => window.__navCalls || []);
     assert.strictEqual(navCalls.length, 0, 'must not navigate away immediately');
     const modalHtml = await page.evaluate(() => document.getElementById('modal-root').innerHTML);

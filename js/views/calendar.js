@@ -24,7 +24,10 @@
 
 const CalendarView = {
   _state: {
-    mode: 'month', // 'day' | 'week' | 'month' | 'agenda'
+    // Week view only (UAT: "only weekly view is needed like in
+    // rooms") — the old Day/Month/Agenda mode switcher is gone;
+    // matches Rooms' own Schedule tab, which never offered anything
+    // but a week grid either.
     anchor: WeekGrid._dayStr(new Date()),
     // staffId: '' (All meetings — default, unfiltered), '__me__' (My
     // schedule — client-side only, no new fetch), or another user's id
@@ -48,7 +51,6 @@ const CalendarView = {
     this._isSuperAdmin = !!user.is_super_admin;
 
     if (params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date)) this._state.anchor = params.date;
-    if (params.mode && ['day', 'week', 'month', 'agenda'].includes(params.mode)) this._state.mode = params.mode;
 
     container.innerHTML = this._shell();
     this._bindShell();
@@ -82,10 +84,6 @@ const CalendarView = {
               <button type="button" class="btn btn-secondary btn-xs" id="cal-next-btn"><i class="ti ti-chevron-right"></i></button>
               <span class="calendar-range-label" id="cal-range-label"></span>
             </div>
-            <div class="calendar-view-switch" id="cal-view-switch">
-              ${['day', 'week', 'month', 'agenda'].map(m =>
-                `<button type="button" class="tab-btn${this._state.mode === m ? ' tab-btn--active' : ''}" data-mode="${m}">${this._capitalize(m)}</button>`).join('')}
-            </div>
           </div>
 
           <div class="calendar-filters" id="cal-filters"></div>
@@ -108,61 +106,30 @@ const CalendarView = {
     });
     document.getElementById('cal-prev-btn').addEventListener('click', () => { this._step(-1); this._loadAndRender(); });
     document.getElementById('cal-next-btn').addEventListener('click', () => { this._step(1); this._loadAndRender(); });
-    document.querySelectorAll('#cal-view-switch [data-mode]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        this._state.mode = btn.dataset.mode;
-        this._loadAndRender();
-      });
-    });
   },
 
-  // Moves the anchor date by one unit of the current view mode.
+  // Moves the anchor date by one week.
   _step(dir) {
     const d = new Date(this._state.anchor + 'T00:00:00');
-    if (this._state.mode === 'day') d.setDate(d.getDate() + dir);
-    else if (this._state.mode === 'week') d.setDate(d.getDate() + 7 * dir);
-    else if (this._state.mode === 'agenda') d.setDate(d.getDate() + 30 * dir);
-    else d.setMonth(d.getMonth() + dir);
+    d.setDate(d.getDate() + 7 * dir);
     this._state.anchor = WeekGrid._dayStr(d);
     this._state.weekMobileDay = null; // re-derive for the new week
   },
 
-  // ── Date range for the current mode ─────────────────────────────
-  _rangeForMode() {
+  // ── Date range — always the anchor's own week (Sun–Sat) ──────────
+  _currentWeekRange() {
     const anchor = new Date(this._state.anchor + 'T00:00:00');
-    if (this._state.mode === 'day') {
-      const from = new Date(anchor);
-      const to = new Date(anchor); to.setDate(to.getDate() + 1);
-      return { from, to };
-    }
-    if (this._state.mode === 'week') {
-      const from = new Date(anchor); from.setDate(from.getDate() - from.getDay());
-      const to = new Date(from); to.setDate(to.getDate() + 7);
-      return { from, to };
-    }
-    if (this._state.mode === 'agenda') {
-      const from = new Date(anchor);
-      const to = new Date(anchor); to.setDate(to.getDate() + 30);
-      return { from, to };
-    }
-    // month — a fixed 6-week (42-day) grid starting on the Sunday on
-    // or before the 1st of the anchor month, so the grid always has a
-    // full, consistent 7x6 shape regardless of which day the month starts on.
-    const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
-    const from = new Date(first); from.setDate(from.getDate() - from.getDay());
-    const to = new Date(from); to.setDate(to.getDate() + 42);
+    const from = new Date(anchor); from.setDate(from.getDate() - from.getDay());
+    const to = new Date(from); to.setDate(to.getDate() + 7);
     return { from, to };
   },
 
   // ── Load + render ────────────────────────────────────────────────
   async _loadAndRender() {
-    document.getElementById('cal-view-switch')?.querySelectorAll('[data-mode]').forEach(btn => {
-      btn.classList.toggle('tab-btn--active', btn.dataset.mode === this._state.mode);
-    });
     const content = document.getElementById('calendar-content');
     content.innerHTML = `<div class="tab-loading"><span class="spinner spinner--dark"></span> Loading…</div>`;
 
-    const { from, to } = this._rangeForMode();
+    const { from, to } = this._currentWeekRange();
     document.getElementById('cal-range-label').textContent = this._rangeLabel(from, to);
 
     try {
@@ -214,7 +181,6 @@ const CalendarView = {
 
   _rangeLabel(from, to) {
     const opts = { month: 'short', day: 'numeric', year: 'numeric' };
-    if (this._state.mode === 'day') return from.toLocaleDateString(undefined, opts);
     const last = new Date(to); last.setDate(last.getDate() - 1);
     return `${from.toLocaleDateString(undefined, opts)} – ${last.toLocaleDateString(undefined, opts)}`;
   },
@@ -319,48 +285,29 @@ const CalendarView = {
     });
   },
 
-  // ── View dispatch ────────────────────────────────────────────────
+  // ── View dispatch — week grid only ───────────────────────────────
+  // Click routing goes entirely through WeekGrid.bind's own
+  // onEventClick below — its rendered elements carry WeekGrid's own
+  // data-week-grid-event/data-event-id attributes, not a separate
+  // data-event-type/data-event-id pair, so no extra binding pass is
+  // needed here (the old month/day/agenda chip/row markup did carry
+  // those, but that markup is gone, docs/138).
   _renderView() {
     const content = document.getElementById('calendar-content');
     const events = this._applyFilters(this._activeSourceEvents());
-    if (this._state.mode === 'month') content.innerHTML = this._renderMonth(events);
-    else if (this._state.mode === 'week') content.innerHTML = this._renderWeek(events);
-    else if (this._state.mode === 'day') content.innerHTML = this._renderDay(events, new Date(this._state.anchor + 'T00:00:00'));
-    else content.innerHTML = this._renderAgenda(events);
-    this._bindEventClicks(content);
-    content.querySelectorAll('[data-cal-day]').forEach(cell => {
-      cell.addEventListener('click', (e) => {
-        if (e.target.closest('[data-event-type]')) return;
-        this._state.mode = 'day';
-        this._state.anchor = cell.dataset.calDay;
-        this._loadAndRender();
-      });
-    });
-    if (this._state.mode === 'week') {
-      WeekGrid.bind(content.querySelector('.week-grid'), {
-        onSlotClick: (day) => {
-          this._state.mode = 'day';
-          this._state.anchor = day;
-          this._loadAndRender();
-        },
-        onEventClick: (prefixedId) => {
-          const i = prefixedId.indexOf(':');
-          this._routeEventClick(prefixedId.slice(0, i), prefixedId.slice(i + 1));
-        },
-        onDayPick: (day) => {
-          this._state.weekMobileDay = day;
-          this._renderView();
-        },
-      });
-    }
-  },
-
-  _bindEventClicks(root) {
-    root.querySelectorAll('[data-event-type]').forEach(el => {
-      el.addEventListener('click', (e) => {
-        e.stopPropagation();
-        this._routeEventClick(el.dataset.eventType, el.dataset.eventId);
-      });
+    content.innerHTML = this._renderWeek(events);
+    WeekGrid.bind(content.querySelector('.week-grid'), {
+      // No onSlotClick — Calendar aggregates three different record
+      // types (meetings/bookings/blocks) it doesn't itself create, and
+      // there's no drill-down view left to switch into (docs/138).
+      onEventClick: (prefixedId) => {
+        const i = prefixedId.indexOf(':');
+        this._routeEventClick(prefixedId.slice(0, i), prefixedId.slice(i + 1));
+      },
+      onDayPick: (day) => {
+        this._state.weekMobileDay = day;
+        this._renderView();
+      },
     });
   },
 
@@ -406,50 +353,12 @@ const CalendarView = {
     });
   },
 
-  // ── Month view ───────────────────────────────────────────────────
-  _renderMonth(events) {
-    const { from } = this._range;
-    const byDay = this._groupByDay(events);
-    const anchorMonth = new Date(this._state.anchor + 'T00:00:00').getMonth();
-    const todayStr = WeekGrid._dayStr(new Date());
-    const weekdayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    let cells = '';
-    for (let i = 0; i < 42; i++) {
-      const d = new Date(from); d.setDate(d.getDate() + i);
-      const dayStr = WeekGrid._dayStr(d);
-      const inMonth = d.getMonth() === anchorMonth;
-      const dayEvents = byDay.get(dayStr) || [];
-      const visible = dayEvents.slice(0, 3);
-      const overflow = dayEvents.length - visible.length;
-      cells += `
-        <div class="calendar-month-cell${inMonth ? '' : ' calendar-month-cell--out'}${dayStr === todayStr ? ' calendar-month-cell--today' : ''}" data-cal-day="${dayStr}">
-          <div class="calendar-month-cell-date">${d.getDate()}</div>
-          <div class="calendar-month-cell-events">
-            ${visible.map(e => this._eventChip(e, true)).join('')}
-            ${overflow > 0 ? `<div class="calendar-more-link">+${overflow} more</div>` : ''}
-          </div>
-        </div>
-      `;
-    }
-    return `
-      <div class="calendar-month-grid">
-        <div class="calendar-month-weekdays">
-          ${weekdayNames.map(w => `<div>${w}</div>`).join('')}
-        </div>
-        <div class="calendar-month-body">${cells}</div>
-      </div>
-    `;
-  },
-
   // ── Week view — positioned day-columns × half-hour-rows grid
   // (docs/22 §3.2 Phase C/D — the shared WeekGrid component,
-  // js/views/week-grid.js, also used by rooms.js's Schedule tab).
-  // Empty-space clicks fall through to WeekGrid's onSlotClick, wired
-  // in _renderView() to switch to Day view for that date (the same
-  // "click empty space -> Day view" behavior the Month grid's
-  // data-cal-day cells already have). Event styling/icons are
-  // unchanged from _eventVisual() — only the layout changed, not the
-  // six-item-type visual language docs/22 §3.2 already established.
+  // js/views/week-grid.js, also used by rooms.js's Schedule tab; this
+  // is now the ONLY view Calendar offers, docs/138 — matching Rooms'
+  // own Schedule tab, which never had anything but a week grid
+  // either). Event styling/icons are unchanged from _eventVisual().
   _renderWeek(events) {
     const { from } = this._range;
     const gridEvents = events.map(e => {
@@ -465,48 +374,6 @@ const CalendarView = {
     return WeekGrid.html({ weekStart: from, events: gridEvents, selectedDay: this._state.weekMobileDay });
   },
 
-  // ── Day view ─────────────────────────────────────────────────────
-  _renderDay(events, date) {
-    const dayStr = WeekGrid._dayStr(date);
-    const dayEvents = this._groupByDay(events).get(dayStr) || [];
-    if (dayEvents.length === 0) {
-      return this._emptyBlock({ icon: 'ti-calendar-off', title: 'Nothing scheduled', subtitle: 'No events for this day.' });
-    }
-    return `
-      <div class="panel calendar-day-list">
-        ${dayEvents.map(e => this._eventRow(e)).join('')}
-      </div>
-    `;
-  },
-
-  // ── Agenda view (flat, grouped by date) ───────────────────────────
-  _renderAgenda(events) {
-    if (events.length === 0) {
-      return this._emptyBlock({ icon: 'ti-calendar-off', title: 'Nothing scheduled', subtitle: 'No events in this range.' });
-    }
-    const byDay = this._groupByDay(events);
-    const days = [...byDay.keys()].sort();
-    return days.map(dayStr => `
-      <div class="calendar-agenda-group">
-        <div class="calendar-agenda-date-header">${new Date(dayStr + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' })}</div>
-        <div class="panel calendar-day-list">
-          ${byDay.get(dayStr).map(e => this._eventRow(e)).join('')}
-        </div>
-      </div>
-    `).join('');
-  },
-
-  _groupByDay(events) {
-    const map = new Map();
-    events.forEach(e => {
-      const dayStr = WeekGrid._dayStr(new Date(e.start));
-      if (!map.has(dayStr)) map.set(dayStr, []);
-      map.get(dayStr).push(e);
-    });
-    map.forEach(list => list.sort((a, b) => new Date(a.start) - new Date(b.start)));
-    return map;
-  },
-
   // ── Event rendering ──────────────────────────────────────────────
   // Visual treatment per item type/status, matching docs/22 §3.2's
   // six-item-type table (minus Draft/Pre-booked Meeting and Leave,
@@ -517,41 +384,6 @@ const CalendarView = {
     if (e.isDraft) return { icon: 'ti-pencil', cls: 'calendar-event--draft' };
     if (e.status === 'cancelled') return { icon: 'ti-ban', cls: 'calendar-event--cancelled' };
     return { icon: 'ti-calendar-event', cls: 'calendar-event--meeting' };
-  },
-
-  _eventChip(e, compact) {
-    const v = this._eventVisual(e);
-    const time = compact ? '' : `<span class="calendar-event-time">${this._fmtTime(e.start)}</span>`;
-    return `
-      <div class="calendar-event-chip ${v.cls}" data-event-type="${e.type}" data-event-id="${e.id}" title="${this._escapeHtml(e.title)}">
-        <i class="ti ${v.icon}"></i>
-        ${time}
-        <span class="calendar-event-title">${this._escapeHtml(e.title)}</span>
-        ${e.isRecurring ? `<i class="ti ti-repeat" title="Part of a recurring series"></i>` : ''}
-        ${e.isLocked ? `<i class="ti ti-lock" title="Locked"></i>` : ''}
-      </div>
-    `;
-  },
-
-  _eventRow(e) {
-    const v = this._eventVisual(e);
-    return `
-      <div class="calendar-event-row ${v.cls}" data-event-type="${e.type}" data-event-id="${e.id}">
-        <div class="calendar-event-row-time">${this._fmtTime(e.start)} – ${this._fmtTime(e.end)}</div>
-        <div class="calendar-event-row-main">
-          <div class="calendar-event-row-title">
-            <i class="ti ${v.icon}"></i> ${this._escapeHtml(e.title)}
-            ${e.isRecurring ? `<i class="ti ti-repeat" title="Part of a recurring series"></i>` : ''}
-            ${e.isLocked ? `<i class="ti ti-lock" title="Locked"></i>` : ''}
-          </div>
-          <div class="calendar-event-row-meta">
-            ${e.roomName ? `<span><i class="ti ti-door"></i> ${this._escapeHtml(e.roomName)}</span>` : ''}
-            ${e.creatorName ? `<span><i class="ti ti-user"></i> ${this._escapeHtml(e.creatorName)}</span>` : ''}
-            <span class="badge badge-outline">${this._capitalize(e.status)}</span>
-          </div>
-        </div>
-      </div>
-    `;
   },
 
   _fmtTime(iso) {
@@ -590,16 +422,6 @@ const CalendarView = {
   // ── Small display helpers ────────────────────────────────────────
   _capitalize(s) {
     return s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
-  },
-
-  _emptyBlock({ icon, title, subtitle }) {
-    return `
-      <div class="empty-state">
-        <i class="ti ${icon}"></i>
-        <p class="empty-state-title">${title}</p>
-        ${subtitle ? `<p class="empty-state-subtitle">${subtitle}</p>` : ''}
-      </div>
-    `;
   },
 
   // ── Generic helpers (same shape as every other view in this app) ──
