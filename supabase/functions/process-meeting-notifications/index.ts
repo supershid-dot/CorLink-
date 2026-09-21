@@ -72,6 +72,14 @@
 // register-telegram-webhook, called right after the bot token is
 // saved) — this function only builds and attaches the button payload;
 // it does not handle the tap itself.
+//
+// docs/134 — the message now also includes the meeting's section
+// (meetings.section_id -> sections.name), and "Organised by" is
+// derived from the participant explicitly marked as organizer
+// (meeting_participants.is_organizer — the same field the in-app
+// detail view's own "Organizer" badge reads), not from
+// meetings.created_by: the person who technically created the meeting
+// row is not always the same person designated as its organizer.
 // ============================================================
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.0';
@@ -106,6 +114,7 @@ type MeetingInfo = {
   end_at: string;
   timezone: string;
   location: string | null;
+  section_name: string | null;
   organizer_name: string;
   participants: string[];
 };
@@ -130,7 +139,7 @@ async function fetchMeetingInfoMap(adminClient: ReturnType<typeof createClient>,
 
   const { data: meetings } = await adminClient
     .from('meetings')
-    .select('id, title, start_at, end_at, timezone, location_mode, external_location, created_by')
+    .select('id, title, start_at, end_at, timezone, location_mode, external_location, created_by, section:sections(name)')
     .in('id', meetingIds);
   if (!meetings || meetings.length === 0) return { meetingInfoById: map, participantIdByMeetingAndUser };
 
@@ -163,7 +172,7 @@ async function fetchMeetingInfoMap(adminClient: ReturnType<typeof createClient>,
   // checked — which it now is, below).
   const { data: participants, error: participantsError } = await adminClient
     .from('meeting_participants')
-    .select('id, meeting_id, user_id, external_name, created_at, user:users!user_id(full_name, designations(name))')
+    .select('id, meeting_id, user_id, external_name, is_organizer, created_at, user:users!user_id(full_name, designations(name))')
     .in('meeting_id', meetingIds)
     .is('removed_at', null)
     .order('created_at', { ascending: true });
@@ -172,12 +181,21 @@ async function fetchMeetingInfoMap(adminClient: ReturnType<typeof createClient>,
   }
 
   const participantsByMeeting = new Map<string, string[]>();
+  // docs/134: the person who created the meeting row (meetings.created_by)
+  // is not always the same person as the participant explicitly marked
+  // as organizer (meeting_participants.is_organizer — the same field the
+  // in-app detail view's own "Organizer" badge reads) — e.g. an EA
+  // schedules a meeting on someone else's behalf. is_organizer is the
+  // authoritative source for "Organised by"; created_by is only a
+  // fallback for the rare case no participant is marked organizer.
+  const organizerNameByMeeting = new Map<string, string>();
   for (const p of (participants || []) as any[]) {
     const label = p.user ? formatDesignatedName(p.user.full_name, p.user.designations?.name) : (p.external_name || '');
     if (label) {
       const arr = participantsByMeeting.get(p.meeting_id) || [];
       arr.push(label);
       participantsByMeeting.set(p.meeting_id, arr);
+      if (p.is_organizer) organizerNameByMeeting.set(p.meeting_id, label);
     }
     if (p.user_id) participantIdByMeetingAndUser.set(`${p.meeting_id}:${p.user_id}`, p.id);
   }
@@ -189,13 +207,16 @@ async function fetchMeetingInfoMap(adminClient: ReturnType<typeof createClient>,
     else if (m.location_mode === 'external') location = m.external_location || null;
     else if (m.location_mode === 'virtual') location = 'Virtual';
 
+    const fallbackOrganizer = creator ? formatDesignatedName(creator.full_name, creator.designations?.name) : '';
+
     map.set(m.id, {
       title: m.title,
       start_at: m.start_at,
       end_at: m.end_at,
       timezone: m.timezone || 'Indian/Maldives',
       location,
-      organizer_name: creator ? formatDesignatedName(creator.full_name, creator.designations?.name) : '',
+      section_name: m.section?.name || null,
+      organizer_name: organizerNameByMeeting.get(m.id) || fallbackOrganizer,
       participants: participantsByMeeting.get(m.id) || [],
     });
   }
@@ -233,6 +254,7 @@ function renderMessage(titleTemplateKey: string, templateParams: Record<string, 
   // meeting.location would misleadingly read "Room (unassigned)" —
   // and the room is moot for a meeting that's no longer happening.
   if (meeting.location && titleTemplateKey !== 'meetings.cancelled') lines.push(`📍 ${meeting.location}`);
+  if (meeting.section_name) lines.push(`🏢 ${meeting.section_name}`);
   if (meeting.participants.length > 0) lines.push(`👥 ${meeting.participants.join(', ')}`);
   if (meeting.organizer_name) lines.push('', `Organised by ${meeting.organizer_name}`);
   return lines.join('\n');
