@@ -54,7 +54,7 @@ BEGIN
   END IF;
 
   INSERT INTO organization_telegram_config (organization_id, bot_token, webhook_secret, updated_by, updated_at)
-  VALUES (p_org_id, btrim(p_bot_token), encode(gen_random_bytes(24), 'hex'), auth.uid(), NOW())
+  VALUES (p_org_id, btrim(p_bot_token), encode(extensions.gen_random_bytes(24), 'hex'), auth.uid(), NOW())
   ON CONFLICT (organization_id) DO UPDATE SET
     bot_token = EXCLUDED.bot_token,
     webhook_secret = EXCLUDED.webhook_secret,
