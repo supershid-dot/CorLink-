@@ -98,6 +98,8 @@ const EVENT_HEADERS: Record<string, (title: string) => string> = {
   'meetings.updated':     (title) => `✏️ Meeting updated: ${title}`,
   'meetings.cancelled':   (title) => `❌ Meeting cancelled: ${title}`,
   'meetings.reminder':    (title) => `⏰ Starting soon: ${title}`,
+  // docs/149.
+  'meetings.participant_removed': (title) => `🚫 Removed from meeting: ${title}`,
 };
 
 type MeetingInfo = {
@@ -232,8 +234,12 @@ function renderMessage(titleTemplateKey: string, templateParams: Record<string, 
   // cancelled its room booking is typically already released, so
   // meeting.location would misleadingly read "Room (unassigned)" —
   // and the room is moot for a meeting that's no longer happening.
-  if (meeting.location && titleTemplateKey !== 'meetings.cancelled') lines.push(`📍 ${meeting.location}`);
-  if (meeting.participants.length > 0) lines.push(`👥 ${meeting.participants.join(', ')}`);
+  // docs/149: same reasoning for a participant_removed message — the
+  // recipient no longer needs the room, or a roster they're not on.
+  const isParticipantRemoved = titleTemplateKey === 'meetings.participant_removed';
+  if (meeting.location && titleTemplateKey !== 'meetings.cancelled' && !isParticipantRemoved) lines.push(`📍 ${meeting.location}`);
+  if (meeting.participants.length > 0 && !isParticipantRemoved) lines.push(`👥 ${meeting.participants.join(', ')}`);
+  if (isParticipantRemoved && templateParams?.reason) lines.push(`📝 ${templateParams.reason}`);
   // docs/145: just the name, no "Organised by" prefix — UAT correction.
   if (meeting.organizer_name) lines.push('', meeting.organizer_name);
   return lines.join('\n');

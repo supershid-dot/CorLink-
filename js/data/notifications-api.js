@@ -165,6 +165,8 @@ const NOTIFICATION_TEMPLATES = {
   'meetings.scheduled':   p => `You were invited to a meeting: "${p.meeting_title || 'Untitled meeting'}"`,
   'meetings.updated':     p => `Meeting "${p.meeting_title || 'Untitled meeting'}" was updated`,
   'meetings.reminder':    p => `Meeting "${p.meeting_title || 'Untitled meeting'}" is starting soon`,
+  // docs/149 — a participant removed after the meeting was created.
+  'meetings.participant_removed': p => `You were removed from a meeting: "${p.meeting_title || 'Untitled meeting'}"`,
   'requests.sent':          p => `A request was sent to your organization${p.reference_number ? ' (' + p.reference_number + ')' : ''}`,
   'requests.returned':      () => 'Your request draft was returned for changes',
   'requests.routed':        () => 'A request was routed to your section',
