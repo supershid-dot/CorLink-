@@ -1740,6 +1740,21 @@ const MeetingsView = {
       console.error('CorLink: failed to load meeting detail data', err);
     }
 
+    // docs/144 — "Notify Participants" panel data. Only fetched for a
+    // manager (the population the panel is gated behind anyway) of a
+    // meeting that's actually announced to anyone (not draft/cancelled)
+    // — same condition the panel itself renders under, so a viewer who
+    // can't see the panel never triggers this extra call.
+    let telegramRecipients = [];
+    if (this._canManage(meeting) && meeting.status !== 'cancelled' && meeting.status !== 'draft') {
+      try {
+        telegramRecipients = await MeetingsAPI.fetchTelegramRecipients(meeting.id);
+      } catch (err) {
+        console.error('CorLink: failed to load Telegram recipients', err);
+      }
+    }
+    this._telegramRecipients = telegramRecipients;
+
     // Supporting Tasks (supabase/patch-meeting-task-integration.sql) —
     // fetched alongside everything else above so the panel renders
     // populated on first paint; isolated in its own try/catch so a
@@ -1885,6 +1900,8 @@ const MeetingsView = {
 
       ${this._renderSupportingTasksPanel(meeting)}
 
+      ${(canManage && meeting.status !== 'cancelled' && meeting.status !== 'draft') ? this._renderNotifyParticipantsPanel(meeting) : ''}
+
       ${meeting.series_id ? this._renderActivityPanel() : ''}
 
       <div class="detail-actions-row">
@@ -1901,6 +1918,7 @@ const MeetingsView = {
     `, { large: true });
 
     this._bindMeetingDetailModal(meeting, participants, booking, attachments, { canManageParticipants, myNotes });
+    if (canManage && meeting.status !== 'cancelled' && meeting.status !== 'draft') this._bindNotifyParticipantsPanel(meeting);
 
     document.getElementById('detail-edit-btn')?.addEventListener('click', () => {
       this._openSeriesActionScopeDialog(meeting, 'edit', booking);
@@ -2749,6 +2767,129 @@ const MeetingsView = {
         const errEl = form.querySelector('.modal-error');
         errEl.textContent = err.message;
         errEl.classList.remove('hidden');
+      }
+    });
+  },
+
+  // ── Notify Participants (docs/144 — MeetFlow parity) ────────────
+  // Manual, on-demand Telegram send: the organizer/admin can (re)send
+  // the Schedule (invitation) message, a Reminder, or a free-text
+  // Message to any subset of this meeting's Telegram-reachable
+  // participants, independent of the automatic create/update/cancel/
+  // 30-min-reminder pipeline (process-meeting-notifications). Uses
+  // this._telegramRecipients, populated by _openMeetingDetailModal
+  // alongside everything else the modal needs — never fetched here,
+  // so this method stays a pure render, like every other detail panel.
+  _renderNotifyParticipantsPanel(meeting) {
+    const recipients = this._telegramRecipients || [];
+    if (recipients.length === 0) {
+      return `
+        <div class="detail-section-label">Notify Participants</div>
+        <div class="structure-empty">No participants to notify yet.</div>
+      `;
+    }
+    return `
+      <div class="detail-section-label">Notify Participants</div>
+      <div class="notify-panel" data-meeting-id="${meeting.id}">
+        <div class="notify-panel-header-row">
+          <span class="notify-panel-label">Recipients</span>
+          <span class="notify-panel-select-links">
+            <button type="button" class="detail-action-link" data-notify-select-all>All</button>
+            <button type="button" class="detail-action-link" data-notify-select-none>None</button>
+          </span>
+        </div>
+        <div class="notify-panel-recipients">
+          ${recipients.map(r => `
+            <label class="notify-recipient-row">
+              <span><input type="checkbox" data-notify-recipient value="${r.participant_id}" checked /> ${this._escapeHtml(r.full_name || '')}</span>
+              ${r.has_telegram ? `<i class="ti ti-send notify-tg-linked" title="Telegram linked"></i>` : `<span class="notify-tg-missing">no TG</span>`}
+            </label>
+          `).join('')}
+        </div>
+        <div class="notify-panel-tabs">
+          <button type="button" class="notify-tab notify-tab--active" data-notify-tab="schedule"><i class="ti ti-calendar-event"></i> Schedule</button>
+          <button type="button" class="notify-tab" data-notify-tab="reminder"><i class="ti ti-bell"></i> Reminder</button>
+          <button type="button" class="notify-tab" data-notify-tab="message"><i class="ti ti-message"></i> Message</button>
+        </div>
+        <div class="notify-panel-body">
+          <div class="notify-panel-desc" data-notify-desc><i class="ti ti-send"></i> Sends meeting details with ✅/❌ RSVP buttons via Telegram.</div>
+          <textarea class="field-input-plain hidden" data-notify-message placeholder="Custom message to selected recipients..." rows="2" maxlength="4000"></textarea>
+          <button type="button" class="btn btn-primary btn-sm" data-notify-send><i class="ti ti-send"></i> Send</button>
+        </div>
+        <div class="notify-panel-result hidden" data-notify-result></div>
+      </div>
+    `;
+  },
+
+  _bindNotifyParticipantsPanel(meeting) {
+    const panel = document.querySelector('.notify-panel');
+    if (!panel) return;
+
+    const selectAllBtn = panel.querySelector('[data-notify-select-all]');
+    const selectNoneBtn = panel.querySelector('[data-notify-select-none]');
+    const checkboxes = () => Array.from(panel.querySelectorAll('[data-notify-recipient]'));
+    selectAllBtn?.addEventListener('click', () => checkboxes().forEach(c => { c.checked = true; }));
+    selectNoneBtn?.addEventListener('click', () => checkboxes().forEach(c => { c.checked = false; }));
+
+    const tabs = Array.from(panel.querySelectorAll('[data-notify-tab]'));
+    const descEl = panel.querySelector('[data-notify-desc]');
+    const messageEl = panel.querySelector('[data-notify-message]');
+    const resultEl = panel.querySelector('[data-notify-result]');
+    const TAB_COPY = {
+      schedule: '<i class="ti ti-send"></i> Sends meeting details with ✅/❌ RSVP buttons via Telegram.',
+      reminder: '<i class="ti ti-bell"></i> Sends a ⏰ reminder via Telegram.',
+      message: '',
+    };
+    let activeTab = 'schedule';
+    const syncTab = () => {
+      tabs.forEach(t => t.classList.toggle('notify-tab--active', t.dataset.notifyTab === activeTab));
+      descEl.innerHTML = TAB_COPY[activeTab];
+      descEl.classList.toggle('hidden', activeTab === 'message');
+      messageEl.classList.toggle('hidden', activeTab !== 'message');
+      resultEl.classList.add('hidden');
+    };
+    tabs.forEach(t => t.addEventListener('click', () => { activeTab = t.dataset.notifyTab; syncTab(); }));
+    syncTab();
+
+    const sendBtn = panel.querySelector('[data-notify-send]');
+    sendBtn.addEventListener('click', async () => {
+      const participantIds = checkboxes().filter(c => c.checked).map(c => c.value);
+      resultEl.classList.add('hidden');
+      if (participantIds.length === 0) {
+        resultEl.textContent = 'Select at least one recipient.';
+        resultEl.className = 'notify-panel-result notify-panel-result--error';
+        return;
+      }
+      const customMessage = messageEl.value.trim();
+      if (activeTab === 'message' && !customMessage) {
+        resultEl.textContent = 'Enter a message to send.';
+        resultEl.className = 'notify-panel-result notify-panel-result--error';
+        return;
+      }
+
+      sendBtn.disabled = true;
+      const originalLabel = sendBtn.innerHTML;
+      sendBtn.innerHTML = '<i class="ti ti-loader-2"></i> Sending…';
+      try {
+        const result = await MeetingsAPI.sendTelegramNotification({
+          meetingId: meeting.id, participantIds, kind: activeTab,
+          message: activeTab === 'message' ? customMessage : undefined,
+        });
+        const parts = [];
+        if (result.sent > 0) parts.push(`sent to ${result.sent}`);
+        if (result.skipped_no_telegram > 0) parts.push(`${result.skipped_no_telegram} skipped (no Telegram linked)`);
+        if (result.skipped_no_bot > 0) parts.push(`${result.skipped_no_bot} skipped (organization has no Telegram bot configured)`);
+        if ((result.failed || []).length > 0) parts.push(`${result.failed.length} failed to send`);
+        resultEl.textContent = parts.length ? parts.join(', ') + '.' : 'Nothing sent.';
+        resultEl.className = `notify-panel-result ${result.sent > 0 ? 'notify-panel-result--success' : 'notify-panel-result--error'}`;
+        if (activeTab === 'message') messageEl.value = '';
+      } catch (err) {
+        resultEl.textContent = err.message || 'Failed to send notification.';
+        resultEl.className = 'notify-panel-result notify-panel-result--error';
+      } finally {
+        resultEl.classList.remove('hidden');
+        sendBtn.disabled = false;
+        sendBtn.innerHTML = originalLabel;
       }
     });
   },

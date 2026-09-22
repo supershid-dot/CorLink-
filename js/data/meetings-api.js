@@ -43,6 +43,23 @@ const MeetingsAPI = (() => {
 
   const BLOCKING_STATUSES = ['hold', 'pending', 'confirmed'];
 
+  // supabase-js's FunctionsHttpError.message is a generic "non-2xx status
+  // code" string — the real reason lives in the response body, which the
+  // client doesn't parse automatically. Extract it so errors are readable.
+  // Mirrors admin-api.js's own private helper of the same name/shape —
+  // duplicated rather than shared, since these are separate module
+  // closures with no shared-utility file in this codebase.
+  async function unwrapFunctionError(error) {
+    let detail = error.message;
+    if (error.context && typeof error.context.json === 'function') {
+      try {
+        const body = await error.context.json();
+        detail = body.error || body.message || detail;
+      } catch { /* body wasn't JSON — fall back to the generic message */ }
+    }
+    return new Error(detail);
+  }
+
   return {
     // Picks the one active (blocking-status) row out of a meeting's
     // embedded `bookings` array — small, pure, no fetch. Returns null
@@ -304,6 +321,33 @@ const MeetingsAPI = (() => {
       const db = getSupabase();
       const { error } = await db.rpc('unlock_meeting', { p_meeting_id: meetingId });
       if (error) throw error;
+    },
+
+    // docs/144 — "Notify Participants" panel. Lists this meeting's
+    // active internal participants with a has_telegram flag only (never
+    // the chat id itself) — gated server-side by can_manage_meeting(),
+    // same population who can Edit/Cancel.
+    async fetchTelegramRecipients(meetingId) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('get_meeting_telegram_recipients', { p_meeting_id: meetingId });
+      if (error) throw error;
+      return data || [];
+    },
+
+    // Sends an on-demand Telegram notification to selected participants
+    // via the send-meeting-telegram-notification Edge Function — the
+    // org's bot token never reaches the browser, same posture as
+    // NotificationsAPI.processMeetingNotifications()'s automatic flow.
+    // kind is 'schedule' | 'reminder' | 'message'; message is required
+    // (and only used) for 'message'.
+    async sendTelegramNotification({ meetingId, participantIds, kind, message } = {}) {
+      const db = getSupabase();
+      const { data, error } = await db.functions.invoke('send-meeting-telegram-notification', {
+        body: { meetingId, participantIds, kind, message },
+      });
+      if (error) throw await unwrapFunctionError(error);
+      if (data?.error) throw new Error(data.error);
+      return data;
     },
 
     // Personal notes — private, own-row only, never returned by

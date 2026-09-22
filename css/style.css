@@ -2220,6 +2220,43 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
 .detail-action-link--primary { color: var(--color-primary-dark); }
 .detail-action-link--danger { color: var(--color-error-dark); }
 
+/* Notify Participants panel (docs/144 — MeetFlow parity): manual,
+   on-demand Telegram send from the meeting detail modal. A bordered
+   card so it reads as one self-contained control, not just more page
+   content — the same visual treatment .detail-agenda-box already uses
+   for "this is a distinct block, not a fact". */
+.notify-panel {
+  border: 1px solid var(--color-border); border-radius: var(--radius-md);
+  padding: 12px 14px; background: var(--color-bg);
+}
+.notify-panel-header-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.notify-panel-label { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); }
+.notify-panel-select-links { display: flex; gap: 12px; }
+.notify-panel-select-links .detail-action-link { font-size: 0.78rem; color: var(--color-primary-dark); }
+.notify-panel-recipients {
+  display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px;
+  max-height: 160px; overflow-y: auto;
+}
+.notify-recipient-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  font-size: 0.85rem; padding: 3px 0;
+}
+.notify-recipient-row input[type="checkbox"] { margin-right: 6px; }
+.notify-tg-linked { color: var(--color-success-dark); font-size: 0.9rem; }
+.notify-tg-missing { color: var(--color-text-muted); font-size: 0.72rem; }
+.notify-panel-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--color-border); margin-bottom: 10px; }
+.notify-tab {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 0.82rem; font-weight: 600;
+  color: var(--color-text-muted); background: none; border: none; border-bottom: 2px solid transparent;
+  padding: 6px 8px; cursor: pointer; margin-bottom: -1px;
+}
+.notify-tab--active { color: var(--color-primary-dark); border-bottom-color: var(--color-primary-dark); }
+.notify-panel-body { display: flex; flex-direction: column; gap: 8px; }
+.notify-panel-desc { font-size: 0.78rem; color: var(--color-text-muted); display: flex; align-items: center; gap: 6px; }
+.notify-panel-result { font-size: 0.8rem; font-weight: 600; padding: 6px 0; }
+.notify-panel-result--success { color: var(--color-success-dark); }
+.notify-panel-result--error { color: var(--color-error-dark); }
+
 /* A pill radius (border-radius: 9999px) only looks right on a single line
    of text — the browser has to shrink each corner's radius to fit the
    box, and on a multi-line badge that warps the whole shape into a lens/
