@@ -425,9 +425,13 @@ async function check(name, fn) {
       const weekStart = WeekGrid.weekStartFor('2026-09-13T00:00:00');
       return WeekGrid.html({ weekStart, events: [] });
     });
-    const openSlotMatch = html.match(/<div class="week-grid-slot" style="[^"]*" data-week-grid-slot data-slot-day="2026-09-17" data-slot-time="07:00">([\s\S]{0,80})/);
+    const openSlotMatch = html.match(/<div class="week-grid-slot" style="[^"]*" data-week-grid-slot data-slot-day="2026-09-17" data-slot-time="07:00"[^>]*>([\s\S]{0,80})/);
     assert.ok(openSlotMatch, 'expected to find the open future slot');
     assert.match(openSlotMatch[1], /week-grid-slot-add/);
+    // Hovering the "+" shows the slot's time range (UAT: "when i move
+    // mouse to + sign it should show the timing").
+    const fullOpenSlotTag = html.slice(html.indexOf('data-slot-time="07:00"') - 200, html.indexOf('data-slot-time="07:00"') + 100);
+    assert.match(fullOpenSlotTag, /title="07:00 – 07:30"/);
     const closedSlotMatch = html.match(/<div class="week-grid-slot week-grid-slot--closed"[^>]*>([\s\S]{0,20})/);
     assert.ok(closedSlotMatch, 'expected to find a closed slot');
     assert.doesNotMatch(closedSlotMatch[1], /week-grid-slot-add/);

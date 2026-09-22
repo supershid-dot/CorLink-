@@ -249,9 +249,14 @@ const WeekGrid = {
         const pastPolicy = bookableUntilMinutes != null && (startHour * 60 + m) >= bookableUntilMinutes;
         const past = this._isPastSlot(dayStr, startHour * 60 + m, now);
         const closed = pastPolicy || past;
+        // The hover "+" carried no visible time indication of its own
+        // (unlike the mobile row, which already shows it as text) —
+        // a title tooltip fills that gap on hover (UAT: "when i move
+        // mouse to + sign it should show the timing").
+        const slotTimeRange = `${this._fmtHM(startHour, m)} – ${this._fmtHM(startHour, m + this.SLOT_MINUTES)}`;
         slots += closed
           ? `<div class="week-grid-slot week-grid-slot--closed" style="${style}" title="Not bookable at this time"></div>`
-          : `<div class="week-grid-slot" style="${style}" data-week-grid-slot data-slot-day="${dayStr}" data-slot-time="${this._fmtHM(startHour, m)}"><span class="week-grid-slot-add"><i class="ti ti-plus"></i></span></div>`;
+          : `<div class="week-grid-slot" style="${style}" data-week-grid-slot data-slot-day="${dayStr}" data-slot-time="${this._fmtHM(startHour, m)}" title="${slotTimeRange}"><span class="week-grid-slot-add"><i class="ti ti-plus"></i></span></div>`;
       }
 
       const eventEls = dayEvents.map(e => {

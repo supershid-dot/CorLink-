@@ -499,6 +499,15 @@ async function check(name, fn) {
     return { page, pageErrors };
   }
 
+  // The Staff filter is a searchable combobox (docs/141), not a plain
+  // <select> — picking an option means focusing the input (which shows
+  // the floating list) then clicking the option button by its value.
+  async function selectCalendarStaff(page, value) {
+    await page.click('#cal-filter-staff-input');
+    await page.click(`[data-staff-value="${value}"]`);
+    await page.waitForTimeout(50);
+  }
+
   await check('Calendar week mode renders a .week-grid with the fetched meeting positioned', async () => {
     const { page } = await newCalendarPage();
     await page.evaluate(async () => {
@@ -708,11 +717,7 @@ async function check(name, fn) {
       `);
       await v._loadAndRender();
     });
-    await page.evaluate(() => {
-      const sel = document.getElementById('cal-filter-staff');
-      sel.value = 'staff-9';
-      sel.dispatchEvent(new Event('change'));
-    });
+    await selectCalendarStaff(page, 'staff-9');
     await page.waitForTimeout(50);
     const contentText = await page.evaluate(() => document.getElementById('calendar-content').textContent);
     assert.match(contentText, /Cross-Org Person's Meeting/, 'org scoping must not silently hide an explicitly-selected staff member\'s own-org meetings');
@@ -807,7 +812,7 @@ async function check(name, fn) {
   });
 
   // ── Calendar staff schedule selector (docs/137) ──────────────────
-  await check('the Staff dropdown offers "All meetings" (default), "My schedule", and each viewable staff member', async () => {
+  await check('the Staff combobox offers "All meetings" (default), "My schedule", and each viewable staff member, filtered by typing (docs/141)', async () => {
     const { page } = await newCalendarPage();
     await page.evaluate(async () => {
       const v = window.__view;
@@ -821,12 +826,24 @@ async function check(name, fn) {
       `);
       await v._loadAndRender();
     });
-    const options = await page.evaluate(() => [...document.getElementById('cal-filter-staff').options].map(o => ({ value: o.value, text: o.textContent })));
+    await page.click('#cal-filter-staff-input');
+    let options = await page.evaluate(() => [...document.querySelectorAll('#cal-filter-staff-list [data-staff-value]')].map(o => ({ value: o.dataset.staffValue, text: o.textContent })));
     assert.strictEqual(options[0].value, '');
     assert.match(options[0].text, /All meetings/);
     assert.strictEqual(options[1].value, '__me__');
     assert.match(options[1].text, /My schedule/);
     assert.ok(options.some(o => o.value === 'staff-2' && /Ahmed Sobah/.test(o.text) && /10112/.test(o.text)));
+    // Typing filters the list — searchable, not just a flat dropdown.
+    await page.fill('#cal-filter-staff-input', 'sobah');
+    options = await page.evaluate(() => [...document.querySelectorAll('#cal-filter-staff-list [data-staff-value]')].map(o => o.dataset.staffValue));
+    assert.deepStrictEqual(options, ['staff-2']);
+    await page.fill('#cal-filter-staff-input', 'zzz-no-match');
+    const emptyText = await page.evaluate(() => document.getElementById('cal-filter-staff-list').textContent);
+    assert.match(emptyText, /No matches/);
+    // Blurring without picking anything reverts the input to the
+    // current selection rather than leaving the typed query behind.
+    await page.click('#cal-range-label'); // move focus elsewhere (a plain, non-interactive span)
+    assert.strictEqual(await page.locator('#cal-filter-staff-input').inputValue(), '— All meetings —');
     // Default selection shows the normal (unfiltered) event set — the
     // one fetched meeting from fetchEvents(), not fetchUserSchedule's.
     assert.strictEqual(await page.locator('[data-week-grid-event]').count(), 1);
@@ -848,12 +865,7 @@ async function check(name, fn) {
       `);
       await v._loadAndRender();
     });
-    await page.evaluate(() => {
-      const sel = document.getElementById('cal-filter-staff');
-      sel.value = 'staff-2';
-      sel.dispatchEvent(new Event('change'));
-    });
-    await page.waitForTimeout(50);
+    await selectCalendarStaff(page, 'staff-2');
     const calls = await page.evaluate(() => window.__fetchUserScheduleCalls);
     assert.strictEqual(calls.length, 1);
     assert.strictEqual(calls[0].userId, 'staff-2');
@@ -877,12 +889,7 @@ async function check(name, fn) {
       `);
       await v._loadAndRender();
     });
-    await page.evaluate(() => {
-      const sel = document.getElementById('cal-filter-staff');
-      sel.value = '__me__';
-      sel.dispatchEvent(new Event('change'));
-    });
-    await page.waitForTimeout(50);
+    await selectCalendarStaff(page, '__me__');
     const calls = await page.evaluate(() => window.__fetchUserScheduleCalls);
     assert.strictEqual(calls.length, 0, 'My schedule must not trigger a new fetch — it filters the already-fetched event set client-side');
     const contentText = await page.evaluate(() => document.getElementById('calendar-content').textContent);
@@ -904,12 +911,7 @@ async function check(name, fn) {
       `);
       await v._loadAndRender();
     });
-    await page.evaluate(() => {
-      const sel = document.getElementById('cal-filter-staff');
-      sel.value = 'staff-2';
-      sel.dispatchEvent(new Event('change'));
-    });
-    await page.waitForTimeout(50);
+    await selectCalendarStaff(page, 'staff-2');
     await page.evaluate(() => document.querySelector('[data-week-grid-event][data-event-id="meeting:m2"]').click());
     const navCalls = await page.evaluate(() => window.__navCalls || []);
     assert.strictEqual(navCalls.length, 0, 'must not navigate away immediately');

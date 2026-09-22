@@ -249,12 +249,10 @@ const CalendarView = {
           <option value="">All meeting statuses</option>
           ${[...statuses].sort().map(s => `<option value="${s}" ${f.status === s ? 'selected' : ''}>${this._capitalize(s)}</option>`).join('')}
         </select>
-        <select class="field-select" id="cal-filter-staff">
-          <option value="">— All meetings —</option>
-          <option value="__me__" ${f.staffId === '__me__' ? 'selected' : ''}>— My schedule —</option>
-          ${(this._viewableStaff || []).map(s =>
-            `<option value="${s.id}" ${f.staffId === s.id ? 'selected' : ''}>${this._escapeHtml(s.full_name)}${s.service_number ? ' · ' + this._escapeHtml(s.service_number) : ''}</option>`).join('')}
-        </select>
+        <div class="combobox" id="cal-filter-staff-box">
+          <input class="field-input-plain" id="cal-filter-staff-input" autocomplete="off" placeholder="Search staff…" />
+          <div class="combobox-list hidden" id="cal-filter-staff-list"></div>
+        </div>
         <label class="checkbox-row" style="margin:0;">
           <input type="checkbox" id="cal-filter-blocks" ${f.showBlocks ? 'checked' : ''} />
           <span>Show room blocks</span>
@@ -264,12 +262,56 @@ const CalendarView = {
 
     document.getElementById('cal-filter-room').addEventListener('change', (e) => { f.roomId = e.target.value; this._renderView(); });
     document.getElementById('cal-filter-status').addEventListener('change', (e) => { f.status = e.target.value; this._renderView(); });
-    // Unlike every other control here, this one can require a new
-    // fetch (docs/137) — go through _loadAndRender() rather than just
-    // _renderView() so a real staff id's own schedule gets loaded, and
-    // so date navigation afterward keeps refetching it automatically.
-    document.getElementById('cal-filter-staff').addEventListener('change', (e) => { f.staffId = e.target.value; this._loadAndRender(); });
+    this._bindStaffCombobox(f);
     document.getElementById('cal-filter-blocks').addEventListener('change', (e) => { f.showBlocks = e.target.checked; this._renderView(); });
+  },
+
+  // The Staff filter's option list can run to dozens of names (UAT:
+  // "list should be searchable") — a plain <select> has no search of
+  // its own, so this is a small combobox instead: a text input that
+  // filters a floating options panel, mousedown-select (not click) so
+  // the option registers before the input's own blur handler would
+  // otherwise close the panel first.
+  _staffOptions() {
+    return [
+      { value: '', label: '— All meetings —' },
+      { value: '__me__', label: '— My schedule —' },
+      ...(this._viewableStaff || []).map(s => ({
+        value: s.id, label: `${s.full_name}${s.service_number ? ' · ' + s.service_number : ''}`,
+      })),
+    ];
+  },
+
+  _bindStaffCombobox(f) {
+    const options = this._staffOptions();
+    const input = document.getElementById('cal-filter-staff-input');
+    const list = document.getElementById('cal-filter-staff-list');
+    const currentLabel = () => options.find(o => o.value === f.staffId)?.label || '';
+    input.value = currentLabel();
+
+    const renderOptions = (query) => {
+      const q = query.trim().toLowerCase();
+      const matches = options.filter(o => !q || o.label.toLowerCase().includes(q));
+      list.innerHTML = matches.length > 0
+        ? matches.map(o => `<button type="button" class="combobox-option" data-staff-value="${o.value}">${this._escapeHtml(o.label)}</button>`).join('')
+        : `<div class="combobox-empty">No matches</div>`;
+      list.querySelectorAll('[data-staff-value]').forEach(btn => {
+        btn.addEventListener('mousedown', (e) => {
+          e.preventDefault(); // keeps the input focused so blur doesn't race this
+          f.staffId = btn.dataset.staffValue;
+          input.value = currentLabel();
+          list.classList.add('hidden');
+          this._loadAndRender();
+        });
+      });
+    };
+
+    input.addEventListener('focus', () => { input.select(); renderOptions(''); list.classList.remove('hidden'); });
+    input.addEventListener('input', () => { renderOptions(input.value); list.classList.remove('hidden'); });
+    input.addEventListener('blur', () => {
+      list.classList.add('hidden');
+      input.value = currentLabel(); // discard an unconfirmed typed query
+    });
   },
 
   _applyFilters(events) {
