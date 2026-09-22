@@ -865,9 +865,9 @@ const MeetingsView = {
   // create_recurring_meeting, assign_room_booking, add_participant,
   // apply_group_to_meeting) — this only sequences them behind one
   // submit button; no new backend surface. `assign_room_booking`
-  // itself already preserves the manager-vs-request-approval split
-  // (create_room_booking vs submit_booking_request) regardless of
-  // whether the caller reaches it via Rooms or via this form.
+  // always confirms the room immediately now (docs/147 — no approval
+  // step), the same whether the caller reaches it via Rooms or via
+  // this form.
   // Every entry point reachable from OUTSIDE this module's own render()
   // (Rooms' booking flow, Rooms' linked-meeting detail routing) needs
   // this same set of fields — render() itself already sets them, but a

@@ -62,9 +62,8 @@ const RoomsView = {
       this._myManagedRoomIds = new Set();
     }
 
-    const validTabs = ['schedule', 'my-bookings', 'rooms', 'blocks', 'approvals'];
+    const validTabs = ['schedule', 'my-bookings', 'rooms', 'blocks'];
     if (params.tab && validTabs.includes(params.tab)) this._state.tab = params.tab;
-    if (this._state.tab === 'approvals' && !this._hasAnyManagerAuthority()) this._state.tab = 'schedule';
 
     container.innerHTML = this._shell();
     this._bindShell();
@@ -95,7 +94,6 @@ const RoomsView = {
 
   // ── Shell / tabs ─────────────────────────────────────────────────
   _shell() {
-    const showApprovals = this._hasAnyManagerAuthority();
     return `
       <div class="app-layout">
         ${AppShell.topbarHtml(this._user, 'rooms')}
@@ -111,7 +109,6 @@ const RoomsView = {
             <button class="tab-btn" data-tab="my-bookings">My Bookings</button>
             <button class="tab-btn" data-tab="rooms">Rooms</button>
             <button class="tab-btn" data-tab="blocks">Room Blocks</button>
-            ${showApprovals ? `<button class="tab-btn" data-tab="approvals">Pending Approvals</button>` : ''}
           </div>
           <div id="rooms-tab-content"></div>
         </main>
@@ -147,7 +144,6 @@ const RoomsView = {
       else if (this._state.tab === 'my-bookings') await this._renderMyBookingsTab(content);
       else if (this._state.tab === 'rooms') this._renderRoomsTab(content);
       else if (this._state.tab === 'blocks') await this._renderBlocksTab(content);
-      else if (this._state.tab === 'approvals') await this._renderApprovalsTab(content);
     } catch (err) {
       console.error('CorLink: failed to load rooms tab', err);
       content.innerHTML = `<div class="alert alert-error"><i class="ti ti-alert-triangle"></i> Couldn't load this tab: ${this._escapeHtml(err.message || 'unknown error')}.</div>`;
@@ -694,150 +690,14 @@ const RoomsView = {
     });
   },
 
-  // ── Pending Approvals tab ────────────────────────────────────────
-  async _renderApprovalsTab(content) {
-    const pending = await RoomsAPI.fetchPendingBookings(this._orgId);
-    content.innerHTML = pending.length === 0
-      ? this._emptyBlock({ icon: 'ti-checkbox', title: 'Nothing awaiting a decision', subtitle: 'New booking requests will show up here.' })
-      : `<div class="panel"><table class="data-table">
-          <thead><tr><th>Room</th><th>Requested By</th><th>Time</th><th></th></tr></thead>
-          <tbody>${pending.map(b => this._approvalRow(b)).join('')}</tbody>
-        </table></div>`;
-
-    content.querySelectorAll('[data-approve]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const b = pending.find(x => x.id === btn.dataset.approve);
-        this._handleApproveClick(b);
-      });
-    });
-    content.querySelectorAll('[data-reject]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const b = pending.find(x => x.id === btn.dataset.reject);
-        this._openRejectModal(b);
-      });
-    });
-    content.querySelectorAll('[data-view-booking]').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const booking = await RoomsAPI.fetchBooking(btn.dataset.viewBooking);
-        this._openBookingOrMeetingDetailModal(booking);
-      });
-    });
-  },
-
-  _approvalRow(b) {
-    const isOwn = b.created_by === this._user.id;
-    const canApprove = !isOwn || this._user.is_super_admin;
-    return `
-      <tr>
-        <td data-label="Room">${this._escapeHtml(b.room?.name || '')}</td>
-        <td data-label="Requested By">${this._escapeHtml(b.created_by_user?.full_name || '')}${isOwn ? ' <span class="structure-empty">(you)</span>' : ''}</td>
-        <td data-label="Time">${new Date(b.start_at).toLocaleDateString()} · ${this._timeRange(b.start_at, b.end_at)}</td>
-        <td data-label="Actions">
-          <button type="button" class="btn btn-secondary btn-xs" data-view-booking="${b.id}">View</button>
-          <button type="button" class="btn btn-primary btn-xs" data-approve="${b.id}" ${canApprove ? '' : 'disabled title="You cannot approve your own booking request"'}>Approve</button>
-          <button type="button" class="btn btn-secondary btn-xs" data-reject="${b.id}">Reject</button>
-        </td>
-      </tr>
-    `;
-  },
-
-  // Self-approval by a super admin is the one legitimate case that
-  // needs an override reason — every other approval is a plain,
-  // reason-free confirm. Never pre-filled, never defaulted to override.
-  _handleApproveClick(booking) {
-    const isOwn = booking.created_by === this._user.id;
-    if (isOwn && this._user.is_super_admin) {
-      this._openSelfApproveOverrideModal(booking);
-      return;
-    }
-    if (isOwn) return; // disabled in the UI already; server would refuse regardless
-    this._confirmApprove(booking, null);
-  },
-
-  async _confirmApprove(booking, overrideReason) {
-    try {
-      await RoomsAPI.approveBooking(booking.id, overrideReason || null);
-      await this._renderTab();
-    } catch (err) {
-      this._openModal(`
-        <h3>Couldn't Approve Booking</h3>
-        <div class="alert alert-error"><i class="ti ti-alert-triangle"></i> ${this._escapeHtml(err.message || 'Failed to approve this booking.')}</div>
-        <div class="modal-actions"><button type="button" class="btn btn-secondary" data-close-modal>Close</button></div>
-      `);
-    }
-  },
-
-  _openSelfApproveOverrideModal(booking) {
-    this._openModal(`
-      <h3>Approve Your Own Request</h3>
-      <div class="alert alert-warning"><i class="ti ti-alert-triangle"></i> As a super administrator, approving your own booking requires an explicit reason — this is recorded in the audit trail.</div>
-      <form id="self-approve-form" class="modal-form">
-        <div class="field-group">
-          <label class="field-label">Reason (required)</label>
-          <textarea class="field-input-plain" name="reason" rows="2" required></textarea>
-        </div>
-        <div class="modal-error alert alert-error hidden"></div>
-        <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
-          <button type="submit" class="btn btn-primary">Approve</button>
-        </div>
-      </form>
-    `);
-    const form = document.getElementById('self-approve-form');
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const reason = new FormData(form).get('reason');
-      try {
-        await RoomsAPI.approveBooking(booking.id, reason);
-        this._closeModal();
-        await this._renderTab();
-      } catch (err) {
-        const errEl = form.querySelector('.modal-error');
-        errEl.textContent = err.message;
-        errEl.classList.remove('hidden');
-      }
-    });
-  },
-
-  _openRejectModal(booking) {
-    this._openModal(`
-      <h3>Reject Booking Request</h3>
-      <form id="reject-form" class="modal-form">
-        <div class="field-group">
-          <label class="field-label">Reason (optional, shown to the requester)</label>
-          <textarea class="field-input-plain" name="reason" rows="2"></textarea>
-        </div>
-        <div class="modal-error alert alert-error hidden"></div>
-        <div class="modal-actions">
-          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
-          <button type="submit" class="btn btn-primary">Reject</button>
-        </div>
-      </form>
-    `);
-    const form = document.getElementById('reject-form');
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      try {
-        await RoomsAPI.rejectBooking(booking.id, new FormData(form).get('reason') || null);
-        this._closeModal();
-        await this._renderTab();
-      } catch (err) {
-        const errEl = form.querySelector('.modal-error');
-        errEl.textContent = err.message;
-        errEl.classList.remove('hidden');
-      }
-    });
-  },
-
   // Books the room and schedules the meeting in one window (docs/22)
   // via MeetingsView's combined form, prefilled with whichever room/
   // day/time the grid click was for — only when the Meetings module is
   // enabled for this org; otherwise there's no meeting flow to route
   // to, so this falls back to the room-only New Booking form exactly
   // as before. assign_room_booking (called inside that combined form)
-  // already preserves the same manager-confirms/non-manager-requests
-  // split as the room-only path below, so nothing about booking
-  // approval changes based on which form was used.
+  // always confirms immediately now (docs/147), same as the room-only
+  // path below — no approval step either way.
   _openBookOrScheduleModal({ date, time } = {}) {
     if (AppShell.isModuleEnabled(this._user, 'meetings') && typeof MeetingsView !== 'undefined') {
       const preselectedRoom = this._state.scheduleRoomId || (this._rooms[0] && this._rooms[0].id) || null;
@@ -913,22 +773,14 @@ const RoomsView = {
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
           <button type="button" class="btn btn-secondary" id="check-availability-btn">Check Availability</button>
-          <button type="submit" class="btn btn-primary" id="booking-submit-btn">Request Booking</button>
+          <button type="submit" class="btn btn-primary" id="booking-submit-btn">Confirm Booking</button>
         </div>
       </form>
     `);
 
     const form = document.getElementById('booking-form');
     const errEl = form.querySelector('.modal-error');
-    const roomSelect = form.querySelector('[name="roomId"]');
-    const submitBtn = document.getElementById('booking-submit-btn');
     const availEl = document.getElementById('availability-indicator');
-
-    const updateSubmitLabel = () => {
-      submitBtn.textContent = this._isManagerOf(roomSelect.value) ? 'Confirm Booking' : 'Request Booking';
-    };
-    roomSelect.addEventListener('change', updateSubmitLabel);
-    updateSubmitLabel();
 
     document.getElementById('check-availability-btn').addEventListener('click', async () => {
       const fd = new FormData(form);
@@ -966,11 +818,9 @@ const RoomsView = {
         return;
       }
       try {
-        if (this._isManagerOf(payload.roomId)) {
-          await RoomsAPI.createRoomBooking(payload);
-        } else {
-          await RoomsAPI.submitBookingRequest(payload);
-        }
+        // docs/147: every booking confirms immediately — no approval
+        // step, regardless of whether the caller manages this room.
+        await RoomsAPI.createRoomBooking(payload);
         this._closeModal();
         await this._renderTab();
       } catch (err) {

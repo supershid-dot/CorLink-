@@ -157,21 +157,6 @@ const RoomsAPI = (() => {
       return data || [];
     },
 
-    // Org-wide pending queue (RLS's own org-wide "availability" read
-    // visibility already returns this regardless of who's asking — the
-    // Pending Approvals TAB itself is what's gated to managers/admins,
-    // in rooms.js, not this query).
-    async fetchPendingBookings(orgId) {
-      const db = getSupabase();
-      const { data, error } = await db.from('meeting_room_bookings')
-        .select(BOOKING_SELECT)
-        .eq('org_id', orgId)
-        .eq('status', 'pending')
-        .order('created_at');
-      if (error) throw error;
-      return data || [];
-    },
-
     // ── Room blocks (reads only — writes are the two RPCs below) ────
     // from/to (added for Calendar, docs/22/23 Phase C) narrow to blocks
     // whose window overlaps [from, to) — same overlap shape fetchBookings
@@ -213,18 +198,10 @@ const RoomsAPI = (() => {
       return data;
     },
 
-    async submitBookingRequest({ roomId, startAt, endAt, timezone, meetingId, sectionId, holdId } = {}) {
-      const db = getSupabase();
-      const { data, error } = await db.rpc('submit_booking_request', {
-        p_room_id: roomId || null, p_start_at: startAt || null, p_end_at: endAt || null,
-        p_timezone: timezone || 'Indian/Maldives',
-        p_meeting_id: meetingId || null, p_section_id: sectionId || null,
-        p_hold_id: holdId || null,
-      });
-      if (error) throw error;
-      return data;
-    },
-
+    // docs/147: every booking confirms immediately — no approval step.
+    // create_room_booking() itself enforces org membership (module
+    // enabled, same org or super admin); it no longer requires the
+    // caller to manage this specific room.
     async createRoomBooking({ roomId, startAt, endAt, timezone, meetingId, sectionId }) {
       const db = getSupabase();
       const { data, error } = await db.rpc('create_room_booking', {
@@ -234,22 +211,6 @@ const RoomsAPI = (() => {
       });
       if (error) throw error;
       return data;
-    },
-
-    async approveBooking(bookingId, overrideReason = null) {
-      const db = getSupabase();
-      const { error } = await db.rpc('approve_booking', {
-        p_booking_id: bookingId, p_override_reason: overrideReason || null,
-      });
-      if (error) throw error;
-    },
-
-    async rejectBooking(bookingId, rejectionReason = null) {
-      const db = getSupabase();
-      const { error } = await db.rpc('reject_booking', {
-        p_booking_id: bookingId, p_rejection_reason: rejectionReason || null,
-      });
-      if (error) throw error;
     },
 
     async cancelBooking(bookingId, cancellationReason = null) {
