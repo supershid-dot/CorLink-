@@ -12,10 +12,13 @@
 //     Accept/Decline inline buttons the automatic invitation carries.
 //   - 'reminder' — sends the "starting soon" reminder message on
 //     demand, without waiting for reminder_at to come due.
-//   - 'message'  — sends exactly the free-text the sender types, with
-//     no auto-added header (docs/145 — an earlier version prefixed it
-//     with the meeting title, which made a short message read like an
-//     unrelated system notice).
+//   - 'message'  — the sender's free text, wrapped with just enough
+//     context to be legible on its own: meeting title/date/time above
+//     it, the sender's own name as a signature below it (docs/146 —
+//     an earlier version sent the raw text with zero context, docs/145
+//     before that had rejected pairing it with the same header the
+//     other two kinds use, since that made a short message read like
+//     an unrelated system notice).
 //
 // Deliberately self-contained (message-rendering helpers duplicated
 // from process-meeting-notifications/index.ts rather than imported from
@@ -84,6 +87,27 @@ function renderRichMessage(header: string, meeting: MeetingInfo): string {
   if (meeting.participants.length > 0) lines.push(`👥 ${meeting.participants.join(', ')}`);
   // docs/145: just the name, no "Organised by" prefix — UAT correction.
   if (meeting.organizer_name) lines.push('', meeting.organizer_name);
+  return lines.join('\n');
+}
+
+// docs/146 — a custom "Message" send still needs enough context for the
+// recipient to know which meeting it's about (title/date/time, no
+// location/participant list — those would be redundant with the
+// invitation the recipient already has) and who sent it, without going
+// back to docs/145's rejected "auto-header directly above the text"
+// shape (that made a short message read like an automated system
+// notice). Meeting context sits above the text, the sender's own name
+// sits below it as a signature — visually distinct from the message
+// body itself.
+function renderCustomMessage(meeting: MeetingInfo, senderName: string, text: string): string {
+  const lines = [
+    `💬 ${meeting.title}`,
+    `📅 ${formatDate(meeting.start_at, meeting.timezone)}`,
+    `⏱ ${formatTimeRange(meeting.start_at, meeting.end_at, meeting.timezone)}`,
+    '',
+    text,
+  ];
+  if (senderName) lines.push('', `— ${senderName}`);
   return lines.join('\n');
 }
 
@@ -222,12 +246,21 @@ Deno.serve(async (req) => {
       const header = kind === 'schedule' ? `📋 ${meetingInfo.title}` : `⏰ Starting soon: ${meetingInfo.title}`;
       messageText = renderRichMessage(header, meetingInfo);
     } else {
-      // docs/145: send exactly what the sender typed — no auto-added
-      // meeting-title header. UAT correction (the earlier "💬 {title}\n\n{text}"
-      // preamble made a short custom message read like an unrelated
-      // system notice, e.g. a message that just says "cancelled" looked
-      // like an automated cancellation notice for the whole meeting).
-      messageText = customText.slice(0, MESSAGE_MAX_LENGTH);
+      // docs/146: meeting title/date/time above the text, sender's own
+      // name as a signature below it — enough context to know which
+      // meeting this is about and who sent it, without docs/145's
+      // rejected "auto-header directly above the text" shape.
+      const { data: sender } = await adminClient
+        .from('users')
+        .select('full_name, designations(name)')
+        .eq('id', callerAuthUser.id)
+        .maybeSingle();
+      const senderName = sender ? formatDesignatedName((sender as any).full_name, (sender as any).designations?.name) : '';
+      messageText = renderCustomMessage(
+        { title: meetingRow.title, start_at: meetingRow.start_at, end_at: meetingRow.end_at, timezone: meetingRow.timezone || 'Indian/Maldives', location: null, organizer_name: '', participants: [] },
+        senderName,
+        customText.slice(0, MESSAGE_MAX_LENGTH),
+      );
     }
 
     let sent = 0, skippedNoTelegram = 0;
