@@ -525,6 +525,18 @@ async function check(name, fn) {
     await page.close();
   });
 
+  await check('_refreshCurrentViews() also refreshes CalendarView\'s own week grid when it is mounted (docs/139: the detail view can be opened from Calendar\'s own week-grid too)', async () => {
+    const { page } = await newPage();
+    await page.evaluate(() => {
+      document.body.insertAdjacentHTML('beforeend', '<div id="calendar-content"></div>');
+      window.CalendarView = { _loadAndRender: async () => window.calls.push({ name: 'CalendarView._loadAndRender', args: [] }) };
+    });
+    await page.evaluate(() => window.__view._refreshCurrentViews());
+    const calls = await page.evaluate(() => window.calls);
+    assert.ok(calls.some(c => c.name === 'CalendarView._loadAndRender'), 'expected CalendarView._loadAndRender to have been called');
+    await page.close();
+  });
+
   await check('_refreshCurrentViews() does not throw when neither the Meetings tab nor RoomsView is mounted (e.g. viewed standalone)', async () => {
     const { page, pageErrors } = await newPage();
     await page.evaluate(() => window.__view._refreshCurrentViews());

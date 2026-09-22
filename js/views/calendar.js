@@ -33,7 +33,11 @@ const CalendarView = {
     // schedule — client-side only, no new fetch), or another user's id
     // (fetches that person's own schedule via CalendarAPI.fetchUserSchedule,
     // docs/137 — replaces the old standalone "Only mine" checkbox).
-    filters: { orgId: '', roomId: '', creatorId: '', status: '', meetingType: '', staffId: '', showBlocks: true },
+    // status defaults to 'scheduled' (docs/139: "this view should only
+    // show scheduled meetings by default") — it only ever applies to
+    // meeting-type events (see _applyFilters), so room bookings/blocks
+    // are unaffected regardless of this default.
+    filters: { orgId: '', roomId: '', creatorId: '', status: 'scheduled', meetingType: '', staffId: '', showBlocks: true },
     // Which day's agenda list is expanded in Week mode on mobile
     // (docs/22 §3.1) — null means "default to today if in this week,
     // else the first day", handled by WeekGrid itself. Distinct from
@@ -49,6 +53,10 @@ const CalendarView = {
     this._user = user;
     this._orgId = user.org_id;
     this._isSuperAdmin = !!user.is_super_admin;
+    // Gates both the "+ New Meeting" button and the in-place meeting
+    // detail modal (docs/139) — same guard Rooms' own Schedule tab
+    // uses before routing to MeetingsView.
+    this._meetingsEnabled = AppShell.isModuleEnabled(user, 'meetings') && typeof MeetingsView !== 'undefined';
 
     if (params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date)) this._state.anchor = params.date;
 
@@ -73,6 +81,7 @@ const CalendarView = {
               <p class="page-subtitle">Meetings, room bookings, and room blocks in one schedule.</p>
             </div>
             <div class="field-row" style="gap:8px;">
+              ${this._meetingsEnabled ? `<button type="button" class="btn btn-primary btn-sm" id="cal-new-meeting-btn"><i class="ti ti-plus"></i> New Meeting</button>` : ''}
               <button type="button" class="icon-btn" id="cal-refresh-btn" title="Refresh"><i class="ti ti-refresh"></i></button>
             </div>
           </div>
@@ -98,6 +107,14 @@ const CalendarView = {
 
   _bindShell() {
     AppShell.bindTopbar();
+    // Not scoped to any one room (unlike Rooms' own "+ Book", which
+    // preselects its currently-viewed room) — Calendar aggregates
+    // every section/room, so the combined form opens with format
+    // "Not decided yet" and no prefill, same as Meetings' own "New
+    // Meeting" button.
+    document.getElementById('cal-new-meeting-btn')?.addEventListener('click', () => {
+      MeetingsView._openScheduleMeetingModal({ onSuccess: async () => { await this._loadAndRender(); } });
+    });
     document.getElementById('cal-refresh-btn').addEventListener('click', () => this._loadAndRender());
     document.getElementById('cal-today-btn').addEventListener('click', () => {
       this._state.anchor = WeekGrid._dayStr(new Date());
@@ -215,7 +232,12 @@ const CalendarView = {
       if (e.orgId) orgs.set(e.orgId, this._orgNames.get(e.orgId) || e.orgId);
       if (e.roomId && e.roomName) rooms.set(e.roomId, e.roomName);
       if (e.creatorId && e.creatorName) creators.set(e.creatorId, e.creatorName);
-      if (e.status) statuses.add(e.status);
+      // Meeting-only (docs/139) — the status filter only ever governs
+      // meeting visibility (see _applyFilters); a booking/block status
+      // vocabulary is entirely different (confirmed/pending/hold,
+      // active/inactive) and would otherwise show alongside meeting
+      // statuses in a dropdown that can't actually filter them.
+      if (e.type === 'meeting' && e.status) statuses.add(e.status);
       if (e.type === 'meeting' && e.meetingType) types.add(e.meetingType);
     });
     const f = this._state.filters;
@@ -237,7 +259,7 @@ const CalendarView = {
           ${[...creators.entries()].map(([id, name]) => `<option value="${id}" ${f.creatorId === id ? 'selected' : ''}>${this._escapeHtml(name)}</option>`).join('')}
         </select>
         <select class="field-select" id="cal-filter-status">
-          <option value="">All statuses</option>
+          <option value="">All meeting statuses</option>
           ${[...statuses].sort().map(s => `<option value="${s}" ${f.status === s ? 'selected' : ''}>${this._capitalize(s)}</option>`).join('')}
         </select>
         <select class="field-select" id="cal-filter-type">
@@ -276,7 +298,11 @@ const CalendarView = {
       if (f.orgId && e.orgId !== f.orgId) return false;
       if (f.roomId && e.roomId !== f.roomId) return false;
       if (f.creatorId && e.creatorId !== f.creatorId) return false;
-      if (f.status && e.status !== f.status) return false;
+      // Meeting-only, matching the option list above — 'scheduled' is
+      // the default (docs/139), so this hides cancelled/draft meetings
+      // out of the box without touching room bookings/blocks, which
+      // never carry a 'scheduled' status of their own.
+      if (f.status && e.type === 'meeting' && e.status !== f.status) return false;
       if (f.meetingType) {
         if (e.type !== 'meeting' || e.meetingType !== f.meetingType) return false;
       }
@@ -319,12 +345,27 @@ const CalendarView = {
   // an RLS-denied error, show what's already known client-side in a
   // small read-only preview instead, with an explicit "Open in
   // Meetings" action for when the caller does also have full access.
-  _routeEventClick(type, id) {
+  async _routeEventClick(type, id) {
     if (type === 'meeting') {
       const staffId = this._state.filters.staffId;
       if (staffId && staffId !== '__me__') {
         const e = (this._staffEvents || []).find(ev => ev.id === id);
         if (e) { this._openStaffEventPreviewModal(e); return; }
+      }
+      // Opens the same in-place detail modal Rooms' own Schedule tab
+      // opens for a meeting-linked booking (docs/139: "should show the
+      // same window when i click a meeting in rooms calendar") —
+      // Calendar stays on its own page rather than navigating away to
+      // the Meetings tab. Falls back to navigating there only if the
+      // Meetings module/view genuinely isn't available.
+      if (this._meetingsEnabled) {
+        try {
+          const meeting = await MeetingsAPI.fetchMeeting(id);
+          MeetingsView._openMeetingDetailModal(meeting);
+          return;
+        } catch (err) {
+          console.error('CorLink: failed to open meeting detail from Calendar', err);
+        }
       }
       Router.navigate('meetings', { meetingId: id });
     }

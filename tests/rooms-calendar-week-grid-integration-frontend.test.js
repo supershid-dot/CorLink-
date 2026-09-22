@@ -439,19 +439,40 @@ async function check(name, fn) {
   });
 
   // ── Calendar week mode ──────────────────────────────────────────
-  async function newCalendarPage(viewport) {
+  // meetingsEnabled controls both AppShell.isModuleEnabled('meetings')
+  // and whether window.MeetingsView exists at all — docs/139's "+ New
+  // Meeting" button and in-place meeting detail modal both fall back
+  // to their pre-docs/139 behavior (hidden / Router.navigate) when
+  // either is false, same guard Rooms' own Schedule tab uses.
+  async function newCalendarPage({ viewport, meetingsEnabled = true } = {}) {
     const page = await browser.newPage(viewport ? { viewport } : {});
     const pageErrors = [];
     page.on('pageerror', e => pageErrors.push(e.message));
     await page.setContent('<div id="app"></div><div id="modal-root"></div>');
     await page.addScriptTag({ content: dateOverrideScript });
     await page.addScriptTag({ content: `
+      window.calls = [];
+      const record = (name, args) => window.calls.push({ name, args });
       window.getSupabase = () => ({});
-      window.AppShell = { topbarHtml: () => '', bottomNavHtml: () => '', bindTopbar: () => {} };
+      window.AppShell = {
+        topbarHtml: () => '', bottomNavHtml: () => '', bindTopbar: () => {},
+        isModuleEnabled: (user, mod) => mod === 'meetings' ? ${meetingsEnabled} : true,
+      };
       window.Auth = { getCachedProfile: () => ({ id: 'u1', org_id: 'org-1' }) };
       window.Router = { navigate: (...args) => { window.__navCalls = window.__navCalls || []; window.__navCalls.push(args); } };
       window.AdminAPI = { listOrganizations: async () => [] };
-      window.MeetingsAPI = { fetchMeetingsInRange: async () => ([]), fetchMyMeetingIds: async () => [] };
+      window.MeetingsAPI = {
+        fetchMeetingsInRange: async () => ([]), fetchMyMeetingIds: async () => [],
+        fetchMeeting: async (id) => { record('MeetingsAPI.fetchMeeting', [id]); return { id, title: 'Fetched Meeting ' + id }; },
+      };
+      ${meetingsEnabled ? `
+      window.MeetingsView = {
+        _openMeetingDetailModal: (meeting) => { record('MeetingsView._openMeetingDetailModal', [meeting]); },
+        // opts.onSuccess is a function — page.evaluate() results are
+        // JSON-serialized, so a raw function would come back as
+        // undefined; record whether one was passed instead.
+        _openScheduleMeetingModal: (opts) => { record('MeetingsView._openScheduleMeetingModal', [{ ...opts, hasOnSuccess: typeof opts?.onSuccess === 'function' }]); },
+      };` : ''}
       window.RoomsAPI = { fetchBookings: async () => ([]), fetchRoomBlocks: async () => ([]) };
       window.__fetchUserScheduleCalls = [];
       window.CalendarAPI = {
@@ -499,12 +520,42 @@ async function check(name, fn) {
     await page.close();
   });
 
-  await check('clicking a meeting event in Calendar week mode navigates to Meetings', async () => {
+  await check('clicking a meeting event in Calendar opens the same in-place detail modal Rooms\' calendar uses, not a navigation away (docs/139)', async () => {
     const { page } = await newCalendarPage();
     await page.evaluate(async () => {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
       v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._meetingsEnabled = true;
+      v._state.anchor = '2026-09-16';
+      document.body.insertAdjacentHTML('beforeend', `
+        <span id="cal-range-label"></span>
+        <div id="cal-filters"></div>
+        <div id="calendar-content"></div>
+      `);
+      await v._loadAndRender();
+    });
+    await page.evaluate(() => document.querySelector('[data-week-grid-event]').click());
+    await page.waitForTimeout(30);
+    const calls = await page.evaluate(() => window.calls);
+    const fetchCall = calls.find(c => c.name === 'MeetingsAPI.fetchMeeting');
+    const openCall = calls.find(c => c.name === 'MeetingsView._openMeetingDetailModal');
+    assert.ok(fetchCall, 'expected the clicked meeting to be fetched');
+    assert.strictEqual(fetchCall.args[0], 'm1');
+    assert.ok(openCall, 'expected the in-place detail modal to be opened');
+    assert.strictEqual(openCall.args[0].id, 'm1');
+    const navCalls = await page.evaluate(() => window.__navCalls || []);
+    assert.strictEqual(navCalls.length, 0, 'must not navigate away to the Meetings tab');
+    await page.close();
+  });
+
+  await check('falls back to navigating to Meetings when the Meetings module/view is unavailable', async () => {
+    const { page } = await newCalendarPage({ meetingsEnabled: false });
+    await page.evaluate(async () => {
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._meetingsEnabled = false;
       v._state.anchor = '2026-09-16';
       document.body.insertAdjacentHTML('beforeend', `
         <span id="cal-range-label"></span>
@@ -516,6 +567,85 @@ async function check(name, fn) {
     await page.evaluate(() => document.querySelector('[data-week-grid-event]').click());
     const navCalls = await page.evaluate(() => window.__navCalls);
     assert.deepStrictEqual(navCalls[0], ['meetings', { meetingId: 'm1' }]);
+    await page.close();
+  });
+
+  await check('the "+ New Meeting" button opens the combined Schedule Meeting form and reloads on success (docs/139)', async () => {
+    const { page } = await newCalendarPage();
+    await page.evaluate(async () => {
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._meetingsEnabled = true;
+      v._state.anchor = '2026-09-16';
+      document.getElementById('app').innerHTML = v._shell();
+      v._bindShell();
+      await v._loadAndRender();
+    });
+    assert.strictEqual(await page.locator('#cal-new-meeting-btn').count(), 1);
+    await page.click('#cal-new-meeting-btn');
+    const calls = await page.evaluate(() => window.calls);
+    const openCall = calls.find(c => c.name === 'MeetingsView._openScheduleMeetingModal');
+    assert.ok(openCall, 'expected the combined Schedule Meeting form to open');
+    assert.strictEqual(openCall.args[0].hasOnSuccess, true, 'expected an onSuccess callback so the grid reloads after creating the meeting');
+    await page.close();
+  });
+
+  await check('the "+ New Meeting" button is not offered when the Meetings module is unavailable', async () => {
+    const { page } = await newCalendarPage({ meetingsEnabled: false });
+    await page.evaluate(async () => {
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._meetingsEnabled = false;
+      v._state.anchor = '2026-09-16';
+      document.getElementById('app').innerHTML = v._shell();
+      v._bindShell();
+      await v._loadAndRender();
+    });
+    assert.strictEqual(await page.locator('#cal-new-meeting-btn').count(), 0);
+    await page.close();
+  });
+
+  await check('defaults to showing only scheduled meetings — cancelled meetings are hidden until "All meeting statuses" is picked; room bookings are unaffected (docs/139)', async () => {
+    const { page } = await newCalendarPage();
+    await page.evaluate(async () => {
+      window.CalendarAPI.fetchEvents = async () => ([
+        {
+          type: 'meeting', id: 'm1', title: 'Budget Review', start: '2026-09-16T09:00:00Z', end: '2026-09-16T10:00:00Z',
+          status: 'scheduled', orgId: 'org-1', roomId: null, roomName: null, creatorId: 'u1', creatorName: 'Jane',
+          isRecurring: false, isLocked: false, isDraft: false,
+        },
+        {
+          type: 'meeting', id: 'm-cancelled', title: 'Old Standup', start: '2026-09-16T13:00:00Z', end: '2026-09-16T13:30:00Z',
+          status: 'cancelled', orgId: 'org-1', roomId: null, roomName: null, creatorId: 'u1', creatorName: 'Jane',
+          isRecurring: false, isLocked: false, isDraft: false,
+        },
+        {
+          type: 'booking', id: 'bk1', title: 'Room Booking — HQ Room A', start: '2026-09-16T14:00:00Z', end: '2026-09-16T14:30:00Z',
+          status: 'confirmed', orgId: 'org-1', roomId: 'r1', roomName: 'HQ Room A', creatorId: 'u1', creatorName: 'Jane',
+        },
+      ]);
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._state.anchor = '2026-09-16';
+      document.body.insertAdjacentHTML('beforeend', `
+        <span id="cal-range-label"></span>
+        <div id="cal-filters"></div>
+        <div id="calendar-content"></div>
+      `);
+      await v._loadAndRender();
+    });
+    assert.strictEqual(await page.locator('#cal-filter-status').inputValue(), 'scheduled');
+    let contentText = await page.evaluate(() => document.getElementById('calendar-content').textContent);
+    assert.match(contentText, /Budget Review/);
+    assert.doesNotMatch(contentText, /Old Standup/, 'the cancelled meeting must be hidden by default');
+    assert.match(contentText, /Room Booking/, 'the status filter must not hide room bookings, which have their own status vocabulary');
+    // Picking "All meeting statuses" brings the cancelled meeting back.
+    await page.selectOption('#cal-filter-status', '');
+    contentText = await page.evaluate(() => document.getElementById('calendar-content').textContent);
+    assert.match(contentText, /Old Standup/);
     await page.close();
   });
 
@@ -545,7 +675,7 @@ async function check(name, fn) {
   });
 
   await check('Calendar week mode on mobile renders the day-picker/agenda list, and picking a day persists across re-render', async () => {
-    const { page } = await newCalendarPage({ width: 390, height: 800 });
+    const { page } = await newCalendarPage({ viewport: { width: 390, height: 800 } });
     await page.evaluate(async () => {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };

@@ -3838,5 +3838,9 @@ const MeetingsView = {
   async _refreshCurrentViews() {
     if (document.getElementById('meetings-tab-content')) await this._renderTab();
     if (typeof RoomsView !== 'undefined' && document.getElementById('rooms-tab-content')) await RoomsView._renderTab();
+    // Calendar's own in-place meeting detail modal (docs/139) needs
+    // the same treatment — its week grid can go stale after a
+    // terminal action (Cancel Meeting, Delete Draft) just like Rooms'.
+    if (typeof CalendarView !== 'undefined' && document.getElementById('calendar-content')) await CalendarView._loadAndRender();
   },
 };
