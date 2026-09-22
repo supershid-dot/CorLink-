@@ -102,7 +102,7 @@ const RoomsView = {
         <main class="main-content">
           <div class="page-header page-header-row">
             <div>
-              <h2 class="page-title">Rooms</h2>
+              <h2 class="page-title">Meeting Rooms</h2>
               <p class="page-subtitle">Book meeting rooms, manage requests, and keep the room schedule conflict-free.</p>
             </div>
           </div>

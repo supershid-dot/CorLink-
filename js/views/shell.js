@@ -135,9 +135,9 @@ const AppShell = {
           ${item('task-dashboard', 'Tasks', 'ti-checklist')}
           ${showRequests ? item('requests', 'Requests', 'ti-inbox', true) : ''}
           ${showEntry ? item('entry', 'Entry', 'ti-mailbox') : ''}
-          ${showRooms ? item('rooms', 'Rooms', 'ti-door') : ''}
-          ${showMeetings ? item('meetings', 'Meetings', 'ti-calendar-event') : ''}
+          ${showRooms ? item('rooms', 'Meeting Rooms', 'ti-door') : ''}
           ${showCalendar ? item('calendar', 'Calendar', 'ti-calendar') : ''}
+          ${showMeetings ? item('meetings', 'Meetings', 'ti-calendar-event') : ''}
           ${canLetters ? item('prisoner-letters', 'Prisoner Letters', 'ti-mail') : ''}
           ${admin ? item('admin', 'Administration', 'ti-settings') : ''}
         </nav>
@@ -176,9 +176,9 @@ const AppShell = {
           ${link('task-dashboard', 'Tasks')}
           ${showRequests ? link('requests', 'Requests', true) : ''}
           ${showEntry ? link('entry', 'Entry') : ''}
-          ${showRooms ? link('rooms', 'Rooms') : ''}
-          ${showMeetings ? link('meetings', 'Meetings') : ''}
+          ${showRooms ? link('rooms', 'Meeting Rooms') : ''}
           ${showCalendar ? link('calendar', 'Calendar') : ''}
+          ${showMeetings ? link('meetings', 'Meetings') : ''}
           ${canLetters ? link('prisoner-letters', 'Letters') : ''}
           ${admin ? link('admin', 'Admin') : ''}
         </nav>
@@ -264,8 +264,8 @@ const AppShell = {
         ${showRequests ? item('requests', 'Requests', 'ti-inbox', true) : ''}
         ${showEntry ? item('entry', 'Entry', 'ti-mailbox') : ''}
         ${showRooms ? item('rooms', 'Rooms', 'ti-door') : ''}
-        ${showMeetings ? item('meetings', 'Meetings', 'ti-calendar-event') : ''}
         ${showCalendar ? item('calendar', 'Calendar', 'ti-calendar') : ''}
+        ${showMeetings ? item('meetings', 'Meetings', 'ti-calendar-event') : ''}
         ${canLetters ? item('prisoner-letters', 'Letters', 'ti-mail') : ''}
         ${admin ? item('admin', 'Admin', 'ti-settings') : ''}
       </nav>
