@@ -12,8 +12,10 @@
 //     Accept/Decline inline buttons the automatic invitation carries.
 //   - 'reminder' — sends the "starting soon" reminder message on
 //     demand, without waiting for reminder_at to come due.
-//   - 'message'  — a free-text message the sender types, prefixed with
-//     the meeting title for context.
+//   - 'message'  — sends exactly the free-text the sender types, with
+//     no auto-added header (docs/145 — an earlier version prefixed it
+//     with the meeting title, which made a short message read like an
+//     unrelated system notice).
 //
 // Deliberately self-contained (message-rendering helpers duplicated
 // from process-meeting-notifications/index.ts rather than imported from
@@ -80,7 +82,8 @@ function renderRichMessage(header: string, meeting: MeetingInfo): string {
   lines.push(`⏱ ${formatTimeRange(meeting.start_at, meeting.end_at, meeting.timezone)}`);
   if (meeting.location) lines.push(`📍 ${meeting.location}`);
   if (meeting.participants.length > 0) lines.push(`👥 ${meeting.participants.join(', ')}`);
-  if (meeting.organizer_name) lines.push('', `Organised by ${meeting.organizer_name}`);
+  // docs/145: just the name, no "Organised by" prefix — UAT correction.
+  if (meeting.organizer_name) lines.push('', meeting.organizer_name);
   return lines.join('\n');
 }
 
@@ -219,7 +222,12 @@ Deno.serve(async (req) => {
       const header = kind === 'schedule' ? `📋 ${meetingInfo.title}` : `⏰ Starting soon: ${meetingInfo.title}`;
       messageText = renderRichMessage(header, meetingInfo);
     } else {
-      messageText = `💬 ${meetingRow.title}\n\n${customText.slice(0, MESSAGE_MAX_LENGTH)}`;
+      // docs/145: send exactly what the sender typed — no auto-added
+      // meeting-title header. UAT correction (the earlier "💬 {title}\n\n{text}"
+      // preamble made a short custom message read like an unrelated
+      // system notice, e.g. a message that just says "cancelled" looked
+      // like an automated cancellation notice for the whole meeting).
+      messageText = customText.slice(0, MESSAGE_MAX_LENGTH);
     }
 
     let sent = 0, skippedNoTelegram = 0;

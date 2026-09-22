@@ -234,7 +234,8 @@ function renderMessage(titleTemplateKey: string, templateParams: Record<string, 
   // and the room is moot for a meeting that's no longer happening.
   if (meeting.location && titleTemplateKey !== 'meetings.cancelled') lines.push(`📍 ${meeting.location}`);
   if (meeting.participants.length > 0) lines.push(`👥 ${meeting.participants.join(', ')}`);
-  if (meeting.organizer_name) lines.push('', `Organised by ${meeting.organizer_name}`);
+  // docs/145: just the name, no "Organised by" prefix — UAT correction.
+  if (meeting.organizer_name) lines.push('', meeting.organizer_name);
   return lines.join('\n');
 }
 
