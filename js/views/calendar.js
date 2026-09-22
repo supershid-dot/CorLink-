@@ -37,7 +37,11 @@ const CalendarView = {
     // show scheduled meetings by default") — it only ever applies to
     // meeting-type events (see _applyFilters), so room bookings/blocks
     // are unaffected regardless of this default.
-    filters: { orgId: '', roomId: '', creatorId: '', status: 'scheduled', meetingType: '', staffId: '', showBlocks: true },
+    // No org/creator/meeting-type filters (docs/140: "not needed
+    // here") — Calendar is always scoped to the viewer's own
+    // organization unconditionally (see _applyFilters), not a
+    // user-facing toggle.
+    filters: { roomId: '', status: 'scheduled', staffId: '', showBlocks: true },
     // Which day's agenda list is expanded in Week mode on mobile
     // (docs/22 §3.1) — null means "default to today if in this week,
     // else the first day", handled by WeekGrid itself. Distinct from
@@ -52,7 +56,6 @@ const CalendarView = {
 
     this._user = user;
     this._orgId = user.org_id;
-    this._isSuperAdmin = !!user.is_super_admin;
     // Gates both the "+ New Meeting" button and the in-place meeting
     // detail modal (docs/139) — same guard Rooms' own Schedule tab
     // uses before routing to MeetingsView.
@@ -181,13 +184,6 @@ const CalendarView = {
         }
       }
 
-      if (this._isSuperAdmin) {
-        try { this._orgNames = new Map((await AdminAPI.listOrganizations()).map(o => [o.id, o.name])); }
-        catch (err) { console.error('CorLink: failed to load organization names', err); this._orgNames = new Map(); }
-      } else {
-        this._orgNames = new Map([[this._orgId, this._user.organization?.name || 'My Organization']]);
-      }
-
       this._renderFilters();
       this._renderView();
     } catch (err) {
@@ -221,50 +217,37 @@ const CalendarView = {
   // ── Filters (derived entirely from the already-fetched, already-
   // RLS-scoped event set — a filter can never surface more than the
   // caller could already see, and never issues a new query) ───────
+  // No org/creator/meeting-type filters (docs/140: "not needed
+  // here") — org scoping is enforced unconditionally in _applyFilters
+  // instead of being a user-facing toggle, which also closes the gap
+  // a super admin's org filter used to paper over: can_view_meeting()
+  // grants a super admin every org's meetings at the RLS layer, so
+  // without this Calendar would otherwise show every organization's
+  // schedule mixed together for that caller with no way to unfilter it.
   _renderFilters() {
     const el = document.getElementById('cal-filters');
-    const orgs = new Map();
     const rooms = new Map();
-    const creators = new Map();
     const statuses = new Set();
-    const types = new Set();
     this._activeSourceEvents().forEach(e => {
-      if (e.orgId) orgs.set(e.orgId, this._orgNames.get(e.orgId) || e.orgId);
       if (e.roomId && e.roomName) rooms.set(e.roomId, e.roomName);
-      if (e.creatorId && e.creatorName) creators.set(e.creatorId, e.creatorName);
       // Meeting-only (docs/139) — the status filter only ever governs
       // meeting visibility (see _applyFilters); a booking/block status
       // vocabulary is entirely different (confirmed/pending/hold,
       // active/inactive) and would otherwise show alongside meeting
       // statuses in a dropdown that can't actually filter them.
       if (e.type === 'meeting' && e.status) statuses.add(e.status);
-      if (e.type === 'meeting' && e.meetingType) types.add(e.meetingType);
     });
     const f = this._state.filters;
 
     el.innerHTML = `
       <div class="calendar-filter-row">
-        ${this._isSuperAdmin ? `
-          <select class="field-select" id="cal-filter-org">
-            <option value="">All organizations</option>
-            ${[...orgs.entries()].map(([id, name]) => `<option value="${id}" ${f.orgId === id ? 'selected' : ''}>${this._escapeHtml(name)}</option>`).join('')}
-          </select>
-        ` : ''}
         <select class="field-select" id="cal-filter-room">
           <option value="">All rooms</option>
           ${[...rooms.entries()].map(([id, name]) => `<option value="${id}" ${f.roomId === id ? 'selected' : ''}>${this._escapeHtml(name)}</option>`).join('')}
         </select>
-        <select class="field-select" id="cal-filter-creator">
-          <option value="">All creators</option>
-          ${[...creators.entries()].map(([id, name]) => `<option value="${id}" ${f.creatorId === id ? 'selected' : ''}>${this._escapeHtml(name)}</option>`).join('')}
-        </select>
         <select class="field-select" id="cal-filter-status">
           <option value="">All meeting statuses</option>
           ${[...statuses].sort().map(s => `<option value="${s}" ${f.status === s ? 'selected' : ''}>${this._capitalize(s)}</option>`).join('')}
-        </select>
-        <select class="field-select" id="cal-filter-type">
-          <option value="">All meeting types</option>
-          ${[...types].sort().map(t => `<option value="${t}" ${f.meetingType === t ? 'selected' : ''}>${this._capitalize(t)}</option>`).join('')}
         </select>
         <select class="field-select" id="cal-filter-staff">
           <option value="">— All meetings —</option>
@@ -279,11 +262,8 @@ const CalendarView = {
       </div>
     `;
 
-    document.getElementById('cal-filter-org')?.addEventListener('change', (e) => { f.orgId = e.target.value; this._renderView(); });
     document.getElementById('cal-filter-room').addEventListener('change', (e) => { f.roomId = e.target.value; this._renderView(); });
-    document.getElementById('cal-filter-creator').addEventListener('change', (e) => { f.creatorId = e.target.value; this._renderView(); });
     document.getElementById('cal-filter-status').addEventListener('change', (e) => { f.status = e.target.value; this._renderView(); });
-    document.getElementById('cal-filter-type').addEventListener('change', (e) => { f.meetingType = e.target.value; this._renderView(); });
     // Unlike every other control here, this one can require a new
     // fetch (docs/137) — go through _loadAndRender() rather than just
     // _renderView() so a real staff id's own schedule gets loaded, and
@@ -294,38 +274,49 @@ const CalendarView = {
 
   _applyFilters(events) {
     const f = this._state.filters;
+    // Always the viewer's own organization (docs/140) — not a
+    // user-facing toggle; see _renderFilters' own header comment.
+    // Suspended only while viewing a specific OTHER staff member's
+    // schedule (docs/137) — that picker already independently governs
+    // who's viewable and, for a super admin, is deliberately allowed
+    // to span organizations; forcing it back to the caller's own org
+    // here would silently break that already-shipped cross-org case.
+    const viewingOtherStaff = !!f.staffId && f.staffId !== '__me__';
     return events.filter(e => {
-      if (f.orgId && e.orgId !== f.orgId) return false;
+      if (!viewingOtherStaff && e.orgId && e.orgId !== this._orgId) return false;
       if (f.roomId && e.roomId !== f.roomId) return false;
-      if (f.creatorId && e.creatorId !== f.creatorId) return false;
       // Meeting-only, matching the option list above — 'scheduled' is
       // the default (docs/139), so this hides cancelled/draft meetings
       // out of the box without touching room bookings/blocks, which
       // never carry a 'scheduled' status of their own.
       if (f.status && e.type === 'meeting' && e.status !== f.status) return false;
-      if (f.meetingType) {
-        if (e.type !== 'meeting' || e.meetingType !== f.meetingType) return false;
-      }
       if (!f.showBlocks && e.type === 'block') return false;
       return true;
     });
   },
 
   // ── View dispatch — week grid only ───────────────────────────────
-  // Click routing goes entirely through WeekGrid.bind's own
-  // onEventClick below — its rendered elements carry WeekGrid's own
-  // data-week-grid-event/data-event-id attributes, not a separate
-  // data-event-type/data-event-id pair, so no extra binding pass is
-  // needed here (the old month/day/agenda chip/row markup did carry
-  // those, but that markup is gone, docs/138).
+  // Click routing goes entirely through WeekGrid.bind's own handlers
+  // below — its rendered elements carry WeekGrid's own data-week-grid-
+  // event/data-event-id attributes, not a separate data-event-type/
+  // data-event-id pair, so no extra binding pass is needed here (the
+  // old month/day/agenda chip/row markup did carry those, but that
+  // markup is gone, docs/138).
   _renderView() {
     const content = document.getElementById('calendar-content');
     const events = this._applyFilters(this._activeSourceEvents());
     content.innerHTML = this._renderWeek(events);
     WeekGrid.bind(content.querySelector('.week-grid'), {
-      // No onSlotClick — Calendar aggregates three different record
-      // types (meetings/bookings/blocks) it doesn't itself create, and
-      // there's no drill-down view left to switch into (docs/138).
+      // Opens the same combined Schedule Meeting form Rooms' own "+"
+      // empty-slot click opens (docs/140), prefilled with the clicked
+      // day/time — omitted when Meetings isn't available, same guard
+      // as the "+ New Meeting" button and the in-place detail modal.
+      onSlotClick: this._meetingsEnabled ? (day, time) => {
+        MeetingsView._openScheduleMeetingModal({
+          prefillDate: day, prefillTime: time,
+          onSuccess: async () => { await this._loadAndRender(); },
+        });
+      } : undefined,
       onEventClick: (prefixedId) => {
         const i = prefixedId.indexOf(':');
         this._routeEventClick(prefixedId.slice(0, i), prefixedId.slice(i + 1));

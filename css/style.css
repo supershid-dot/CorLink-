@@ -3534,8 +3534,24 @@ mark.quote-highlight {
 }
 .week-grid-day-name { font-size: 0.7rem; font-weight: 700; color: var(--color-text-muted); letter-spacing: 0.03em; }
 .week-grid-day-num { font-size: 0.9375rem; font-weight: 700; color: var(--color-text); }
-.week-grid-day-header--today .week-grid-day-name,
-.week-grid-day-header--today .week-grid-day-num { color: var(--color-primary-dark); }
+/* A same-color text tint alone was too subtle to read as "today" at a
+   glance (UAT: "today must be highlighted by default") — a filled
+   circle around the date number, same treatment the old Calendar
+   month-grid used for its own "today" cell, is unambiguous. Shared by
+   both Rooms' Schedule tab and Calendar, since both render through
+   this one component. */
+.week-grid-day-header--today { background: var(--color-primary-light); }
+.week-grid-day-header--today .week-grid-day-name { color: var(--color-primary-dark); }
+.week-grid-day-header--today .week-grid-day-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-full);
+  background: var(--color-primary);
+  color: #fff;
+}
 
 .week-grid-time-col {
   position: relative;
@@ -3671,6 +3687,10 @@ mark.quote-highlight {
   border-radius: var(--radius-md);
   background: var(--color-surface);
   cursor: pointer;
+}
+.week-grid-day-picker--today {
+  background: var(--color-primary-light);
+  border-color: var(--color-primary);
 }
 .week-grid-day-picker--today .week-grid-day-name,
 .week-grid-day-picker--today .week-grid-day-num { color: var(--color-primary-dark); }

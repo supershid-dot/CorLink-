@@ -504,7 +504,7 @@ async function check(name, fn) {
     await page.evaluate(async () => {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
-      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._orgId = 'org-1';
       v._state.anchor = '2026-09-16';
       document.body.insertAdjacentHTML('beforeend', `
         <span id="cal-range-label"></span>
@@ -525,7 +525,7 @@ async function check(name, fn) {
     await page.evaluate(async () => {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
-      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._orgId = 'org-1';
       v._meetingsEnabled = true;
       v._state.anchor = '2026-09-16';
       document.body.insertAdjacentHTML('beforeend', `
@@ -554,7 +554,7 @@ async function check(name, fn) {
     await page.evaluate(async () => {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
-      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._orgId = 'org-1';
       v._meetingsEnabled = false;
       v._state.anchor = '2026-09-16';
       document.body.insertAdjacentHTML('beforeend', `
@@ -575,7 +575,7 @@ async function check(name, fn) {
     await page.evaluate(async () => {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
-      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._orgId = 'org-1';
       v._meetingsEnabled = true;
       v._state.anchor = '2026-09-16';
       document.getElementById('app').innerHTML = v._shell();
@@ -596,7 +596,7 @@ async function check(name, fn) {
     await page.evaluate(async () => {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
-      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._orgId = 'org-1';
       v._meetingsEnabled = false;
       v._state.anchor = '2026-09-16';
       document.getElementById('app').innerHTML = v._shell();
@@ -628,7 +628,7 @@ async function check(name, fn) {
       ]);
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
-      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._orgId = 'org-1';
       v._state.anchor = '2026-09-16';
       document.body.insertAdjacentHTML('beforeend', `
         <span id="cal-range-label"></span>
@@ -649,12 +649,82 @@ async function check(name, fn) {
     await page.close();
   });
 
-  await check('Calendar is week-view only — no day/month/agenda mode switcher, and empty-slot clicks are inert (docs/138: "only weekly view is needed like in rooms")', async () => {
+  await check('no "All organizations" / "All creators" / "All meeting types" filters — org scoping is unconditional (docs/140)', async () => {
+    const { page } = await newCalendarPage();
+    await page.evaluate(async () => {
+      window.CalendarAPI.fetchEvents = async () => ([
+        {
+          type: 'meeting', id: 'm1', title: 'Own Org Meeting', start: '2026-09-16T09:00:00Z', end: '2026-09-16T10:00:00Z',
+          status: 'scheduled', orgId: 'org-1', roomId: null, roomName: null, creatorId: 'u1', creatorName: 'Jane',
+          isRecurring: false, isLocked: false, isDraft: false,
+        },
+        {
+          // A super admin's own can_view_meeting() RLS branch can surface
+          // another org's meeting even though there's no filter left to
+          // narrow it back down — _applyFilters must scope this out
+          // unconditionally rather than relying on a dropdown for it.
+          type: 'meeting', id: 'm-other-org', title: 'Other Org Meeting', start: '2026-09-16T11:00:00Z', end: '2026-09-16T11:30:00Z',
+          status: 'scheduled', orgId: 'org-2', roomId: null, roomName: null, creatorId: 'u9', creatorName: 'Someone Else',
+          isRecurring: false, isLocked: false, isDraft: false,
+        },
+      ]);
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._orgId = 'org-1';
+      v._state.anchor = '2026-09-16';
+      document.body.insertAdjacentHTML('beforeend', `
+        <span id="cal-range-label"></span>
+        <div id="cal-filters"></div>
+        <div id="calendar-content"></div>
+      `);
+      await v._loadAndRender();
+    });
+    assert.strictEqual(await page.locator('#cal-filter-org').count(), 0);
+    assert.strictEqual(await page.locator('#cal-filter-creator').count(), 0);
+    assert.strictEqual(await page.locator('#cal-filter-type').count(), 0);
+    const contentText = await page.evaluate(() => document.getElementById('calendar-content').textContent);
+    assert.match(contentText, /Own Org Meeting/);
+    assert.doesNotMatch(contentText, /Other Org Meeting/, 'a different organization\'s meeting must never show, even with no filter to hide it manually');
+    await page.close();
+  });
+
+  await check('org scoping is suspended while viewing a specific staff member\'s schedule, so a cross-org grant (docs/137) still works', async () => {
+    const { page } = await newCalendarPage();
+    await page.evaluate(async () => {
+      window.CalendarAPI.fetchViewableStaff = async () => ([{ id: 'staff-9', full_name: 'Cross-Org Staff', service_number: '99999' }]);
+      window.CalendarAPI.fetchUserSchedule = async () => ([{
+        type: 'meeting', id: 'm-cross-org', title: "Cross-Org Person's Meeting", start: '2026-09-16T11:00:00Z', end: '2026-09-16T11:30:00Z',
+        status: 'scheduled', orgId: 'org-9', roomId: null, roomName: null, creatorId: 'staff-9', creatorName: 'Cross-Org Staff',
+        isRecurring: false, isLocked: false, isDraft: false,
+      }]);
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._orgId = 'org-1';
+      v._state.anchor = '2026-09-16';
+      document.body.insertAdjacentHTML('beforeend', `
+        <span id="cal-range-label"></span>
+        <div id="cal-filters"></div>
+        <div id="calendar-content"></div>
+      `);
+      await v._loadAndRender();
+    });
+    await page.evaluate(() => {
+      const sel = document.getElementById('cal-filter-staff');
+      sel.value = 'staff-9';
+      sel.dispatchEvent(new Event('change'));
+    });
+    await page.waitForTimeout(50);
+    const contentText = await page.evaluate(() => document.getElementById('calendar-content').textContent);
+    assert.match(contentText, /Cross-Org Person's Meeting/, 'org scoping must not silently hide an explicitly-selected staff member\'s own-org meetings');
+    await page.close();
+  });
+
+  await check('Calendar is week-view only — no day/month/agenda mode switcher (docs/138: "only weekly view is needed like in rooms")', async () => {
     const { page } = await newCalendarPage();
     await page.evaluate(async () => {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
-      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._orgId = 'org-1';
       v._state.anchor = '2026-09-16';
       document.body.insertAdjacentHTML('beforeend', `
         <span id="cal-range-label"></span>
@@ -665,12 +735,52 @@ async function check(name, fn) {
     });
     assert.strictEqual(await page.locator('#cal-view-switch').count(), 0);
     assert.strictEqual(await page.locator('.calendar-month-grid').count(), 0);
+    await page.close();
+  });
+
+  await check('clicking an empty slot opens the combined Schedule Meeting form prefilled with that day/time, same as Rooms\' own "+" (docs/140)', async () => {
+    const { page } = await newCalendarPage();
+    await page.evaluate(async () => {
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._orgId = 'org-1';
+      v._meetingsEnabled = true;
+      v._state.anchor = '2026-09-16';
+      document.body.insertAdjacentHTML('beforeend', `
+        <span id="cal-range-label"></span>
+        <div id="cal-filters"></div>
+        <div id="calendar-content"></div>
+      `);
+      await v._loadAndRender();
+    });
     await page.locator('[data-week-grid-slot]').first().click();
-    // No onSlotClick handler — Calendar has no create action and no
-    // drill-down view left to switch into, so an empty-slot click is
-    // simply a no-op (no navigation, no error).
+    const calls = await page.evaluate(() => window.calls);
+    const openCall = calls.find(c => c.name === 'MeetingsView._openScheduleMeetingModal');
+    assert.ok(openCall, 'expected the combined Schedule Meeting form to open');
+    assert.strictEqual(openCall.args[0].prefillDate, '2026-09-16');
+    assert.ok(openCall.args[0].prefillTime, 'expected a prefilled time from the clicked slot');
+    assert.strictEqual(openCall.args[0].hasOnSuccess, true);
+    await page.close();
+  });
+
+  await check('an empty-slot click is a no-op when the Meetings module/view is unavailable', async () => {
+    const { page } = await newCalendarPage({ meetingsEnabled: false });
+    await page.evaluate(async () => {
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._orgId = 'org-1';
+      v._meetingsEnabled = false;
+      v._state.anchor = '2026-09-16';
+      document.body.insertAdjacentHTML('beforeend', `
+        <span id="cal-range-label"></span>
+        <div id="cal-filters"></div>
+        <div id="calendar-content"></div>
+      `);
+      await v._loadAndRender();
+    });
+    await page.locator('[data-week-grid-slot]').first().click();
     const navCalls = await page.evaluate(() => window.__navCalls || []);
-    assert.strictEqual(navCalls.length, 0);
+    assert.strictEqual(navCalls.length, 0, 'no create action and no drill-down view left to switch into');
     await page.close();
   });
 
@@ -679,7 +789,7 @@ async function check(name, fn) {
     await page.evaluate(async () => {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
-      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._orgId = 'org-1';
       v._state.anchor = '2026-09-16';
       document.body.insertAdjacentHTML('beforeend', `
         <span id="cal-range-label"></span>
@@ -702,7 +812,7 @@ async function check(name, fn) {
     await page.evaluate(async () => {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
-      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._orgId = 'org-1';
       v._state.anchor = '2026-09-16';
       document.body.insertAdjacentHTML('beforeend', `
         <span id="cal-range-label"></span>
@@ -729,7 +839,7 @@ async function check(name, fn) {
     await page.evaluate(async () => {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
-      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._orgId = 'org-1';
       v._state.anchor = '2026-09-16';
       document.body.insertAdjacentHTML('beforeend', `
         <span id="cal-range-label"></span>
@@ -758,7 +868,7 @@ async function check(name, fn) {
     await page.evaluate(async () => {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
-      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._orgId = 'org-1';
       v._state.anchor = '2026-09-16';
       document.body.insertAdjacentHTML('beforeend', `
         <span id="cal-range-label"></span>
@@ -785,7 +895,7 @@ async function check(name, fn) {
     await page.evaluate(async () => {
       const v = window.__view;
       v._user = { id: 'u1', org_id: 'org-1' };
-      v._orgId = 'org-1'; v._isSuperAdmin = false;
+      v._orgId = 'org-1';
       v._state.anchor = '2026-09-16';
       document.body.insertAdjacentHTML('beforeend', `
         <span id="cal-range-label"></span>
