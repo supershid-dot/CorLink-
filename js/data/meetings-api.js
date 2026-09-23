@@ -129,6 +129,22 @@ const MeetingsAPI = (() => {
       return data || [];
     },
 
+    // docs/151 — Home tab's "Pending RSVPs" stat. The caller's own
+    // active participant rows still awaiting a response, on a meeting
+    // that's actually happening (never a cancelled or not-yet-published
+    // draft one) — the embedded meeting.status filter is a PostgREST
+    // inner-join condition, not a separate query.
+    async countMyPendingRsvps() {
+      const db = getSupabase();
+      const session = await Auth.getSession();
+      const { count, error } = await db.from('meeting_participants')
+        .select('id, meeting:meetings!inner(status)', { count: 'exact', head: true })
+        .eq('user_id', session.user.id).is('removed_at', null)
+        .eq('invitation_status', 'pending').eq('meeting.status', 'scheduled');
+      if (error) throw error;
+      return count || 0;
+    },
+
     // Safe, redacted participant read (docs/12 §13, docs/13 §8) — the
     // raw table's own SELECT policy is deliberately narrower than this
     // function on purpose; this is the only path the frontend uses for

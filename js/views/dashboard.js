@@ -20,6 +20,12 @@ const DashboardView = {
     // front-desk queue" case without an extra async fetch of
     // entry_sections membership before the first paint.
     this._canLogEntries = this._isSupervisor;
+    // docs/151 — MeetFlow-style "Next Meeting"/stat-tiles/"Today's
+    // Meetings" home section. Same module-gate convention as
+    // _canLetters/_canLogEntries above — hidden entirely for an org
+    // that doesn't have Meetings enabled, rather than showing an
+    // always-zero block.
+    this._meetingsEnabled = AppShell.isModuleEnabled(user, 'meetings') && typeof MeetingsAPI !== 'undefined';
 
     container.innerHTML = `
       <div class="app-layout">
@@ -33,6 +39,31 @@ const DashboardView = {
             </div>
             <a href="#requests?action=compose" class="btn btn-primary btn-sm"><i class="ti ti-plus"></i> New Request</a>
           </div>
+
+          ${this._meetingsEnabled ? `
+          <div id="next-meeting-hero-area"></div>
+          <div class="stat-grid stat-grid--meetings">
+            <div class="stat-card stat-card--static">
+              <div class="stat-icon-box stat-icon-box--primary"><i class="ti ti-calendar-event"></i></div>
+              <div class="stat-card-body">
+                <div class="stat-value" id="stat-today-meetings"><span class="spinner spinner--dark"></span></div>
+                <div class="stat-label">Today's Meetings</div>
+              </div>
+            </div>
+            <div class="stat-card stat-card--static">
+              <div class="stat-icon-box stat-icon-box--warning"><i class="ti ti-mail-question"></i></div>
+              <div class="stat-card-body">
+                <div class="stat-value" id="stat-pending-rsvps"><span class="spinner spinner--dark"></span></div>
+                <div class="stat-label">Pending RSVPs</div>
+              </div>
+            </div>
+          </div>
+          <div class="panel-header">
+            <h3>Today's Meetings</h3>
+            <a href="#meetings" class="detail-section-label-action">View all</a>
+          </div>
+          <div id="dashboard-today-meetings" style="margin-bottom:24px;"><div class="action-list-empty"><span class="spinner spinner--dark"></span> Loading…</div></div>
+          ` : ''}
 
           <div class="stat-grid" id="stat-grid">
             <a href="#requests" class="stat-card" id="stat-inbox">
@@ -106,6 +137,7 @@ const DashboardView = {
 
     this._loadStats(user);
     this._loadActionNeeded(user);
+    if (this._meetingsEnabled) this._loadMeetingsHome(user);
   },
 
   _greeting() {
@@ -141,6 +173,80 @@ const DashboardView = {
         if (el.querySelector('.spinner')) el.textContent = '—';
       });
     }
+  },
+
+  // docs/151 — MeetFlow-parity Home tab section: a "Next Meeting" hero
+  // (the soonest upcoming scheduled meeting still to start or in
+  // progress), Today's Meetings / Pending RSVPs stat tiles, and a card
+  // list of today's meetings reusing MeetingsView's own card renderer
+  // (js/views/meetings.js, docs/150) rather than a second copy of the
+  // same markup.
+  async _loadMeetingsHome(user) {
+    const heroArea = document.getElementById('next-meeting-hero-area');
+    const todayArea = document.getElementById('dashboard-today-meetings');
+    try {
+      const [mine, pendingRsvps] = await Promise.all([
+        MeetingsAPI.fetchMyMeetings(),
+        MeetingsAPI.countMyPendingRsvps(),
+      ]);
+      const now = new Date();
+      const upcoming = mine
+        .filter(m => m.status === 'scheduled' && new Date(m.end_at) >= now)
+        .sort((a, b) => new Date(a.start_at) - new Date(b.start_at));
+      const next = upcoming[0] || null;
+      const isToday = (m) => {
+        const d = new Date(m.start_at);
+        return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+      };
+      const todayMeetings = upcoming.filter(isToday);
+
+      document.getElementById('stat-today-meetings').textContent = todayMeetings.length;
+      document.getElementById('stat-pending-rsvps').textContent = pendingRsvps;
+
+      heroArea.innerHTML = next ? `
+        <button type="button" class="next-meeting-hero" data-view-meeting="${next.id}">
+          <div class="next-meeting-hero-label">Next Meeting</div>
+          <div class="next-meeting-hero-title">${this._escapeHtml(next.title)}</div>
+          <div class="next-meeting-hero-meta">${this._formatHM(next.start_at)} · ${this._formatCountdown(next.start_at)}</div>
+        </button>
+      ` : '';
+
+      todayArea.innerHTML = todayMeetings.length > 0
+        ? `<div class="meeting-list-cards">${todayMeetings.map(m => MeetingsView._meetingCard(m)).join('')}</div>`
+        : `<div class="action-list-empty">No meetings today.</div>`;
+
+      [heroArea, todayArea].forEach(area => {
+        area.querySelectorAll('[data-view-meeting]').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            try {
+              const meeting = await MeetingsAPI.fetchMeeting(btn.dataset.viewMeeting);
+              MeetingsView._openMeetingDetailModal(meeting);
+            } catch (err) {
+              console.error('CorLink: failed to open meeting', err);
+            }
+          });
+        });
+      });
+    } catch (err) {
+      console.error('CorLink: failed to load meetings home section', err);
+      heroArea.innerHTML = '';
+      todayArea.innerHTML = `<div class="action-list-empty">Couldn't load this — refresh to try again.</div>`;
+      ['stat-today-meetings', 'stat-pending-rsvps'].forEach(id => { document.getElementById(id).textContent = '—'; });
+    }
+  },
+
+  _formatHM(iso) {
+    return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  },
+
+  // A snapshot at render time (not live-ticking), matching the effort
+  // level of the reference this mirrors.
+  _formatCountdown(startIso) {
+    const diffMs = new Date(startIso) - new Date();
+    if (diffMs <= 0) return 'In progress';
+    const totalMin = Math.round(diffMs / 60000);
+    const h = Math.floor(totalMin / 60), m = totalMin % 60;
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
   },
 
   // Row predicates intentionally stay finer-grained than the Requests

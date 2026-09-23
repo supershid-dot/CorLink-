@@ -1299,6 +1299,22 @@ p  { line-height: 1.6; }
 }
 .stat-note { font-size: 0.75rem; color: var(--color-text-light); }
 
+/* ── Home tab: MeetFlow-style Meetings section (docs/151) ─────────
+   "Next Meeting" hero + Today's Meetings/Pending RSVPs stat tiles,
+   above Requests' own stat grid. Hero uses CorLink's own primary
+   (gold) theme rather than MeetFlow's literal teal — same convention
+   the meeting detail modal already established (docs/20-23). */
+.next-meeting-hero {
+  display: block; width: 100%; text-align: left; font: inherit; cursor: pointer; border: none;
+  background: linear-gradient(135deg, var(--color-primary), var(--color-primary-dark));
+  color: #fff; border-radius: var(--radius-lg); padding: 20px 22px; margin-bottom: 16px;
+}
+.next-meeting-hero-label { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; opacity: .85; }
+.next-meeting-hero-title { font-size: 1.3rem; font-weight: 700; margin-top: 6px; }
+.next-meeting-hero-meta { font-size: 0.9rem; opacity: .9; margin-top: 6px; }
+.stat-grid--meetings { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-bottom: 16px; }
+.stat-card--static:hover { border-color: var(--color-border); box-shadow: none; }
+
 /* ── Action List (dashboard "Action Needed") ────────────────── */
 /* A denser row-per-item list rather than another grid of big square
    stat-card tiles — reads better once there are 5-6 targeted counts
