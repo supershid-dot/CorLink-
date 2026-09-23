@@ -1227,6 +1227,7 @@ p  { line-height: 1.6; }
   gap: 12px;
   flex-wrap: wrap;
 }
+.page-header-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 /* ── Phase Notice ────────────────────────────────────────────── */
 .phase-notice {
@@ -1313,7 +1314,6 @@ p  { line-height: 1.6; }
 .next-meeting-hero-title { font-size: 1.3rem; font-weight: 700; margin-top: 6px; }
 .next-meeting-hero-meta { font-size: 0.9rem; opacity: .9; margin-top: 6px; }
 .stat-grid--meetings { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-bottom: 16px; }
-.stat-card--static:hover { border-color: var(--color-border); box-shadow: none; }
 
 /* ── Action List (dashboard "Action Needed") ────────────────── */
 /* A denser row-per-item list rather than another grid of big square

@@ -37,26 +37,29 @@ const DashboardView = {
               <h2 class="page-title">${this._greeting()}, <strong>${name.split(' ')[0]}</strong> 👋</h2>
               <p class="page-subtitle">Here's what's happening with your correspondence today.</p>
             </div>
-            <a href="#requests?action=compose" class="btn btn-primary btn-sm"><i class="ti ti-plus"></i> New Request</a>
+            <div class="page-header-actions">
+              <a href="#requests?action=compose" class="btn btn-primary btn-sm"><i class="ti ti-plus"></i> New Request</a>
+              ${this._meetingsEnabled && typeof MeetingsView !== 'undefined' ? `<button type="button" class="btn btn-secondary btn-sm" id="dashboard-new-meeting-btn"><i class="ti ti-plus"></i> New Meeting</button>` : ''}
+            </div>
           </div>
 
           ${this._meetingsEnabled ? `
           <div id="next-meeting-hero-area"></div>
           <div class="stat-grid stat-grid--meetings">
-            <div class="stat-card stat-card--static">
+            <a href="#meetings" class="stat-card">
               <div class="stat-icon-box stat-icon-box--primary"><i class="ti ti-calendar-event"></i></div>
               <div class="stat-card-body">
                 <div class="stat-value" id="stat-today-meetings"><span class="spinner spinner--dark"></span></div>
                 <div class="stat-label">Today's Meetings</div>
               </div>
-            </div>
-            <div class="stat-card stat-card--static">
+            </a>
+            <a href="#meetings" class="stat-card">
               <div class="stat-icon-box stat-icon-box--warning"><i class="ti ti-mail-question"></i></div>
               <div class="stat-card-body">
                 <div class="stat-value" id="stat-pending-rsvps"><span class="spinner spinner--dark"></span></div>
                 <div class="stat-label">Pending RSVPs</div>
               </div>
-            </div>
+            </a>
           </div>
           <div class="panel-header">
             <h3>Today's Meetings</h3>
@@ -138,6 +141,12 @@ const DashboardView = {
     this._loadStats(user);
     this._loadActionNeeded(user);
     if (this._meetingsEnabled) this._loadMeetingsHome(user);
+
+    document.getElementById('dashboard-new-meeting-btn')?.addEventListener('click', () => {
+      MeetingsView._openScheduleMeetingModal({
+        onSuccess: async () => { await this._loadMeetingsHome(user); },
+      });
+    });
   },
 
   _greeting() {
