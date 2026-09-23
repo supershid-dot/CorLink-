@@ -61,7 +61,7 @@ const MeetingsView = {
     this._orgId = user.org_id;
     this._roomsEnabled = AppShell.isModuleEnabled(user, 'rooms');
 
-    const validTabs = ['upcoming', 'my-meetings', 'past', 'cancelled', 'groups'];
+    const validTabs = ['upcoming', 'my-meetings', 'pending-rsvp', 'past', 'cancelled', 'groups'];
     if (params.tab && validTabs.includes(params.tab)) this._state.tab = params.tab;
 
     container.innerHTML = this._shell();
@@ -143,6 +143,7 @@ const MeetingsView = {
           <div class="tabs" id="meetings-tabs">
             <button class="tab-btn" data-tab="upcoming">Upcoming</button>
             <button class="tab-btn" data-tab="my-meetings">My Meetings</button>
+            <button class="tab-btn" data-tab="pending-rsvp">Pending RSVPs</button>
             <button class="tab-btn" data-tab="past">Past</button>
             <button class="tab-btn" data-tab="cancelled">Cancelled</button>
             <button class="tab-btn" data-tab="groups">Groups</button>
@@ -190,6 +191,11 @@ const MeetingsView = {
         meetings = await MeetingsAPI.fetchMeetings({ statusIn: ['scheduled'], effectiveCompleted: false });
       } else if (this._state.tab === 'my-meetings') {
         meetings = await MeetingsAPI.fetchMyMeetings();
+      } else if (this._state.tab === 'pending-rsvp') {
+        // docs/153 — every meeting the caller is still a pending-
+        // invitation participant on ("not responded accept or
+        // decline"), scheduled and not yet finished.
+        meetings = await MeetingsAPI.fetchMyPendingRsvpMeetings();
       } else if (this._state.tab === 'past') {
         meetings = await MeetingsAPI.fetchMeetings({ statusIn: ['scheduled'], effectiveCompleted: true });
       } else {

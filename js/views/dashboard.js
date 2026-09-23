@@ -53,7 +53,7 @@ const DashboardView = {
                 <div class="stat-label">Today's Meetings</div>
               </div>
             </a>
-            <a href="#meetings" class="stat-card">
+            <a href="#meetings?tab=pending-rsvp" class="stat-card">
               <div class="stat-icon-box stat-icon-box--warning"><i class="ti ti-mail-question"></i></div>
               <div class="stat-card-body">
                 <div class="stat-value" id="stat-pending-rsvps"><span class="spinner spinner--dark"></span></div>
@@ -136,6 +136,7 @@ const DashboardView = {
 
         ${AppShell.bottomNavHtml(user, 'dashboard')}
       </div>
+      <div id="modal-root"></div>
     `;
 
     this._loadStats(user);

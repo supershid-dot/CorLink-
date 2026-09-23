@@ -145,6 +145,27 @@ const MeetingsAPI = (() => {
       return count || 0;
     },
 
+    // docs/153 — Meetings' own "Pending RSVPs" tab. Same shape as
+    // countMyPendingRsvps() above (own active participant row, still
+    // pending, meeting actually scheduled) but returns the full
+    // meeting rows for the card list rather than just a count — two
+    // steps (ids, then meetings) rather than one PostgREST embed
+    // query, matching fetchMyMeetingIds()/fetchMyMeetings()'s own
+    // established shape just above.
+    async fetchMyPendingRsvpMeetings({ limit = 200 } = {}) {
+      const db = getSupabase();
+      const session = await Auth.getSession();
+      const { data: rows, error: idsError } = await db.from('meeting_participants')
+        .select('meeting_id').eq('user_id', session.user.id).is('removed_at', null).eq('invitation_status', 'pending');
+      if (idsError) throw idsError;
+      const ids = Array.from(new Set((rows || []).map(r => r.meeting_id)));
+      if (ids.length === 0) return [];
+      const { data, error } = await db.from('meetings').select(MEETING_SELECT)
+        .in('id', ids).eq('status', 'scheduled').order('start_at', { ascending: true }).limit(limit);
+      if (error) throw error;
+      return data || [];
+    },
+
     // Safe, redacted participant read (docs/12 §13, docs/13 §8) — the
     // raw table's own SELECT policy is deliberately narrower than this
     // function on purpose; this is the only path the frontend uses for
