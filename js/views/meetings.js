@@ -497,12 +497,7 @@ const MeetingsView = {
       });
       return;
     }
-    area.innerHTML = `
-      <div class="panel"><table class="data-table">
-        <thead><tr><th>Title</th><th>Type</th><th>When</th><th>Status</th><th>Location</th><th>Visibility</th><th></th></tr></thead>
-        <tbody>${meetings.map(m => this._meetingRow(m)).join('')}</tbody>
-      </table></div>
-    `;
+    area.innerHTML = `<div class="meeting-list-cards">${meetings.map(m => this._meetingCard(m)).join('')}</div>`;
     area.querySelectorAll('[data-view-meeting]').forEach(btn => {
       btn.addEventListener('click', async () => {
         try {
@@ -515,21 +510,26 @@ const MeetingsView = {
     });
   },
 
-  _meetingRow(m) {
-    const status = this._statusLabel(m);
+  // MeetFlow-style card (UAT: "Meetings should be displayed like in
+  // meetflow layout") — a colored left border by effective status, a
+  // pill row (status + type), then icon-prefixed time/date and
+  // location lines. The whole card is a single button so tapping
+  // anywhere opens the detail, matching MeetFlow's own list — no
+  // separate "View" button needed. Visibility isn't shown here (still
+  // filterable via the filters bar above) to keep the card as compact
+  // as MeetFlow's own.
+  _meetingCard(m) {
     return `
-      <tr>
-        <td data-label="Title">
-          <div>${this._escapeHtml(m.title)} ${m.series_id ? `<i class="ti ti-repeat" title="Part of a recurring series"></i>` : ''}</div>
-          <div class="structure-empty">by ${this._escapeHtml(m.created_by_user?.full_name || '')}</div>
-        </td>
-        <td data-label="Type">${this._capitalize(m.meeting_type)}</td>
-        <td data-label="When">${new Date(m.start_at).toLocaleDateString()}<br/>${this._timeRange(m.start_at, m.end_at)} <span class="structure-empty">${this._escapeHtml(m.timezone)}</span></td>
-        <td data-label="Status">${status}</td>
-        <td data-label="Location">${this._locationSummary(m)}</td>
-        <td data-label="Visibility">${this._capitalize(m.visibility)}</td>
-        <td data-label="Actions"><button type="button" class="btn btn-secondary btn-xs" data-view-meeting="${m.id}">View</button></td>
-      </tr>
+      <button type="button" class="meeting-list-card meeting-list-card--${this._effectiveStatus(m)}" data-view-meeting="${m.id}">
+        <div class="meeting-list-card-title">${this._escapeHtml(m.title)}${m.series_id ? ` <i class="ti ti-repeat" title="Part of a recurring series"></i>` : ''}</div>
+        <div class="meeting-list-card-by">by ${this._escapeHtml(m.created_by_user?.full_name || '')}</div>
+        <div class="meeting-list-card-pills">
+          ${this._statusLabel(m)}
+          <span class="detail-pill detail-pill--outline">${this._capitalize(m.meeting_type)}</span>
+        </div>
+        <div class="meeting-list-card-row"><i class="ti ti-clock"></i> ${this._timeRange(m.start_at, m.end_at)} <span class="meeting-list-card-sep">·</span> <i class="ti ti-calendar"></i> ${new Date(m.start_at).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</div>
+        <div class="meeting-list-card-row"><i class="ti ti-map-pin"></i> ${this._formatLabel(m)} <span class="meeting-list-card-sep">·</span> ${this._locationSummary(m)}</div>
+      </button>
     `;
   },
 
@@ -551,6 +551,10 @@ const MeetingsView = {
     };
     const [label, icon, cls] = map[eff] || [eff, 'ti-help-circle', 'badge-outline'];
     return `<span class="badge ${cls}"><i class="ti ${icon}"></i> ${label}</span>`;
+  },
+
+  _formatLabel(m) {
+    return m.location_mode === 'virtual' ? 'Online' : (m.virtual_link ? 'Hybrid' : 'In person');
   },
 
   _locationSummary(m) {
@@ -1837,9 +1841,7 @@ const MeetingsView = {
     // (supabase/patch-meetings-rsvp.sql's own documented scope).
     const myParticipant = participants.find(p => p.user_id === this._user.id);
 
-    const formatLabel = meeting.location_mode === 'virtual'
-      ? 'Online'
-      : (meeting.virtual_link ? 'Hybrid' : 'In person');
+    const formatLabel = this._formatLabel(meeting);
     const metaParts = [`Created ${new Date(meeting.created_at).toLocaleDateString()} by ${this._escapeHtml(meeting.created_by_user?.full_name || '')}`];
     if (meeting.updated_by_user) metaParts.push(`last updated ${new Date(meeting.updated_at).toLocaleDateString()} by ${this._escapeHtml(meeting.updated_by_user.full_name)}`);
 
