@@ -2106,10 +2106,13 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
    in this codebase keeps its table; this is a deliberate, scoped
    deviation for this one module only). A colored left border signals
    effective status at a glance, matching MeetFlow's own list. */
-.meeting-list-cards { display: flex; flex-direction: column; gap: 10px; }
+.meeting-list-cards { display: flex; flex-direction: column; gap: 6px; }
 /* docs/156 — the card is now a wrapper (not a <button> itself, so an
    Accept/Decline RSVP row can sit inside it as a sibling of the
-   clickable body without nesting a <button> inside a <button>). */
+   clickable body without nesting a <button> inside a <button>).
+   docs/157 — sized down (padding/font-size/spacing) while keeping
+   every field the card already showed — UAT: "make the meeting cards
+   smaller keeping the details". */
 .meeting-list-card {
   background: var(--color-surface); border: 1px solid var(--color-border);
   border-left: 4px solid var(--color-border); border-radius: var(--radius-md);
@@ -2122,15 +2125,18 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
 .meeting-list-card--draft { border-left-color: var(--color-text-light); }
 .meeting-list-card-btn {
   display: block; width: 100%; text-align: left; font: inherit; color: inherit;
-  background: none; border: none; padding: 14px 16px; cursor: pointer;
+  background: none; border: none; padding: 9px 12px; cursor: pointer;
 }
-.meeting-list-card-title { font-size: 1rem; font-weight: 700; color: var(--color-text); display: flex; align-items: center; gap: 6px; }
-.meeting-list-card-by { font-size: 0.78rem; color: var(--color-text-muted); margin-top: 2px; }
-.meeting-list-card-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.meeting-list-card-title { font-size: 0.9rem; font-weight: 700; color: var(--color-text); display: flex; align-items: center; gap: 5px; }
+.meeting-list-card-by { font-size: 0.72rem; color: var(--color-text-muted); margin-top: 1px; }
+.meeting-list-card-pills { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+.meeting-list-card-pills .badge { padding: 1px 6px; font-size: 0.68rem; }
+.meeting-list-card-pills .detail-pill { padding: 2px 8px; font-size: 0.7rem; gap: 4px; }
 .meeting-list-card-row {
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-  font-size: 0.85rem; color: var(--color-text-muted); margin-top: 8px;
+  display: flex; align-items: center; gap: 5px; flex-wrap: wrap;
+  font-size: 0.76rem; color: var(--color-text-muted); margin-top: 4px;
 }
+.meeting-list-card-row i { font-size: 0.85em; }
 .meeting-list-card-sep { opacity: .6; }
 
 /* docs/156 — the card's own RSVP status + quick Accept/Decline, same
@@ -2138,10 +2144,10 @@ textarea.field-input-plain { resize: vertical; min-height: 90px; }
    fuller version, kept as its own separate block since the two live in
    different contexts) but compact enough for the card list. */
 .meeting-list-card-rsvp {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
-  padding: 8px 16px; border-top: 1px solid var(--color-border);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+  padding: 5px 12px; border-top: 1px solid var(--color-border);
   background: var(--color-warning-bg); color: var(--color-warning-dark);
-  font-size: 0.8rem; font-weight: 600;
+  font-size: 0.74rem; font-weight: 600;
 }
 .meeting-list-card-rsvp--accepted { background: var(--color-success-bg); color: var(--color-success-dark); }
 .meeting-list-card-rsvp--declined { background: var(--color-error-bg); color: var(--color-error-dark); }
