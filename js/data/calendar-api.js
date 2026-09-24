@@ -65,6 +65,7 @@ const CalendarAPI = (() => {
           roomName: booking?.room?.name || null,
           creatorId: m.created_by,
           creatorName: m.created_by_user?.full_name || '',
+          sectionName: m.section?.name || null,
           isRecurring: !!m.series_id,
           isLocked: !!m.is_locked,
           isDraft: m.status === 'draft',
@@ -92,6 +93,10 @@ const CalendarAPI = (() => {
           roomName: b.room?.name || null,
           creatorId: b.created_by,
           creatorName: b.created_by_user?.full_name || '',
+          // No linked_meeting fallback needed here (unlike rooms.js's
+          // own bookingEvents mapping) — this array is already filtered
+          // to !b.meeting_id, so b.section is always the booking's own.
+          sectionName: b.section?.name || null,
           raw: b,
         }));
 

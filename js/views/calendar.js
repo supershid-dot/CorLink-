@@ -437,15 +437,40 @@ const CalendarView = {
     const { from } = this._range;
     const gridEvents = events.map(e => {
       const v = this._eventVisual(e);
+      // UAT (docs/159): "in calendar also display section and
+      // duration ... display section, 11:00 - 12:00, 1h like this" —
+      // meetings/bookings show their section as the title (falling
+      // back to the meeting's own title when it has none tagged —
+      // sectionName is also undefined for the staff-schedule-selector
+      // path, fetchUserSchedule()'s own RPC doesn't return it, same
+      // fallback covers that too) and the time range + duration as the
+      // meta line. Room blocks are untouched — a maintenance window
+      // has no section to show.
+      const showSectionDuration = e.type === 'meeting' || e.type === 'booking';
       return {
         id: `${e.type}:${e.id}`,
         day: WeekGrid._dayStr(new Date(e.start)),
         startAt: e.start, endAt: e.end,
-        cls: v.cls, icon: v.icon, title: e.title,
-        meta: `${this._fmtTime(e.start)}–${this._fmtTime(e.end)}`,
+        cls: v.cls, icon: v.icon,
+        title: showSectionDuration ? (e.sectionName || e.title) : e.title,
+        meta: showSectionDuration
+          ? `${this._timeRange(e.start, e.end)} · ${this._durationLabel(e.start, e.end)}`
+          : `${this._fmtTime(e.start)}–${this._fmtTime(e.end)}`,
       };
     });
     return WeekGrid.html({ weekStart: from, events: gridEvents, selectedDay: this._state.weekMobileDay });
+  },
+
+  _timeRange(start, end) {
+    return `${this._fmtTime(start)} – ${this._fmtTime(end)}`;
+  },
+
+  _durationLabel(start, end) {
+    const mins = Math.round((new Date(end) - new Date(start)) / 60000);
+    const h = Math.floor(mins / 60), m = mins % 60;
+    if (h === 0) return `${m}min`;
+    if (m === 0) return `${h}h`;
+    return `${h}h${m}min`;
   },
 
   // ── Event rendering ──────────────────────────────────────────────

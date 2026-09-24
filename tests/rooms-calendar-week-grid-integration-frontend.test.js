@@ -529,6 +529,62 @@ async function check(name, fn) {
     await page.close();
   });
 
+  await check('Calendar event chips show the section and time range + duration, not the meeting title (UAT docs/159: "display section, 11:00 - 12:00, 1h like this")', async () => {
+    const { page } = await newCalendarPage();
+    await page.evaluate(async () => {
+      window.CalendarAPI.fetchEvents = async () => ([
+        {
+          type: 'meeting', id: 'm1', title: 'Heads Meeting', start: '2026-09-16T11:00:00Z', end: '2026-09-16T12:00:00Z',
+          status: 'scheduled', orgId: 'org-1', roomId: null, roomName: null, creatorId: 'u1', creatorName: 'Jane',
+          sectionName: 'Offender Records', isRecurring: false, isLocked: false, isDraft: false,
+        },
+      ]);
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._orgId = 'org-1';
+      v._state.anchor = '2026-09-16';
+      document.body.insertAdjacentHTML('beforeend', `
+        <span id="cal-range-label"></span>
+        <div id="cal-filters"></div>
+        <div id="calendar-content"></div>
+      `);
+      await v._loadAndRender();
+    });
+    const title = await page.locator('.week-grid-event-title').innerText();
+    const meta = await page.locator('.week-grid-event-meta').innerText();
+    assert.match(title, /Offender Records/, 'section name shown as the title');
+    assert.doesNotMatch(title, /Heads Meeting/, 'the meeting\'s own title is no longer shown when it has a section');
+    assert.match(meta, /11:00.*12:00/, 'time range');
+    assert.match(meta, /1h\b/, 'duration');
+    await page.close();
+  });
+
+  await check('a Calendar meeting with no section falls back to showing its own title', async () => {
+    const { page } = await newCalendarPage();
+    await page.evaluate(async () => {
+      window.CalendarAPI.fetchEvents = async () => ([
+        {
+          type: 'meeting', id: 'm1', title: 'Untagged Sync', start: '2026-09-16T11:00:00Z', end: '2026-09-16T12:00:00Z',
+          status: 'scheduled', orgId: 'org-1', roomId: null, roomName: null, creatorId: 'u1', creatorName: 'Jane',
+          sectionName: null, isRecurring: false, isLocked: false, isDraft: false,
+        },
+      ]);
+      const v = window.__view;
+      v._user = { id: 'u1', org_id: 'org-1' };
+      v._orgId = 'org-1';
+      v._state.anchor = '2026-09-16';
+      document.body.insertAdjacentHTML('beforeend', `
+        <span id="cal-range-label"></span>
+        <div id="cal-filters"></div>
+        <div id="calendar-content"></div>
+      `);
+      await v._loadAndRender();
+    });
+    const title = await page.locator('.week-grid-event-title').innerText();
+    assert.match(title, /Untagged Sync/);
+    await page.close();
+  });
+
   await check('clicking a meeting event in Calendar opens the same in-place detail modal Rooms\' calendar uses, not a navigation away (docs/139)', async () => {
     const { page } = await newCalendarPage();
     await page.evaluate(async () => {
