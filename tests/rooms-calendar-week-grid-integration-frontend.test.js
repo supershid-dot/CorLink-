@@ -274,7 +274,7 @@ async function check(name, fn) {
     await page.close();
   });
 
-  await check('Rooms Schedule tab event chips show who booked, the section, and the duration (UAT: "in rooms it should show the section name, who booked, and duration") -- section comes from the linked meeting, since a meeting-linked booking\'s own section_id column stays NULL (docs/135)', async () => {
+  await check('Rooms Schedule tab event chips show the section and the duration, not who booked (UAT docs/158: "meeting created name is not required here, only section and duration") -- section comes from the linked meeting, since a meeting-linked booking\'s own section_id column stays NULL (docs/135)', async () => {
     const { page } = await newRoomsPage();
     await page.evaluate(async () => {
       window.RoomsAPI.fetchBookings = async () => ([{
@@ -298,8 +298,8 @@ async function check(name, fn) {
     });
     const title = await page.locator('.week-grid-event-title').innerText();
     const meta = await page.locator('.week-grid-event-meta').innerText();
-    assert.match(title, /Hussain Zareer/, 'who booked');
-    assert.match(meta, /Offender Records/, 'section name, sourced from the linked meeting');
+    assert.match(title, /Offender Records/, 'section name, sourced from the linked meeting');
+    assert.doesNotMatch(title, /Hussain Zareer/, 'who booked is no longer shown');
     assert.match(meta, /2h\b/, 'duration');
     await page.close();
   });
@@ -326,8 +326,8 @@ async function check(name, fn) {
       document.body.insertAdjacentHTML('beforeend', `<div id="rooms-tab-content"></div>`);
       await v._renderTab();
     });
-    const meta = await page.locator('.week-grid-event-meta').innerText();
-    assert.match(meta, /Records Unit/, 'section name, sourced from the booking\'s own section_id');
+    const title = await page.locator('.week-grid-event-title').innerText();
+    assert.match(title, /Records Unit/, 'section name, sourced from the booking\'s own section_id');
     await page.close();
   });
 

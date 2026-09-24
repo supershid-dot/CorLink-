@@ -198,22 +198,24 @@ const RoomsView = {
 
     const bookingEvents = bookings.map(b => {
       const effective = this._effectiveStatus(b);
+      // UAT (docs/158): "meeting created name is not required here,
+      // only section and duration" — corrects the earlier decision
+      // right above this comment (who-booked in the title) after
+      // direct user feedback on the rendered grid. linked_meeting.
+      // section is preferred over the booking's own section — a
+      // booking made through the combined Schedule Meeting form always
+      // carries its section on the meeting, not on the booking row
+      // itself (that column stays NULL); a genuinely standalone
+      // room-only booking falls back to its own.
+      const sectionName = b.linked_meeting?.section?.name || b.section?.name || null;
       return {
         id: `b:${b.id}`,
         day: WeekGrid._dayStr(new Date(b.start_at)),
         startAt: b.start_at, endAt: b.end_at,
         cls: `week-grid-event--${effective}`,
         icon: 'ti-door',
-        title: b.created_by_user?.full_name || 'Booking',
-        // UAT: "in rooms it should show the section name, who booked,
-        // and duration" — title carries the organizer (who booked),
-        // meta carries the section plus time range and duration.
-        // linked_meeting.section is preferred over the booking's own
-        // section — a booking made through the combined Schedule
-        // Meeting form always carries its section on the meeting, not
-        // on the booking row itself (that column stays NULL); a
-        // genuinely standalone room-only booking falls back to its own.
-        meta: `${(b.linked_meeting?.section?.name || b.section?.name) ? (b.linked_meeting?.section?.name || b.section.name) + ' · ' : ''}${this._timeRange(b.start_at, b.end_at)} · ${this._durationLabel(b.start_at, b.end_at)}`,
+        title: sectionName || 'Booking',
+        meta: this._durationLabel(b.start_at, b.end_at),
       };
     });
     const blockEvents = blocks.map(bl => ({
