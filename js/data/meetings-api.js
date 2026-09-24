@@ -568,6 +568,43 @@ const MeetingsAPI = (() => {
       return data || [];
     },
 
+    // ── Pre-book Meeting Slots (docs/155, admin-only) ───────────────
+    // Bulk-creates one draft meeting per date in [fromDate, toDate]
+    // whose day-of-week is in daysOfWeek (0=Sunday..6=Saturday), all
+    // tagged to the given section, optionally reserving a room on
+    // each. A room-booking conflict on ANY generated slot aborts and
+    // rolls back the entire batch — one RPC call is one implicit
+    // transaction (create_prebooked_meeting_slots, mirroring
+    // createRecurringMeeting's own all-or-nothing behavior above).
+    async createPrebookedSlots({
+      title, sectionId, fromDate, toDate, daysOfWeek, startTime, endTime,
+      roomId = null, timezone = 'Indian/Maldives',
+    }) {
+      const db = getSupabase();
+      const { data, error } = await db.rpc('create_prebooked_meeting_slots', {
+        p_title: title, p_section_id: sectionId, p_from_date: fromDate, p_to_date: toDate,
+        p_days_of_week: daysOfWeek, p_start_time: startTime, p_end_time: endTime,
+        p_room_id: roomId || null, p_timezone: timezone,
+      });
+      if (error) throw error;
+      return data || [];
+    },
+
+    // Draft meetings visible to the caller — RLS (can_view_meeting())
+    // already scopes this to: super admin sees every draft, an org
+    // admin sees every draft in their org, a section member sees their
+    // own section's drafts, and a creator/participant sees their own.
+    // Covers both admin-created pre-booked slots and any meeting still
+    // mid-creation as a personal draft — same MEETING_SELECT as every
+    // other meeting read.
+    async fetchPrebookedMeetings({ limit = 200 } = {}) {
+      const db = getSupabase();
+      const { data, error } = await db.from('meetings').select(MEETING_SELECT)
+        .eq('status', 'draft').order('start_at', { ascending: true }).limit(limit);
+      if (error) throw error;
+      return data || [];
+    },
+
     // ── Recurring Meetings Phase 2 (docs/28) — series-wide and this-
     // and-future bulk operations. A patch field left undefined/null
     // means "leave unchanged" server-side, same COALESCE-style

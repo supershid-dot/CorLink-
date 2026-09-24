@@ -61,7 +61,7 @@ const MeetingsView = {
     this._orgId = user.org_id;
     this._roomsEnabled = AppShell.isModuleEnabled(user, 'rooms');
 
-    const validTabs = ['upcoming', 'my-meetings', 'pending-rsvp', 'past', 'cancelled', 'groups'];
+    const validTabs = ['upcoming', 'my-meetings', 'pending-rsvp', 'prebooked', 'past', 'cancelled', 'groups'];
     if (params.tab && validTabs.includes(params.tab)) this._state.tab = params.tab;
 
     container.innerHTML = this._shell();
@@ -136,6 +136,7 @@ const MeetingsView = {
             </div>
             <div class="field-row" style="gap:8px;">
               <button type="button" class="icon-btn" id="meetings-refresh-btn" title="Refresh"><i class="ti ti-refresh"></i></button>
+              ${this._isAdmin ? `<button type="button" class="btn btn-secondary btn-sm" id="prebook-slots-btn"><i class="ti ti-calendar-plus"></i> Pre-book</button>` : ''}
               <button type="button" class="btn btn-primary btn-sm" id="new-meeting-btn"><i class="ti ti-plus"></i> New Meeting</button>
             </div>
           </div>
@@ -143,6 +144,7 @@ const MeetingsView = {
             <button class="tab-btn" data-tab="upcoming">Upcoming</button>
             <button class="tab-btn" data-tab="my-meetings">My Meetings</button>
             <button class="tab-btn" data-tab="pending-rsvp">Pending RSVPs</button>
+            <button class="tab-btn" data-tab="prebooked">Pre-booked</button>
             <button class="tab-btn" data-tab="past">Past</button>
             <button class="tab-btn" data-tab="cancelled">Cancelled</button>
             <button class="tab-btn" data-tab="groups">Groups</button>
@@ -166,6 +168,7 @@ const MeetingsView = {
     });
     this._highlightTabs();
     document.getElementById('new-meeting-btn').addEventListener('click', () => this._openScheduleMeetingModal());
+    document.getElementById('prebook-slots-btn')?.addEventListener('click', () => this._openPrebookSlotsModal());
     document.getElementById('meetings-refresh-btn').addEventListener('click', () => this._renderTab());
   },
 
@@ -194,6 +197,12 @@ const MeetingsView = {
         // invitation participant on ("not responded accept or
         // decline"), scheduled and not yet finished.
         meetings = await MeetingsAPI.fetchMyPendingRsvpMeetings();
+      } else if (this._state.tab === 'prebooked') {
+        // docs/155 — draft meetings the caller can see (RLS already
+        // scopes this to their own section(s), their org if admin, or
+        // meetings they created) — includes admin-created pre-booked
+        // slots awaiting completion, and any meeting still mid-creation.
+        meetings = await MeetingsAPI.fetchPrebookedMeetings();
       } else if (this._state.tab === 'past') {
         meetings = await MeetingsAPI.fetchMeetings({ statusIn: ['scheduled'], effectiveCompleted: true });
       } else {
@@ -1503,6 +1512,153 @@ const MeetingsView = {
         errEl.classList.remove('hidden');
         submitBtn.disabled = false;
         submitBtn.textContent = 'Schedule';
+      }
+    });
+  },
+
+  // ── Pre-book Meeting Slots (docs/155, admin-only) ────────────────
+  // Bulk-creates draft meetings for a section over a date range x
+  // days-of-week (MeetFlow parity) — section staff complete each one
+  // later via the ordinary Edit Meeting flow, same as any other draft.
+  async _openPrebookSlotsModal() {
+    if (!this._isAdmin) return;
+
+    let rooms = [], sections = [];
+    try {
+      const fetches = [this._fetchMeetingFormSections(this._orgId, { orgWideAccess: true })];
+      if (this._roomsEnabled) fetches.push(RoomsAPI.fetchRooms(this._orgId));
+      const results = await Promise.all(fetches);
+      sections = results[0] || [];
+      if (this._roomsEnabled) rooms = (results[1] || []).filter(r => r.is_active);
+    } catch (err) {
+      console.error('CorLink: failed to load sections/rooms for the pre-book slots form', err);
+    }
+
+    const defFrom = this._dateStr(new Date());
+    const defTo = (() => {
+      const d = new Date();
+      d.setDate(d.getDate() + 28);
+      return this._dateStr(d);
+    })();
+    const dayLabels = [
+      { dow: 0, label: 'Sun' }, { dow: 1, label: 'Mon' }, { dow: 2, label: 'Tue' }, { dow: 3, label: 'Wed' },
+      { dow: 4, label: 'Thu' }, { dow: 5, label: 'Fri' }, { dow: 6, label: 'Sat' },
+    ];
+    const defaultCheckedDows = [1, 2, 3, 4, 5];
+
+    this._openModal(`
+      <h3>Pre-book Meeting Slots</h3>
+      <div class="alert alert-info"><i class="ti ti-info-circle"></i> Creates placeholder bookings for a section. Section staff can later open each slot to complete the full details.</div>
+      <form id="prebook-form" class="modal-form">
+        <div class="field-group">
+          <label class="field-label">Meeting Title</label>
+          <input class="field-input-plain" name="title" placeholder="e.g. Weekly Section Briefing" required />
+        </div>
+        <div class="field-row">
+          <div class="field-group">
+            <label class="field-label">Section</label>
+            <select class="field-select" name="sectionId" required>
+              <option value="" disabled selected>Select section…</option>
+              ${sections.map(s => `<option value="${s.id}">${this._escapeHtml(s.name)}</option>`).join('')}
+            </select>
+          </div>
+          ${this._roomsEnabled ? `
+            <div class="field-group">
+              <label class="field-label">Room (optional)</label>
+              <select class="field-select" name="roomId">
+                <option value="">No specific room</option>
+                ${rooms.map(r => `<option value="${r.id}">${this._escapeHtml(r.name)}</option>`).join('')}
+              </select>
+            </div>
+          ` : ''}
+        </div>
+        <div class="field-row">
+          <div class="field-group">
+            <label class="field-label">From Date</label>
+            <input class="field-input-plain" type="date" name="fromDate" required value="${defFrom}" />
+          </div>
+          <div class="field-group">
+            <label class="field-label">To Date</label>
+            <input class="field-input-plain" type="date" name="toDate" required value="${defTo}" />
+          </div>
+        </div>
+        <div class="field-group">
+          <label class="field-label">Day(s) of Week</label>
+          <div class="days-of-week-row">
+            ${dayLabels.map(d => `
+              <label class="checkbox-row">
+                <input type="checkbox" name="daysOfWeek" value="${d.dow}" ${defaultCheckedDows.includes(d.dow) ? 'checked' : ''} />
+                ${d.label}
+              </label>
+            `).join('')}
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field-group">
+            <label class="field-label">Start Time</label>
+            <input class="field-input-plain" type="time" name="startTime" required value="09:00" />
+          </div>
+          <div class="field-group">
+            <label class="field-label">End Time</label>
+            <input class="field-input-plain" type="time" name="endTime" required value="10:00" />
+          </div>
+        </div>
+        <div class="modal-error alert alert-error hidden"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary" id="prebook-form-submit">Create Pre-bookings</button>
+        </div>
+      </form>
+    `, { medium: true });
+
+    const form = document.getElementById('prebook-form');
+    const errEl = form.querySelector('.modal-error');
+    const submitBtn = document.getElementById('prebook-form-submit');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errEl.classList.add('hidden');
+      const fd = new FormData(form);
+      const fromDate = fd.get('fromDate');
+      const toDate = fd.get('toDate');
+      const startTime = fd.get('startTime');
+      const endTime = fd.get('endTime');
+      const daysOfWeek = fd.getAll('daysOfWeek').map(v => parseInt(v, 10));
+      const roomId = fd.get('roomId') || null;
+
+      if (toDate < fromDate) {
+        errEl.textContent = 'To Date must not be before From Date.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (endTime <= startTime) {
+        errEl.textContent = 'End Time must be after Start Time.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      if (daysOfWeek.length === 0) {
+        errEl.textContent = 'Select at least one day of the week.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Creating…';
+      try {
+        await MeetingsAPI.createPrebookedSlots({
+          title: fd.get('title'),
+          sectionId: fd.get('sectionId'),
+          fromDate, toDate, daysOfWeek, startTime, endTime, roomId,
+        });
+        this._closeModal();
+        this._state.tab = 'prebooked';
+        this._highlightTabs();
+        await this._renderTab();
+      } catch (err) {
+        errEl.textContent = err.message || 'Failed to create the pre-booked slots.';
+        errEl.classList.remove('hidden');
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Create Pre-bookings';
       }
     });
   },
