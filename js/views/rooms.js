@@ -198,15 +198,15 @@ const RoomsView = {
 
     const bookingEvents = bookings.map(b => {
       const effective = this._effectiveStatus(b);
-      // UAT (docs/158): "meeting created name is not required here,
-      // only section and duration" — corrects the earlier decision
-      // right above this comment (who-booked in the title) after
-      // direct user feedback on the rendered grid. linked_meeting.
-      // section is preferred over the booking's own section — a
-      // booking made through the combined Schedule Meeting form always
-      // carries its section on the meeting, not on the booking row
-      // itself (that column stays NULL); a genuinely standalone
-      // room-only booking falls back to its own.
+      // UAT (docs/158, then docs/160): "meeting created name is not
+      // required here, only section and duration" -> "here also should
+      // show the same as section + time range + duration" (matching
+      // Calendar's own format, docs/159). linked_meeting.section is
+      // preferred over the booking's own section — a booking made
+      // through the combined Schedule Meeting form always carries its
+      // section on the meeting, not on the booking row itself (that
+      // column stays NULL); a genuinely standalone room-only booking
+      // falls back to its own.
       const sectionName = b.linked_meeting?.section?.name || b.section?.name || null;
       return {
         id: `b:${b.id}`,
@@ -215,7 +215,7 @@ const RoomsView = {
         cls: `week-grid-event--${effective}`,
         icon: 'ti-door',
         title: sectionName || 'Booking',
-        meta: this._durationLabel(b.start_at, b.end_at),
+        meta: `${this._timeRange(b.start_at, b.end_at)} · ${this._durationLabel(b.start_at, b.end_at)}`,
       };
     });
     const blockEvents = blocks.map(bl => ({

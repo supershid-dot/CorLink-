@@ -274,7 +274,7 @@ async function check(name, fn) {
     await page.close();
   });
 
-  await check('Rooms Schedule tab event chips show the section and the duration, not who booked (UAT docs/158: "meeting created name is not required here, only section and duration") -- section comes from the linked meeting, since a meeting-linked booking\'s own section_id column stays NULL (docs/135)', async () => {
+  await check('Rooms Schedule tab event chips show the section, time range, and duration, not who booked (UAT docs/158 then docs/160: "here also should show the same as section + time range + duration", matching Calendar\'s own format) -- section comes from the linked meeting, since a meeting-linked booking\'s own section_id column stays NULL (docs/135)', async () => {
     const { page } = await newRoomsPage();
     await page.evaluate(async () => {
       window.RoomsAPI.fetchBookings = async () => ([{
@@ -300,6 +300,7 @@ async function check(name, fn) {
     const meta = await page.locator('.week-grid-event-meta').innerText();
     assert.match(title, /Offender Records/, 'section name, sourced from the linked meeting');
     assert.doesNotMatch(title, /Hussain Zareer/, 'who booked is no longer shown');
+    assert.match(meta, /09:00.*11:00/, 'time range');
     assert.match(meta, /2h\b/, 'duration');
     await page.close();
   });
