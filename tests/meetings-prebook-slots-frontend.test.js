@@ -72,6 +72,7 @@ async function check(name, fn) {
         ]; },
         createPrebookedSlots: async (payload) => { record('MeetingsAPI.createPrebookedSlots', [payload]); return [{ meeting_id: 'draft-1', slot_date: '2026-10-05' }, { meeting_id: 'draft-2', slot_date: '2026-10-06' }]; },
         activeBooking: (m) => (m.bookings || [])[0] || null,
+        myParticipation: (m, userId) => (m.participants || []).find(p => p.user_id === userId && !p.removed_at) || null,
       };
       ${richEditorSource}
       ${meetingsSource}

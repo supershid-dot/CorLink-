@@ -60,6 +60,14 @@ const MeetingsView = {
     this._isSupervisor = AppShell.isSupervisorOrAbove(user);
     this._orgId = user.org_id;
     this._roomsEnabled = AppShell.isModuleEnabled(user, 'rooms');
+    // _canManage()'s section-membership check, below — an org-wide
+    // admin never needs this (already covered), so skip the fetch.
+    try {
+      this._mySectionIds = this._isAdmin ? new Set() : new Set((await RequestsAPI.mySections()).map(s => s.id));
+    } catch (err) {
+      console.error('CorLink: failed to load my section ids for meeting permission checks', err);
+      this._mySectionIds = new Set();
+    }
 
     const validTabs = ['upcoming', 'my-meetings', 'pending-rsvp', 'prebooked', 'past', 'cancelled', 'groups'];
     if (params.tab && validTabs.includes(params.tab)) this._state.tab = params.tab;
@@ -83,15 +91,21 @@ const MeetingsView = {
   },
 
   // ── Permission helpers (UX gating only — RLS/RPC is the real gate) ──
-  // Mirrors can_manage_meeting(): super admin, creator, or an org-wide
-  // supervisor/admin. A meeting reachable via ordinary browsing is
-  // always in the viewer's own org unless they're a super admin, in
-  // which case is_super_admin already short-circuits this check —
-  // same simplification rooms.js's _isManagerOf already established.
+  // Mirrors can_manage_meeting() (patch-meetings-section-scope.sql):
+  // super admin, creator, an org-wide admin (NOT a blanket 'supervisor'
+  // role — that was corrected away by the section-scope patch, docs/116
+  // — a plain supervisor now only manages what their own scope expands
+  // into via my_section_ids()), or any member of the meeting's own
+  // section (docs/155 UAT: an ordinary section-staff member opening a
+  // pre-booked draft tagged to their section saw no Edit button at all
+  // — this helper had never been updated when section-scoping shipped,
+  // so it fell back to the OLD blanket-supervisor rule and never
+  // checked section_id).
   _canManage(meeting) {
     if (this._user.is_super_admin) return true;
     if (meeting.created_by === this._user.id) return true;
-    return this._isSupervisor;
+    if (this._isAdmin && meeting.organization_id === this._orgId) return true;
+    return !!(meeting.section_id && this._mySectionIds && this._mySectionIds.has(meeting.section_id));
   },
 
   // Mirrors can_manage_series() (docs/28-recurring-meetings-phase2-
@@ -521,28 +535,90 @@ const MeetingsView = {
         }
       });
     });
+    this._bindCardRsvpButtons(area, () => this._renderTab());
+  },
+
+  // Shared by every surface that renders _meetingCard() output —
+  // meetings.js's own tabs (above) and dashboard.js's "Today's
+  // Meetings" section, which reuses _meetingCard() directly (docs/151)
+  // and so needs this same wiring for its own onDone refresh.
+  _bindCardRsvpButtons(area, onDone) {
+    area.querySelectorAll('[data-card-rsvp-accept]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await MeetingsAPI.respondToInvitation(btn.dataset.cardRsvpAccept, 'accepted');
+          await onDone();
+        } catch (err) {
+          console.error('CorLink: failed to record RSVP response', err);
+        }
+      });
+    });
+    area.querySelectorAll('[data-card-rsvp-decline]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await MeetingsAPI.respondToInvitation(btn.dataset.cardRsvpDecline, 'declined');
+          await onDone();
+        } catch (err) {
+          console.error('CorLink: failed to record RSVP response', err);
+        }
+      });
+    });
   },
 
   // MeetFlow-style card (UAT: "Meetings should be displayed like in
   // meetflow layout") — a colored left border by effective status, a
   // pill row (status + type), then icon-prefixed time/date and
-  // location lines. The whole card is a single button so tapping
-  // anywhere opens the detail, matching MeetFlow's own list — no
-  // separate "View" button needed. Visibility isn't shown here (still
-  // filterable via the filters bar above) to keep the card as compact
-  // as MeetFlow's own.
+  // location lines. Tapping the card body opens the detail, matching
+  // MeetFlow's own list. Visibility isn't shown here (still filterable
+  // via the filters bar above) to keep the card as compact as
+  // MeetFlow's own.
+  //
+  // docs/156 — the card body is its OWN <button> nested inside a
+  // non-interactive wrapper (not a single outer <button> any more,
+  // which this card used to be) specifically so a scheduled meeting's
+  // RSVP row — itself containing Accept/Decline buttons — can sit
+  // alongside it without nesting one <button> inside another (invalid
+  // HTML; browsers silently mis-parse it). Reused as-is by dashboard.js
+  // ("Today's Meetings"), so the RSVP row appears there too for free.
   _meetingCard(m) {
+    const eff = this._effectiveStatus(m);
+    const myUserId = this._user?.id || Auth.getCachedProfile()?.id;
+    const myParticipation = myUserId ? MeetingsAPI.myParticipation(m, myUserId) : null;
+    const showRsvp = eff === 'scheduled' && myParticipation && myParticipation.invitation_status !== 'not_required';
     return `
-      <button type="button" class="meeting-list-card meeting-list-card--${this._effectiveStatus(m)}" data-view-meeting="${m.id}">
-        <div class="meeting-list-card-title">${this._escapeHtml(m.title)}${m.series_id ? ` <i class="ti ti-repeat" title="Part of a recurring series"></i>` : ''}</div>
-        <div class="meeting-list-card-by">by ${this._escapeHtml(m.created_by_user?.full_name || '')}</div>
-        <div class="meeting-list-card-pills">
-          ${this._statusLabel(m)}
-          <span class="detail-pill detail-pill--outline">${this._capitalize(m.meeting_type)}</span>
+      <div class="meeting-list-card meeting-list-card--${eff}">
+        <button type="button" class="meeting-list-card-btn" data-view-meeting="${m.id}">
+          <div class="meeting-list-card-title">${this._escapeHtml(m.title)}${m.series_id ? ` <i class="ti ti-repeat" title="Part of a recurring series"></i>` : ''}</div>
+          <div class="meeting-list-card-by">by ${this._escapeHtml(m.created_by_user?.full_name || '')}</div>
+          <div class="meeting-list-card-pills">
+            ${this._statusLabel(m)}
+            <span class="detail-pill detail-pill--outline">${this._capitalize(m.meeting_type)}</span>
+          </div>
+          <div class="meeting-list-card-row"><i class="ti ti-clock"></i> ${this._timeRange(m.start_at, m.end_at)} <span class="meeting-list-card-sep">·</span> <i class="ti ti-calendar"></i> ${new Date(m.start_at).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</div>
+          <div class="meeting-list-card-row"><i class="ti ti-map-pin"></i> ${this._formatLabel(m)} <span class="meeting-list-card-sep">·</span> ${this._locationSummary(m)}</div>
+        </button>
+        ${showRsvp ? this._cardRsvpRow(myParticipation) : ''}
+      </div>
+    `;
+  },
+
+  // A compact version of _renderMyRsvp()'s detail-view banner, for the
+  // card list — one-click Accept/Decline (no note field, unlike the
+  // detail view's confirmation modal), since "easily" from the card is
+  // the whole point (UAT: "should show the status of RSVP and can be
+  // accept or decline in that window easily"). Adding a note is still
+  // available via the full detail view.
+  _cardRsvpRow(participant) {
+    const status = participant.invitation_status;
+    const mod = status === 'declined' ? ' meeting-list-card-rsvp--declined' : status === 'accepted' ? ' meeting-list-card-rsvp--accepted' : '';
+    return `
+      <div class="meeting-list-card-rsvp${mod}">
+        <span>${status === 'pending' ? 'Your RSVP: Pending' : `Your RSVP: ${this._capitalize(status)}`}</span>
+        <div style="display:flex; gap:12px;">
+          ${status !== 'accepted' ? `<button type="button" class="detail-action-link" style="color:inherit;" data-card-rsvp-accept="${participant.id}">Accept</button>` : ''}
+          ${status !== 'declined' ? `<button type="button" class="detail-action-link" style="color:inherit;" data-card-rsvp-decline="${participant.id}">Decline</button>` : ''}
         </div>
-        <div class="meeting-list-card-row"><i class="ti ti-clock"></i> ${this._timeRange(m.start_at, m.end_at)} <span class="meeting-list-card-sep">·</span> <i class="ti ti-calendar"></i> ${new Date(m.start_at).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}</div>
-        <div class="meeting-list-card-row"><i class="ti ti-map-pin"></i> ${this._formatLabel(m)} <span class="meeting-list-card-sep">·</span> ${this._locationSummary(m)}</div>
-      </button>
+      </div>
     `;
   },
 
@@ -635,7 +711,7 @@ const MeetingsView = {
   // itself; re-deriving that here would either duplicate it or silently
   // diverge from it.
   async _openEditMeetingModal(meeting) {
-    if (!this._ensureUserContext()) return;
+    if (!(await this._ensureUserContext())) return;
     if (meeting.status === 'cancelled' || this._effectiveStatus(meeting) === 'completed') return;
 
     // Mirrors _canOverrideLock()'s own same-org admin check: a super
@@ -891,13 +967,21 @@ const MeetingsView = {
   // caller that jumps straight to a modal without ever rendering the
   // Meetings tab this session wouldn't otherwise have them. Idempotent:
   // only fills in what render() hasn't already set.
-  _ensureUserContext() {
+  async _ensureUserContext() {
     if (!this._user) this._user = Auth.getCachedProfile();
     if (!this._user) return false;
     if (this._orgId === undefined) this._orgId = this._user.org_id;
     if (this._isAdmin === undefined) this._isAdmin = AppShell.isAdmin(this._user);
     if (this._isSupervisor === undefined) this._isSupervisor = AppShell.isSupervisorOrAbove(this._user);
     if (this._roomsEnabled === undefined) this._roomsEnabled = AppShell.isModuleEnabled(this._user, 'rooms');
+    if (this._mySectionIds === undefined) {
+      try {
+        this._mySectionIds = this._isAdmin ? new Set() : new Set((await RequestsAPI.mySections()).map(s => s.id));
+      } catch (err) {
+        console.error('CorLink: failed to load my section ids for meeting permission checks', err);
+        this._mySectionIds = new Set();
+      }
+    }
     return true;
   },
 
@@ -926,7 +1010,7 @@ const MeetingsView = {
   },
 
   async _openScheduleMeetingModal({ prefillRoomId = null, prefillDate = null, prefillTime = null, onSuccess = null } = {}) {
-    if (!this._ensureUserContext()) return;
+    if (!(await this._ensureUserContext())) return;
 
     let rooms = [], groups = [], orgUsers = [], sections = [];
     try {
@@ -1665,7 +1749,7 @@ const MeetingsView = {
 
   // ── Meeting detail modal ─────────────────────────────────────────
   async _openMeetingDetailModal(meeting) {
-    if (!this._ensureUserContext()) return;
+    if (!(await this._ensureUserContext())) return;
     let participants = [], booking = null, attachments = [];
     try {
       [participants, booking, attachments] = await Promise.all([

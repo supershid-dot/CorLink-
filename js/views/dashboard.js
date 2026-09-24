@@ -236,6 +236,7 @@ const DashboardView = {
             }
           });
         });
+        MeetingsView._bindCardRsvpButtons(area, () => this._loadMeetingsHome(user));
       });
     } catch (err) {
       console.error('CorLink: failed to load meetings home section', err);

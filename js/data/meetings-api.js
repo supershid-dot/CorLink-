@@ -26,6 +26,15 @@ const MeetingsAPI = (() => {
   // below, avoids an N+1 fetch per row for the list views while still
   // giving fetchLinkedBooking() as the single, focused source of truth
   // for the detail modal.
+  // participants embeds EVERY row RLS lets the caller see — their own
+  // (meeting_participants_select's `user_id = auth.uid()` branch,
+  // guaranteed present regardless of manage rights) plus every other
+  // participant's row too if the caller can also manage the meeting.
+  // Picking out the caller's own row client-side, via myParticipation()
+  // below, is the same "embed everything, filter client-side" shape
+  // activeBooking()/bookings already use just above — avoids an N+1
+  // fetch per card for the RSVP status/quick-actions shown there
+  // (docs/156).
   const MEETING_SELECT = `
     *,
     created_by_user:users!meetings_created_by_fkey(id, full_name, service_number),
@@ -33,7 +42,8 @@ const MeetingsAPI = (() => {
     cancelled_by_user:users!meetings_cancelled_by_fkey(full_name),
     bookings:meeting_room_bookings!meeting_room_bookings_meeting_id_fkey(id, room_id, status, room:meeting_rooms!meeting_room_bookings_room_id_fkey(id, name)),
     series:meeting_series!meetings_series_id_fkey(id, template_title, recurrence_pattern, series_start_date, series_end_date),
-    section:sections!meetings_section_id_fkey(id, name)
+    section:sections!meetings_section_id_fkey(id, name),
+    participants:meeting_participants!meeting_participants_meeting_id_fkey(id, user_id, invitation_status, invitation_note, removed_at)
   `;
 
   const LINKED_BOOKING_SELECT = `
@@ -67,6 +77,14 @@ const MeetingsAPI = (() => {
     // or a meeting whose only bookings are cancelled/rejected history).
     activeBooking(meeting) {
       return (meeting.bookings || []).find(b => BLOCKING_STATUSES.includes(b.status)) || null;
+    },
+
+    // Picks the caller's own (non-removed) row out of a meeting's
+    // embedded `participants` array — small, pure, no fetch. Returns
+    // null when the caller has no active participant row on this
+    // meeting (not invited, or already removed).
+    myParticipation(meeting, userId) {
+      return (meeting.participants || []).find(p => p.user_id === userId && !p.removed_at) || null;
     },
 
     // ── Reads ─────────────────────────────────────────────────────
