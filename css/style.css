@@ -1,16 +1,20 @@
 /* ─── CorLink — Design System ────────────────────────────────
-   Primary: #8A6D21 (Olive Gold)   Secondary: #3B82F6 (Blue)
+   Primary: #009DA1 (Teal)   Secondary: #00264D (Navy)
+   docs/163 — sampled directly from the actual CorLink logo mark
+   (assets/logo.png: the ring/icon + "Cor" in teal, "Link" + the
+   person icon in navy), replacing the earlier Olive Gold/Blue theme
+   that predated a finalized logo.
    Font: Inter, system-sans  Icons: Tabler Icons
    ─────────────────────────────────────────────────────────── */
 
 /* ── Variables ─────────────────────────────────────────────── */
 :root {
-  --color-primary:        #8A6D21;
-  --color-primary-dark:   #6E5719;
-  --color-primary-light:  #F2EBD9;
-  --color-secondary:      #3B82F6;
-  --color-secondary-dark: #2563EB;
-  --color-secondary-light:#EAF2FF;
+  --color-primary:        #009DA1;
+  --color-primary-dark:   #005E61;
+  --color-primary-light:  #EBF7F7;
+  --color-secondary:      #00264D;
+  --color-secondary-dark: #001B37;
+  --color-secondary-light:#F0F2F4;
 
   /* Each status color has a vivid tone (icons, decorative accents,
      large-scale UI) plus a "-dark" tone reserved for text/small-icon use
@@ -40,7 +44,7 @@
   --color-text-muted:    #64748B;
   --color-text-light:    #94A3B8;
   --color-border:        #E5E7EB;
-  --color-border-focus:  #8A6D21;
+  --color-border-focus:  #009DA1;
   --color-bg:            #F8FAFC;
   --color-surface:       #FFFFFF;
   --color-overlay:       rgba(15, 23, 42, 0.5);
@@ -79,10 +83,16 @@
     --color-bg:         #0F172A;
     --color-surface:    #111827;
 
-    --color-primary-dark:   #D4A94A;
-    --color-primary-light:  rgba(138, 109, 33, .18);
-    --color-secondary-dark: #60A5FA;
-    --color-secondary-light:rgba(59, 130, 246, .16);
+    --color-primary-dark:   #0ABDC2;
+    --color-primary-light:  rgba(0, 157, 161, .18);
+    /* secondary's own light-mode base (#00264D) is too dark to work as
+       a dark-surface tint source (composited at low alpha over the
+       dark surface it's nearly indistinguishable from it) — unlike
+       primary/status colors, whose light-mode base IS vivid enough to
+       tint with directly, secondary-light here is built from THIS
+       block's own -dark (bright, legible-on-dark) navy instead. */
+    --color-secondary-dark: #67A7E9;
+    --color-secondary-light:rgba(103, 167, 233, .16);
     --color-success-dark:   #10B981;
     --color-success-bg:     rgba(16, 185, 129, .14);
     --color-warning-dark:   #F59E0B;
@@ -130,10 +140,10 @@
   --color-bg:         #0F172A;
   --color-surface:    #111827;
 
-  --color-primary-dark:   #D4A94A;
-  --color-primary-light:  rgba(138, 109, 33, .18);
-  --color-secondary-dark: #60A5FA;
-  --color-secondary-light:rgba(59, 130, 246, .16);
+  --color-primary-dark:   #0ABDC2;
+  --color-primary-light:  rgba(0, 157, 161, .18);
+  --color-secondary-dark: #67A7E9;
+  --color-secondary-light:rgba(103, 167, 233, .16);
   --color-success-dark:   #10B981;
   --color-success-bg:     rgba(16, 185, 129, .14);
   --color-warning-dark:   #F59E0B;
@@ -171,10 +181,10 @@
   --color-bg:            #F8FAFC;
   --color-surface:       #FFFFFF;
 
-  --color-primary-dark:   #6E5719;
-  --color-primary-light:  #F2EBD9;
-  --color-secondary-dark: #2563EB;
-  --color-secondary-light:#EAF2FF;
+  --color-primary-dark:   #005E61;
+  --color-primary-light:  #EBF7F7;
+  --color-secondary-dark: #001B37;
+  --color-secondary-light:#F0F2F4;
   --color-success-dark:   #047857;
   --color-success-bg:     #D1FAE5;
   --color-warning-dark:   #B45309;
@@ -203,9 +213,9 @@ body {
    mobile instead of just wrapping/scrolling the one element that's wide. */
 html, body { overflow-x: hidden; max-width: 100%; }
 /* Text links use the theme-switched -dark tone, not the raw primary:
-   #8A6D21 is under 4.5:1 against white — fine for fills/icons, thin for
-   body-size link text. -dark resolves to a deeper olive in light mode and
-   the brighter #D4A94A in dark mode (where the raw tone would be fine but
+   #009DA1 is under 4.5:1 against white — fine for fills/icons, thin for
+   body-size link text. -dark resolves to a deeper teal in light mode and
+   the brighter #0ABDC2 in dark mode (where the raw tone would be fine but
    the brighter one reads better against the dark surface). */
 a { color: var(--color-primary-dark); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -2013,7 +2023,7 @@ input.field-divehi, textarea.field-divehi, select.field-divehi {
   outline: none;
   width: 100%;
 }
-.field-input-plain:focus { border-color: var(--color-border-focus); box-shadow: 0 0 0 3px rgba(13,148,136,.15); }
+.field-input-plain:focus { border-color: var(--color-border-focus); box-shadow: 0 0 0 3px rgba(0,157,161,.15); }
 /* Multi-line fields only — a single-line <input> sharing this class
    (e.g. Subject) has no meaningful way to resize. Vertical-only so
    dragging can't widen a field past its form and break the layout. */
