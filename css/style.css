@@ -1561,6 +1561,8 @@ p  { line-height: 1.6; }
   .sidebar-close-btn { display: flex; }
   .sidebar {
     display: flex;
+    flex-direction: column;
+    gap: 2px;
     position: fixed;
     top: 0; bottom: 0; left: 0;
     z-index: 200;
@@ -1568,6 +1570,8 @@ p  { line-height: 1.6; }
     max-width: 82vw;
     height: auto;
     overflow-y: auto;
+    padding: 20px 14px;
+    background: var(--color-surface);
     transform: translateX(-100%);
     transition: transform .2s ease;
     box-shadow: 2px 0 16px rgba(0, 0, 0, .18);

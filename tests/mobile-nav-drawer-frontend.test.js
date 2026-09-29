@@ -89,6 +89,24 @@ async function check(name, fn) {
     await page.close();
   });
 
+  await check('the open drawer has a solid, opaque panel background — page content behind it must not show through (UAT: "This not good, make something like in Claude menu" — the panel had no background at all, so nav items overlapped the dashboard\'s own text)', async () => {
+    const page = await newPage();
+    await page.click('#topbar-menu-btn');
+    await page.waitForTimeout(300); // let the .2s slide-in transition finish before reading its geometry
+    const bg = await page.evaluate(() => getComputedStyle(document.getElementById('sidebar')).backgroundColor);
+    assert.notStrictEqual(bg, 'rgba(0, 0, 0, 0)', 'the drawer must not be transparent');
+    // elementFromPoint proves what actually renders on top at a point
+    // INSIDE the drawer, not just that a background-color is declared
+    // (which alone wouldn't catch e.g. a lower stacking-context bug).
+    const topElement = await page.evaluate(() => {
+      const box = document.getElementById('sidebar').getBoundingClientRect();
+      const el = document.elementFromPoint(box.left + box.width / 2, box.top + 100);
+      return el ? { id: el.id, cls: el.className } : null;
+    });
+    assert.ok(topElement && (topElement.id === 'sidebar' || topElement.cls.includes('sidebar')), `expected the sidebar or one of its children on top, got ${JSON.stringify(topElement)}`);
+    await page.close();
+  });
+
   await check('clicking the backdrop closes the drawer', async () => {
     const page = await newPage();
     await page.click('#topbar-menu-btn');
