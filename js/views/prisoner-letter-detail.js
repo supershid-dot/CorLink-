@@ -26,7 +26,6 @@ const PrisonerLetterDetailView = {
           <main class="main-content">
             <div class="alert alert-error"><i class="ti ti-lock"></i> You do not have permission to view this page.</div>
           </main>
-          ${AppShell.bottomNavHtml(user, 'prisoner-letters')}
         </div>`;
       AppShell.bindTopbar();
       return;
@@ -42,7 +41,6 @@ const PrisonerLetterDetailView = {
           <div class="tab-loading"><span class="spinner spinner--dark"></span> Loading…</div>
         </main>
 
-        ${AppShell.bottomNavHtml(user, 'prisoner-letters')}
       </div>
       <div id="modal-root"></div>
     `;

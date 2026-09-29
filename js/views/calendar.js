@@ -102,7 +102,6 @@ const CalendarView = {
 
           <div id="calendar-content"></div>
         </main>
-        ${AppShell.bottomNavHtml(this._user, 'calendar')}
       </div>
       <div id="modal-root"></div>
     `;

@@ -112,7 +112,6 @@ const RoomsView = {
           </div>
           <div id="rooms-tab-content"></div>
         </main>
-        ${AppShell.bottomNavHtml(this._user, 'rooms')}
       </div>
       <div id="modal-root"></div>
     `;

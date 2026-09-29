@@ -23,7 +23,6 @@ const PrisonerLettersView = {
           <main class="main-content">
             <div class="alert alert-error"><i class="ti ti-lock"></i> You do not have permission to view this page.</div>
           </main>
-          ${AppShell.bottomNavHtml(user, 'prisoner-letters')}
         </div>`;
       AppShell.bindTopbar();
       return;
@@ -101,7 +100,6 @@ const PrisonerLettersView = {
           <div id="letters-tab-content"></div>
         </main>
 
-        ${AppShell.bottomNavHtml(this._user, 'prisoner-letters')}
       </div>
       <div id="modal-root"></div>
     `;

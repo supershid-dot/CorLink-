@@ -139,7 +139,6 @@ const EntryView = {
           <div id="entry-tab-content"></div>
         </main>
 
-        ${AppShell.bottomNavHtml(this._user, 'entry')}
       </div>
       <div id="modal-root"></div>
     `;

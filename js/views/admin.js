@@ -30,7 +30,6 @@ const AdminView = {
           <main class="main-content">
             <div class="alert alert-error"><i class="ti ti-lock"></i> You do not have permission to view this page.</div>
           </main>
-          ${AppShell.bottomNavHtml(user, 'admin')}
         </div>`;
       AppShell.bindTopbar();
       return;
@@ -94,7 +93,6 @@ const AdminView = {
           <div id="admin-tab-content"></div>
         </main>
 
-        ${AppShell.bottomNavHtml(user, 'admin')}
       </div>
       <div id="modal-root"></div>
     `;

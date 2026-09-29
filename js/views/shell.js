@@ -104,10 +104,17 @@ const AppShell = {
       : `${primaryLabel}${suffix}`;
   },
 
-  // Persistent left sidebar, shown ≥900px in place of the topbar's own
-  // brand + nav links (see the .app-layout grid CSS). Emitted by
-  // topbarHtml() as a sibling of the <header>, so every view gets it
-  // without changing its own markup.
+  // Left sidebar. ≥900px: persistent, in place of the topbar's own
+  // brand + nav links (see the .app-layout grid CSS). <900px, down to
+  // ≤640px specifically (docs/161 — the old fixed bottom tab bar grew
+  // to 9 items and became too cramped for a phone width, UAT: "The
+  // bottom menus looks crowded... Maybe vertical menu"): the SAME
+  // markup becomes an off-canvas drawer, toggled by #topbar-menu-btn
+  // and closed via #sidebar-close-btn/#sidebar-backdrop or picking a
+  // link (see bindTopbar()) — one source of truth for the nav item
+  // list, not a third hand-duplicated copy. Emitted by topbarHtml() as
+  // a sibling of the <header>, so every view gets it without changing
+  // its own markup.
   sidebarHtml(user, activeRoute) {
     const admin = this.isAdmin(user) && this.isModuleEnabled(user, 'administration');
     const canLetters = this.canAccessPrisonerLetters(user) && this.isModuleEnabled(user, 'prisoner_correspondence');
@@ -122,13 +129,14 @@ const AppShell = {
       </a>`;
 
     return `
-      <aside class="sidebar">
+      <aside class="sidebar" id="sidebar">
         <div class="sidebar-brand">
           <div class="topbar-logo-crop"><img src="assets/logo.png" alt="${APP_NAME} logo" /></div>
           <div>
             <div class="sidebar-appname">${APP_NAME}</div>
             <div class="sidebar-tagline">${APP_TAGLINE}</div>
           </div>
+          <button type="button" class="icon-btn sidebar-close-btn" id="sidebar-close-btn" aria-label="Close menu"><i class="ti ti-x"></i></button>
         </div>
         <nav class="sidebar-nav">
           ${item('dashboard', 'Dashboard', 'ti-layout-dashboard')}
@@ -166,7 +174,11 @@ const AppShell = {
 
     return `
       ${this.sidebarHtml(user, activeRoute)}
+      <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
       <header class="topbar">
+        <button type="button" class="icon-btn topbar-menu-btn" id="topbar-menu-btn" aria-label="Open menu" aria-expanded="false" aria-controls="sidebar">
+          <i class="ti ti-menu-2"></i>
+        </button>
         <div class="topbar-brand">
           <div class="topbar-logo-crop${user.organization?.logo_path ? ' topbar-logo-crop--org' : ''}"><img src="${this.orgLogoUrl(user)}" alt="${user.organization?.name || APP_NAME} logo" /></div>
           <span class="topbar-appname">${user.organization?.name || APP_NAME}</span>
@@ -238,40 +250,6 @@ const AppShell = {
     `;
   },
 
-  // Fixed bottom tab bar shown on mobile instead of the topbar's nav
-  // links (which get cramped/cut off at phone widths — 4+ links plus
-  // notif bell and user menu don't fit on one row). Desktop still uses
-  // the topbar links; see the .bottom-nav / .topbar-nav CSS toggle at
-  // the mobile breakpoint.
-  bottomNavHtml(user, activeRoute) {
-    const admin = this.isAdmin(user) && this.isModuleEnabled(user, 'administration');
-    const canLetters = this.canAccessPrisonerLetters(user) && this.isModuleEnabled(user, 'prisoner_correspondence');
-    const showRequests = this.isModuleEnabled(user, 'requests');
-    const showEntry = this.isModuleEnabled(user, 'entry');
-    const showRooms = this.isModuleEnabled(user, 'rooms');
-    const showMeetings = this.isModuleEnabled(user, 'meetings');
-    const showCalendar = this.isModuleEnabled(user, 'calendar');
-    const item = (route, label, icon, withBadge) =>
-      `<a href="#${route}" class="bottom-nav-item${activeRoute === route ? ' bottom-nav-item--active' : ''}">
-        <span class="bottom-nav-icon-wrap"><i class="ti ${icon}"></i>${withBadge ? '<span class="nav-action-badge nav-action-badge--corner" data-action-badge hidden></span>' : ''}</span>
-        <span>${label}</span>
-      </a>`;
-
-    return `
-      <nav class="bottom-nav">
-        ${item('dashboard', 'Home', 'ti-home')}
-        ${item('task-dashboard', 'Tasks', 'ti-checklist')}
-        ${showRequests ? item('requests', 'Requests', 'ti-inbox', true) : ''}
-        ${showEntry ? item('entry', 'Entry', 'ti-mailbox') : ''}
-        ${showRooms ? item('rooms', 'Rooms', 'ti-door') : ''}
-        ${showCalendar ? item('calendar', 'Calendar', 'ti-calendar') : ''}
-        ${showMeetings ? item('meetings', 'Meetings', 'ti-calendar-event') : ''}
-        ${canLetters ? item('prisoner-letters', 'Letters', 'ti-mail') : ''}
-        ${admin ? item('admin', 'Admin', 'ti-settings') : ''}
-      </nav>
-    `;
-  },
-
   bindTopbar() {
     Theme.bindToggleButtons();
 
@@ -294,6 +272,31 @@ const AppShell = {
       e.stopPropagation();
       document.getElementById('notif-dropdown')?.classList.toggle('hidden');
     });
+
+    // Mobile nav drawer (docs/161) — #sidebar is the SAME markup the
+    // persistent desktop sidebar uses; at ≤640px it's off-canvas by
+    // default (see the .sidebar CSS at that breakpoint) and this just
+    // toggles the class that slides it in. Every element here is
+    // recreated by topbarHtml() on every view render, same as
+    // menuBtn/notifBtn above, so rebinding each time is correct.
+    const drawerMenuBtn = document.getElementById('topbar-menu-btn');
+    const drawer = document.getElementById('sidebar');
+    const drawerBackdrop = document.getElementById('sidebar-backdrop');
+    const drawerCloseBtn = document.getElementById('sidebar-close-btn');
+    const closeDrawer = () => {
+      drawer?.classList.remove('sidebar--open');
+      drawerBackdrop?.classList.remove('sidebar-backdrop--visible');
+      drawerMenuBtn?.setAttribute('aria-expanded', 'false');
+    };
+    drawerMenuBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      drawer?.classList.add('sidebar--open');
+      drawerBackdrop?.classList.add('sidebar-backdrop--visible');
+      drawerMenuBtn.setAttribute('aria-expanded', 'true');
+    });
+    drawerCloseBtn?.addEventListener('click', closeDrawer);
+    drawerBackdrop?.addEventListener('click', closeDrawer);
+    drawer?.querySelectorAll('.sidebar-link').forEach(link => link.addEventListener('click', closeDrawer));
 
     const searchBtn = document.getElementById('global-search-btn');
     const searchPanel = document.getElementById('global-search-panel');

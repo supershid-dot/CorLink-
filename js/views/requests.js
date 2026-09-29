@@ -216,7 +216,6 @@ const RequestsView = {
           <div id="requests-tab-content"></div>
         </main>
 
-        ${AppShell.bottomNavHtml(this._user, 'requests')}
       </div>
       <div id="modal-root"></div>
     `;

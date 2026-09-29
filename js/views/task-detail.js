@@ -91,7 +91,6 @@ const TaskDetailView = {
           </div>
           <div id="task-detail-content"></div>
         </main>
-        ${AppShell.bottomNavHtml(user, 'task-dashboard')}
       </div>
       <div id="modal-root"></div>
     `;

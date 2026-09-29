@@ -45,7 +45,6 @@ const EntryDetailView = {
         <main class="main-content" id="entry-detail-main">
           <div class="tab-loading"><span class="spinner spinner--dark"></span> Loading…</div>
         </main>
-        ${AppShell.bottomNavHtml(user, 'entry')}
       </div>
       <div id="modal-root"></div>
     `;

@@ -311,8 +311,7 @@ p  { line-height: 1.6; }
 /* Realtime "this case changed" notice (request-detail.js) — a fixed
    toast the viewer dismisses or acts on, not an auto-reload (which
    would blow away an in-progress compose form the instant the other
-   side does anything). Positioned above .bottom-nav's z-index so it
-   isn't hidden behind the fixed mobile tab bar. */
+   side does anything). */
 .realtime-toast {
   position: fixed;
   left: 50%;
@@ -603,6 +602,7 @@ p  { line-height: 1.6; }
   gap: 10px;
   padding: 0 10px 18px;
 }
+.sidebar-brand .sidebar-close-btn { margin-left: auto; flex-shrink: 0; }
 .sidebar-appname {
   font-size: 1.125rem;
   font-weight: 700;
@@ -734,37 +734,23 @@ p  { line-height: 1.6; }
   margin-left: auto;
 }
 
-/* ── Bottom Tab Bar (mobile) ─────────────────────────────────── */
-/* Hidden by default (desktop uses .topbar-nav instead) — the
-   max-width: 640px block below flips both. */
-.bottom-nav {
+/* ── Mobile nav drawer (docs/161) ──────────────────────────────
+   UAT: "The bottom menus looks crowded... Maybe vertical menu" — the
+   fixed bottom tab bar (9 items at its widest) is gone; #sidebar (the
+   SAME markup the persistent desktop sidebar uses) becomes an
+   off-canvas drawer at ≤640px instead, opened via #topbar-menu-btn.
+   Hidden/inert by default here; the max-width: 640px block below
+   turns it on. */
+.topbar-menu-btn { display: none; }
+.sidebar-close-btn { display: none; }
+.sidebar-backdrop {
   display: none;
   position: fixed;
-  left: 0; right: 0; bottom: 0;
-  z-index: 150;
-  background: var(--color-surface);
-  border-top: 1px solid var(--color-border);
-  padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
-  box-shadow: 0 -2px 8px rgba(0,0,0,.04);
+  inset: 0;
+  background: rgba(0, 0, 0, .45);
+  z-index: 190;
 }
-.bottom-nav-item {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 6px 4px;
-  border-radius: var(--radius-md);
-  color: var(--color-text-muted);
-  font-size: 0.6875rem;
-  font-weight: 500;
-  text-align: center;
-  transition: color var(--transition), background var(--transition);
-}
-.bottom-nav-item:hover { text-decoration: none; background: var(--color-bg); }
-.bottom-nav-item i { font-size: 1.25rem; }
-.bottom-nav-item--active { color: var(--color-primary-dark); }
+.sidebar-backdrop--visible { display: block; }
 
 /* ── User Menu ───────────────────────────────────────────────── */
 .user-menu-wrap { position: relative; }
@@ -1540,9 +1526,7 @@ p  { line-height: 1.6; }
 /* ── Responsive ─────────────────────────────────────────────── */
 @media (max-width: 640px) {
   .login-card { padding: 28px 20px; }
-  /* Extra bottom padding clears the fixed .bottom-nav bar so the last
-     bit of page content doesn't render underneath it. */
-  .main-content { padding: 20px 16px calc(76px + env(safe-area-inset-bottom)); }
+  .main-content { padding: 20px 16px; }
   .topbar { padding: 0 16px; gap: 10px; }
   /* Organisation name stays visible on phones, just bounded — it can
      be long ("Maldives Correctional Service"). Was a flat 46vw, which
@@ -1556,21 +1540,39 @@ p  { line-height: 1.6; }
      block's own fixed width (36px theme toggle + 36px notif bell +
      ~72px user-menu-btn with .user-name-short hidden, + three 8px
      topbar-actions gaps, + this rule's own 16px/16px topbar padding
-     and 32px logo + 10px gap) makes the two guaranteed to fit at any
-     viewport width, not just the ones this was eyeballed against.
-     Confirmed via a real browser measurement at 360/390/412px. */
+     and 32px logo + 10px gap, + docs/161's 36px #topbar-menu-btn and
+     its own 10px gap before .topbar-brand) makes the two guaranteed to
+     fit at any viewport width, not just the ones this was eyeballed
+     against. Confirmed via a real browser measurement at 360/390/412px. */
   .topbar-appname {
     font-size: 0.875rem;
-    max-width: calc(100vw - 260px);
+    max-width: calc(100vw - 306px);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .user-name-short { display: none; }
-  /* The topbar's own nav links get cramped/cut off at phone widths —
-     .bottom-nav replaces them with a fixed tab bar instead. */
+  /* The topbar's own nav links get cramped/cut off at phone widths
+     (docs/161: the old fixed bottom tab bar this used to hand off to
+     grew to 9 items and became too cramped for a phone too) — a
+     hamburger button opens #sidebar as an off-canvas drawer instead. */
   .topbar-nav { display: none; }
-  .bottom-nav { display: flex; }
+  .topbar-menu-btn { display: flex; }
+  .sidebar-close-btn { display: flex; }
+  .sidebar {
+    display: flex;
+    position: fixed;
+    top: 0; bottom: 0; left: 0;
+    z-index: 200;
+    width: 280px;
+    max-width: 82vw;
+    height: auto;
+    overflow-y: auto;
+    transform: translateX(-100%);
+    transition: transform .2s ease;
+    box-shadow: 2px 0 16px rgba(0, 0, 0, .18);
+  }
+  .sidebar--open { transform: translateX(0); }
 
   /* .notif-dropdown/.global-search-panel are `position: absolute;
      right: 0` against their OWN icon's wrapper — correct when that
@@ -1745,16 +1747,6 @@ input.field-divehi, textarea.field-divehi, select.field-divehi {
 }
 .sidebar-link .nav-action-badge { margin-left: auto; }       /* push to the far right of the row */
 .topbar-link .nav-action-badge { margin-left: 6px; vertical-align: middle; }
-/* Bottom nav: small overlay on the corner of the icon. */
-.bottom-nav-icon-wrap { position: relative; display: inline-flex; }
-.nav-action-badge--corner {
-  position: absolute;
-  top: -6px; left: 100%;
-  transform: translateX(-45%);
-  min-width: 15px; height: 15px;
-  padding: 0 4px;
-  font-size: 0.5625rem;
-}
 
 /* Sub-tabs INSIDE a tab (Approvals: Requests | Responses) — same
    control, slightly smaller, sitting under the search box rather than

@@ -165,7 +165,6 @@ const MeetingsView = {
           </div>
           <div id="meetings-tab-content"></div>
         </main>
-        ${AppShell.bottomNavHtml(this._user, 'meetings')}
       </div>
       <div id="modal-root"></div>
     `;

@@ -134,7 +134,6 @@ const DashboardView = {
           </div>
         </main>
 
-        ${AppShell.bottomNavHtml(user, 'dashboard')}
       </div>
       <div id="modal-root"></div>
     `;
